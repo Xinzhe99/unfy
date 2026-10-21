@@ -82,6 +82,18 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        // Must be the first plugin: a second instance has to hand off and exit
+        // before it can touch the journal directory or the global shortcuts.
+        // Two writers would break the engine's single-writer invariant, which is
+        // what makes "preimage before move" trustworthy.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let _ = (args, _cwd);
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,

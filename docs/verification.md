@@ -8,14 +8,14 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元与集成测试 | `cargo test --workspace` | 76 passed, 0 failed |
+| 单元与集成测试 | `cargo test --workspace` | 77 passed, 0 failed |
 | 静态检查 | `cargo clippy --workspace --all-targets -- -D warnings` | 无告警 |
 | 格式 | `cargo fmt --all -- --check` | 通过 |
 | 前端类型 | `npx tsc --noEmit` | 通过 |
 | 前端构建 | `npm run build` | 通过（245 kB JS / 19 kB CSS） |
 | macOS 编译 | `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` | 通过（仅类型检查，未在 Mac 运行） |
 
-测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 17、settings 10、win 1、mac 4（iOS/macOS 目标下编译）、doc 0。
+测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 17、settings 11、win 1、mac 4（iOS/macOS 目标下编译）、doc 0。
 
 ## 真实桌面验证
 
@@ -91,6 +91,16 @@ Finished 1 bundle at: target\debug\bundle\nsis\Conflux_0.1.0_x64-setup.exe (4.56
 | 静默卸载 `/S` | 二进制移除，进程终止，无残留 |
 
 Tauri 打包需要从 GitHub 下载 NSIS/WiX；本机直连超时，通过 `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR` 指向本地镜像完成。
+
+### 单实例
+
+连续启动两次 `conflux.exe`：
+
+```
+processes=1
+```
+
+第二次启动由 `tauri-plugin-single-instance` 接管并立即退出，只把已有窗口带到前台。这是引擎"单一写入者"前提的必要条件：两个进程同时操作同一批窗口会各自写一份 journal，恢复语义互相覆盖。
 
 ### 设置持久化
 

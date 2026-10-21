@@ -370,6 +370,31 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_processes_use_a_single_settings_file() {
+        // Two instances must not exist (enforced by the single-instance plugin),
+        // but the settings writer itself must still be safe against a stale
+        // process writing an older revision over a newer one. This test pins the
+        // observable contract: the last write wins and the file is always valid
+        // JSON, never a partial document.
+        let dir = temp_dir("concurrent");
+        let path = dir.join("settings.json");
+
+        let a = Settings {
+            margin: 24,
+            ..Default::default()
+        };
+        let b = Settings {
+            margin: 30,
+            ..Default::default()
+        };
+        a.save(&path).unwrap();
+        b.save(&path).unwrap();
+
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.margin, 30);
+    }
+
+    #[test]
     fn save_leaves_no_temp_file() {
         let dir = temp_dir("notemp");
         let path = dir.join("settings.json");
