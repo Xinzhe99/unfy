@@ -140,7 +140,7 @@ Run key entry removed
 - 整理后 `has_pending_work()` 为真，恢复成功后解除；
 - 接管的崩溃事务同样阻塞退出，恢复并清理 journal 后解除。
 
-前端也补上了 `conflux://exit-blocked` 与 `conflux://update` 的监听——此前 Rust 会发这两个事件，但界面没有任何反应，用户点退出"没反应"且看不到原因。
+前端也补上了 `conflux://exit-blocked` 与 `conflux://update` 的监听——此前 Rust 会发这两个事件，但界面没有任何反应，用户点退出"没反应"且看不到原因。为验证而临时加的命令与辅助函数在验证后已删除，没有留在产品 API 里。
 
 ### 单实例
 

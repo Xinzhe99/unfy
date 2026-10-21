@@ -122,7 +122,6 @@ pub fn run() {
             commands::open_permission_settings,
             commands::update_status,
             commands::check_update,
-            commands::exit_would_block,
             commands::live_transaction,
         ])
         .setup(|app| {

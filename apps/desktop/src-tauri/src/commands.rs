@@ -680,13 +680,3 @@ pub async fn check_update(handle: tauri::AppHandle) -> Result<String, String> {
     let outcome = crate::update::check_and_install(handle, true).await;
     Ok(outcome.as_str().to_string())
 }
-
-/// Would quitting right now be blocked by unrecovered windows?
-///
-/// Runs the same check the tray Quit uses, including attempting the restore, and
-/// reports the outcome without exiting. Used by the smoke test that proves the
-/// exit barrier is not a no-op.
-#[tauri::command]
-pub fn exit_would_block(handle: tauri::AppHandle) -> Result<bool, String> {
-    Ok(crate::tray::exit_blocked(&handle))
-}
