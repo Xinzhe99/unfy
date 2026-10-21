@@ -33,6 +33,7 @@ import {
   IconShield,
 } from "./components/icons";
 import { Status, type StatusTone } from "./components/ui";
+import { PendingCard, PermissionPrompt } from "./components/prompts";
 
 export type Page = "overview" | "displays" | "exclusions" | "general";
 
@@ -281,7 +282,9 @@ export default function App() {
       // no such control existed anywhere in the app.
       flash({
         tone: "warning",
-        text: "还有窗口没有恢复，已取消退出。在概览页可以再试一次恢复，或点「保留当前布局」。",
+        text: t(
+          "还有窗口没有恢复，已取消退出。在概览页可以再试一次恢复，或点「保留当前布局」。",
+        ),
       });
       setPage("overview");
     });
@@ -380,7 +383,7 @@ export default function App() {
           });
         }
         if (event.payload.outcome === "installed") {
-          flash({ tone: "neutral", text: "更新已安装，应用即将重启。" });
+          flash({ tone: "neutral", text: t("更新已安装，应用即将重启。") });
         }
       },
     );
@@ -492,7 +495,7 @@ export default function App() {
             report.pending > 0 ? t("仍有 {count} 个待处理", { count: report.pending }) : null,
           ]
             .filter(Boolean)
-            .join("，") + "。",
+            .join(t("，")) + t("。"),
       }),
     );
 
@@ -510,7 +513,7 @@ export default function App() {
           void run(() => api.identifyDisplays(4), (shown) => ({
             tone: shown ? "neutral" : "warning",
             text: shown
-              ? "已在每块屏幕上显示编号。"
+              ? t("已在每块屏幕上显示编号。")
               : t("无法显示编号，请检查屏幕状态。"),
           }))
         }
@@ -722,10 +725,18 @@ export default function App() {
                       return {
                         tone: result.rejected > 0 ? "warning" : "success",
                         text:
+                          // Each clause carries its own separator: concatenating the
+                          // fragments read "Gathered 5 windowsskipped 7." in English
+                          // and "已整理 5 个窗口跳过 7 个。" in Chinese.
                           t("已整理 {count} 个窗口", { count: result.applied }) +
-                          (result.gone > 0 ? t("{count} 个已关闭", { count: result.gone }) : "") +
-                          (result.skipped > 0 ? t("跳过 {count} 个", { count: result.skipped }) : "") +
-                          `${refused}。`,
+                          (result.gone > 0
+                            ? t("，{count} 个已关闭", { count: result.gone })
+                            : "") +
+                          (result.skipped > 0
+                            ? t("，跳过 {count} 个", { count: result.skipped })
+                            : "") +
+                          refused +
+                          t("。"),
                       };
                     },
                   )
@@ -737,13 +748,13 @@ export default function App() {
                     (result) => ({
                       tone: "neutral",
                       text: result.paused
-                        ? "已暂停自动整理，当前布局保留。"
+                        ? t("已暂停自动整理，当前布局保留。")
                         : result.restored_deferred
                           ? // The session ended while paused, so resuming also
                             // finished the cleanup. Saying only "resumed" would
                             // leave the user wondering why their windows moved.
-                            "已恢复自动整理，并补做了暂停期间欠下的恢复。"
-                          : "已恢复自动整理。",
+                            t("已恢复自动整理，并补做了暂停期间欠下的恢复。")
+                          : t("已恢复自动整理。"),
                     }),
                   )
                 }
@@ -754,8 +765,8 @@ export default function App() {
                       tone: count === 0 ? "neutral" : "success",
                       text:
                         count === 0
-                          ? "没有发现越界窗口。"
-                          : `已把 ${count} 个窗口移回可见区域。`,
+                          ? t("没有发现越界窗口。")
+                          : t("已把 {count} 个窗口移回可见区域。", { count }),
                     }),
                   )
                 }
@@ -783,7 +794,10 @@ export default function App() {
                     () => api.exportDiagnostics(),
                     (result) => ({
                       tone: "neutral",
-                      text: `诊断包已写入 ${result.path}（${formatBytes(result.bytes)}）。`,
+                      text: t("诊断包已写入 {path}（{size}）。", {
+                path: result.path,
+                size: formatBytes(result.bytes),
+              }),
                     }),
                   )
                 }
@@ -793,8 +807,8 @@ export default function App() {
                     (opened) => ({
                       tone: opened ? "neutral" : "warning",
                       text: opened
-                        ? "已在文件管理器中打开配置目录。"
-                        : "无法打开配置目录。",
+                        ? t("已在文件管理器中打开配置目录。")
+                        : t("无法打开配置目录。"),
                     }),
                   )
                 }
@@ -805,8 +819,8 @@ export default function App() {
                     (nowActive) => ({
                       tone: "neutral",
                       text: nowActive
-                        ? "已标记为远程会话。开启了自动整理的话，窗口会按设置收拢。"
-                        : "已结束远程会话标记。",
+                        ? t("已标记为远程会话。开启了自动整理的话，窗口会按设置收拢。")
+                        : t("已结束远程会话标记。"),
                     }),
                   )
                 }
@@ -818,7 +832,7 @@ export default function App() {
                     () => api.keepCurrentLayout(),
                     () => ({
                       tone: "neutral",
-                      text: "已保留当前布局，之后可以重新整理到目标屏。",
+                      text: t("已保留当前布局，之后可以重新整理到目标屏。"),
                     }),
                   )
                 }
@@ -858,7 +872,7 @@ export default function App() {
                   void run(() => api.identifyDisplays(4), (shown) => ({
                     tone: shown ? "neutral" : "warning",
                     text: shown
-                      ? "已在每块屏幕上显示编号。"
+                      ? t("已在每块屏幕上显示编号。")
                       : t("无法显示编号，请检查屏幕状态。"),
                   }))
                 }
@@ -906,7 +920,7 @@ export default function App() {
                     },
                     () => ({
                       tone: "neutral",
-                      text: "已恢复默认设置，目标显示器已保留。",
+                      text: t("已恢复默认设置，目标显示器已保留。"),
                     }),
                   )
                 }
@@ -922,11 +936,11 @@ export default function App() {
                             : "neutral",
                       text:
                         result.outcome === "up_to_date"
-                          ? "当前已是最新版本。"
+                          ? t("当前已是最新版本。")
                           : result.outcome === "deferred"
-                            ? "更新已下载，将在窗口全部恢复后安装。"
+                            ? t("更新已下载，将在窗口全部恢复后安装。")
                             : result.outcome === "installed"
-                              ? "更新已安装，应用即将重启。"
+                              ? t("更新已安装，应用即将重启。")
                               : t("检查更新失败：{detail}", { detail: result.detail || t("未知原因") }),
                     }),
                   )
@@ -935,87 +949,6 @@ export default function App() {
             ) : null}
           </div>
         </main>
-      </div>
-    </div>
-  );
-}
-
-function PermissionPrompt({
-  status,
-  busy,
-  onRequest,
-  onSettings,
-  onRecheck,
-}: {
-  status: StatusDto;
-  busy: boolean;
-  onRequest: () => void;
-  onSettings: () => void;
-  onRecheck: () => void;
-}) {
-  return (
-    <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] bg-[var(--color-surface)] px-3.5 py-2.5">
-      <p className="text-[13px] font-medium">
-        {t("需要「{name}」权限才能移动窗口", {
-          // The permission name is itself a catalogued sentence.
-          name: t(status.permission_name),
-        })}
-      </p>
-      <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">{t("预览、查看显示器与导出诊断仍可使用，只是不会移动窗口。")}</p>
-      <div className="mt-2.5 flex gap-1.5">
-        <button
-          type="button"
-          onClick={onRequest}
-          disabled={busy}
-          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-40"
-        >{t("请求授权")}</button>
-        <button
-          type="button"
-          onClick={onSettings}
-          className="rounded-[var(--radius-control)] border border-[var(--color-border-strong)] px-2.5 py-1 text-xs font-medium"
-        >{t("前往系统设置")}</button>
-        <button
-          type="button"
-          onClick={onRecheck}
-          disabled={busy}
-          className="rounded-[var(--radius-control)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)]"
-        >{t("重新检查")}</button>
-      </div>
-    </div>
-  );
-}
-
-function PendingCard({
-  pending,
-  busy,
-  onRestore,
-  onDismiss,
-}: {
-  pending: PendingWorkDto;
-  busy: boolean;
-  onRestore: () => void;
-  onDismiss: () => void;
-}) {
-  return (
-    <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] bg-[var(--color-surface)] px-3.5 py-2.5">
-      <p className="text-[13px] font-medium">{t("上次整理未完成")}</p>
-      <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-        有 {pending.windows} 个窗口的快照仍待处理
-        {pending.may_have_moved ? t("，其中部分可能已被移动") : ""}。
-      </p>
-      <div className="mt-2.5 flex gap-1.5">
-        <button
-          type="button"
-          onClick={onRestore}
-          disabled={busy}
-          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-40"
-        >{t("尝试恢复")}</button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          disabled={busy}
-          className="rounded-[var(--radius-control)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)]"
-        >{t("稍后处理")}</button>
       </div>
     </div>
   );

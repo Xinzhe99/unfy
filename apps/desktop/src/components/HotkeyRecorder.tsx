@@ -104,7 +104,11 @@ export function HotkeyRecorder({
           setRecording(true);
           setError(null);
         }}
-        aria-label={value ? `快捷键 ${formatAccelerator(value)}，点击重新录制` : "录制快捷键"}
+        aria-label={
+          value
+            ? t("快捷键 {keys}，点击重新录制", { keys: formatAccelerator(value) })
+            : t("录制快捷键")
+        }
         className={`h-7 w-40 rounded-[var(--radius-control)] border px-2 font-mono text-xs tabular-nums transition-colors disabled:opacity-40 ${
           recording
             ? "border-[var(--color-accent)] bg-[var(--color-surface-hover)] text-[var(--color-fg)]"

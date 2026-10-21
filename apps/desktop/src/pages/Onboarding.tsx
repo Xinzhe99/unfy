@@ -103,7 +103,9 @@ export function Onboarding({
       title: t("让它自动开始和结束"),
       body: (
         <div className="space-y-3">
-          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">Conflux 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。</p>
+          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
+              {t("Conflux 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。")}
+            </p>
           <div className="rounded-[var(--radius-control)] border border-[var(--color-border)]">
             <DetectChoice
               title={t("手动")}

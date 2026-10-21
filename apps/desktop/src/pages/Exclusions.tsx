@@ -121,7 +121,7 @@ export function ExclusionsPage({
                 <Switch
                   checked={app.excluded}
                   disabled={busy}
-                  label={`排除 ${app.name}`}
+                  label={t("排除 {name}", { name: app.name })}
                   onChange={(excluded) =>
                     setRules(
                       excluded

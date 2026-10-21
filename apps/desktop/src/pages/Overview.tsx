@@ -154,7 +154,7 @@ export function OverviewPage({
           {pending > 0 ? (
             <Detail
               label={t("待恢复窗口")}
-              value={`${pending} 个`}
+              value={t("{count} 个", { count: pending })}
             />
           ) : null}
           <Detail label={t("布局")} value={layoutLabel(settings?.layout_mode)} />
@@ -205,7 +205,9 @@ export function OverviewPage({
         {status?.last_error ? (
           <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-danger)] px-3 py-2">
             <p className="min-w-0 flex-1 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-              上次操作失败：{renderNotice(status.last_error)}
+              {t("上次操作失败：{message}", {
+                message: renderNotice(status.last_error),
+              })}
             </p>
             <button
               type="button"
@@ -217,9 +219,11 @@ export function OverviewPage({
 
         {needsAttention ? (
           <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-            {state === "error"
-              ? "出现了无法自动处理的问题。恢复与救援仍然可用；如果反复失败，请导出诊断包。"
-              : "有窗口没能恢复到原位。可以再试一次，或先关闭这些窗口。"}
+            {t(
+              state === "error"
+                ? "出现了无法自动处理的问题。恢复与救援仍然可用；如果反复失败，请导出诊断包。"
+                : "有窗口没能恢复到原位。可以再试一次，或先关闭这些窗口。",
+            )}
           </p>
         ) : null}
 
@@ -230,7 +234,9 @@ export function OverviewPage({
         ) : null}
 
         {singleDisplay && !hasWork ? (
-          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。</p>
+          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+            {t("当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。")}
+          </p>
         ) : null}
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -253,13 +259,13 @@ export function OverviewPage({
                 disabled={busy || busyState}
                 loading={busy || busyState}
               >
-                {busy || busyState ? t("正在恢复…") : "恢复本次布局"}
+                {busy || busyState ? t("正在恢复…") : t("恢复本次布局")}
               </Button>
               <Button
                 onClick={() => onPause(!paused)}
                 disabled={busy || busyState}
               >
-                {paused ? "取消暂停" : "暂停"}
+                {t(paused ? "取消暂停" : "暂停")}
               </Button>
               {/* The only way out when restoring is impossible: the user decides
                   the current arrangement is good enough. Without it the exit

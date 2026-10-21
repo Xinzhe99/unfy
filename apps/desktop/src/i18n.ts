@@ -466,8 +466,8 @@ const EN: Record<string, string> = {
   "还有窗口没有恢复，已取消退出。在概览页可以再试一次恢复，或点「保留当前布局」。":
     "Some windows were not restored, so quitting was cancelled. Retry from the overview, or press Keep current layout.",
   "已整理 {count} 个窗口": "Gathered {count} windows",
-  "{count} 个已关闭": "{count} closed",
-  "跳过 {count} 个": "skipped {count}",
+  "，{count} 个已关闭": ", {count} closed",
+  "，跳过 {count} 个": ", skipped {count}",
   "；{apps} 没有接受位置调整": "; {apps} refused to move",
   "已恢复 {count} 个窗口": "Restored {count} windows",
   "保留你的改动 {count} 个": "kept your changes for {count}",
@@ -486,7 +486,35 @@ const EN: Record<string, string> = {
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
   "用户": "User",
+  "{name} 已连接": "{name} connected",
+  "虚拟显示器 {name}": "Virtual display {name}",
+  "{name} 正在运行": "{name} running",
+  "远程桌面会话": "Remote Desktop session",
+  "手动标记": "Marked by hand",
+  "{count} 个": "{count}",
   "正在载入…": "Loading…",
+  "正在恢复布局…": "Restoring the layout…",
+  "显示器连接发生变化。当前布局可能已不适用，建议重新点「整理到目标屏」。":
+    "The display setup changed. The current layout may no longer fit, so gather to the target again.",
+  "，": ", ",
+  "。": ".",
+  " · 已暂停": " · paused",
+  "已请求授权。授权后请点「重新检查」。":
+    "Permission requested. Press Recheck once it is granted.",
+  "已隐藏提示，恢复记录仍然保留。": "Hidden. The restore record is kept.",
+  "没有可整理的窗口。": "No windows to gather.",
+  "已在每块屏幕上显示编号，4 秒后消失。":
+    "Screen numbers are showing and disappear after 4 seconds.",
+  "有 {count} 个窗口的快照仍待处理{note}。":
+    "Snapshots for {count} windows are still pending{note}.",
+  "，其中部分可能已被移动": ", and some of them may already have moved",
+  "快捷键 {keys}，点击重新录制": "Shortcut {keys}; click to record again",
+  "布局预览：{placed} 个窗口排入 {width}×{height} 的区域":
+    "Layout preview: {placed} windows fitted into {width}×{height}",
+  "窗口 {number}": "Window {number}",
+  "未生效：{reason}": "Not in effect: {reason}",
+  "已检测到": "Detected",
+  "正在恢复…": "Restoring…",
   "没有画面": "No picture",
   "需要「{name}」权限才能移动窗口":
     "Moving windows requires the {name} permission",

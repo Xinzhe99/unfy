@@ -10,7 +10,7 @@
  * added later cannot quietly stay untranslated.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 import { applyLocale, resolveLocale, t } from "../i18n";
 
@@ -64,6 +64,45 @@ describe("translation", () => {
 });
 
 describe("coverage", () => {
+  /**
+   * Every `t("…")` key must exist in the catalogue.
+   *
+   * A key that is not there falls back to the Chinese source, which is invisible
+   * to the compiler and to a render test that does not reach that branch. A batch
+   * of them shipped that way: the wrappers were added by searching the source for
+   * Chinese, while the English entries were added by searching for something else.
+   */
+  test("every key used in the source has an English entry", () => {
+    const root = `${import.meta.dir}/..`;
+    const catalogue = readFileSync(`${root}/i18n.ts`, "utf8");
+    const known = new Set(
+      [...catalogue.matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]!),
+    );
+    const files: string[] = [];
+    for (const dir of ["", "pages/", "components/", "lib/"]) {
+      const base = `${root}/${dir}`;
+      for (const entry of readdirSync(base, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (!/\.tsx?$/.test(entry.name)) continue;
+        if (entry.name.includes(".test.")) continue;
+        if (entry.name === "i18n.ts") continue;
+        files.push(`${dir}${entry.name}`);
+      }
+    }
+    const missing: string[] = [];
+    for (const file of files) {
+      const source = readFileSync(`${root}/${file}`, "utf8");
+      for (const match of source.matchAll(/(?<![A-Za-z0-9_$.])t\(\s*"([^"]+)"/g)) {
+        // A call written into a comment is documentation, not a lookup; and the
+        // lookbehind keeps `onSetDetect("off", …)` from reading as a `t("off")`.
+        const lineStart = source.lastIndexOf("\n", match.index!) + 1;
+        if (/^\s*(\/\/|\*|\/\*)/.test(source.slice(lineStart, match.index!))) continue;
+        if (!known.has(match[1]!)) missing.push(`${file}: ${match[1]}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("every Chinese literal in the UI has an English entry", () => {
     // Reads the source rather than the catalogue so a new hardcoded string is
     // caught even if nobody remembers to add it to the dictionary.

@@ -307,7 +307,10 @@ export function GeneralPage({
             <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--color-muted)]">
               {updateStatus?.configured
                 ? updateStatus.last_version
-                  ? `最近一次结果：${outcomeLabel(updateStatus.last_outcome)}（${updateStatus.last_version}）`
+                  ? t("最近一次结果：{outcome}（{version}）", {
+                    outcome: outcomeLabel(updateStatus.last_outcome),
+                    version: updateStatus.last_version,
+                  })
                   : t("尚未检查过更新。")
                 : "此构建没有签名公钥与更新地址，检查更新不会成功。发布版才会启用。"}
             </p>
@@ -439,14 +442,14 @@ function detectHint(level: SettingsDto["auto_detect"]): string {
 function outcomeLabel(outcome: string | null): string {
   switch (outcome) {
     case "up_to_date":
-      return "已是最新";
+      return t("已是最新");
     case "deferred":
-      return "已下载，等待安装";
+      return t("已下载，等待安装");
     case "installed":
-      return "已安装";
+      return t("已安装");
     case "failed":
-      return "检查失败";
+      return t("检查失败");
     default:
-      return "未知";
+      return t("未知");
   }
 }

@@ -135,7 +135,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
  * could not read a name (elevated processes deny the query).
  */
 function label(appName: string, index: number, duplicates: Map<string, number>): string {
-  if (!appName) return `窗口 ${index + 1}`;
+  if (!appName) return t("窗口 {number}", { number: index + 1 });
   const name = shortName(appName);
   return (duplicates.get(appName) ?? 0) > 1 ? `${name} #${index + 1}` : name;
 }

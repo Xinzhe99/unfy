@@ -82,7 +82,13 @@ export function DisplayCards({
               onClick={() => onSelect(display.native_id)}
               disabled={disabled}
               aria-pressed={selected}
-              aria-label={`${t(display.primary ? "显示器 {number}（主）" : "显示器 {number}", { number: display.number })}，${display.width}×${display.height}`}
+              aria-label={
+                t(display.primary ? "显示器 {number}（主）" : "显示器 {number}", {
+                  number: display.number,
+                }) +
+                t("，") +
+                `${display.width}×${display.height}`
+              }
               className={`flex size-full flex-col overflow-hidden rounded-[var(--radius-control)] border text-left transition-colors disabled:cursor-not-allowed ${
                 selected
                   ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"

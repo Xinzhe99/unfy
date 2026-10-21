@@ -28,6 +28,7 @@ import { errorMessage, humanError, skipLabels, stateLabels } from "../api";
 import { navigation } from "../App";
 import { DisplaysPage } from "../pages/Displays";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
+import { PendingCard, PermissionPrompt } from "../components/prompts";
 import { PlanPreview } from "../components/PlanPreview";
 import type {
   ActivityEntryDto,
@@ -1080,19 +1081,226 @@ describe("English mode", () => {
           />,
         ),
     ],
+    ...([0, 1, 2, 3, 4] as const).map(
+      (step) =>
+        [
+          `onboarding step ${step + 1}`,
+          () =>
+            renderToStaticMarkup(
+              <Onboarding
+                displays={displays}
+                settings={{
+                  ...settings,
+                  onboarding_done: false,
+                  onboarding_step: step,
+                }}
+                thumbnails={{
+                  [displays[0]!.native_id]: {
+                    data_url: "data:image/png;base64,AA==",
+                    blank: false,
+                  },
+                }}
+                busy={false}
+                onSelectTarget={async () => {}}
+                onIdentify={noop}
+                onSetDetect={async () => {}}
+                onFinish={noop}
+              />,
+            ),
+        ] as [string, () => string],
+    ),
     [
-      "onboarding",
+      "overview with an active layout",
       () =>
         renderToStaticMarkup(
-          <Onboarding
+          <OverviewPage
+            status={{
+              ...status,
+              state: "active",
+              captured_windows: 5,
+              pending_windows: 5,
+              target: { native_id: "DISPLAY2", label: "DISPLAY2", present: true },
+            }}
+            settings={{ ...settings, remote_active: false }}
+            preview={null}
             displays={displays}
-            settings={{ ...settings, onboarding_done: false, onboarding_step: 0 }}
-            thumbnails={{}}
+            activity={[
+              {
+                at: Math.floor(Date.now() / 1000) - 120,
+                kind: "gather",
+                affected: 5,
+                unsettled: 0,
+                note: message("先恢复了 {count} 个窗口", { count: "5" }),
+                trigger: "window",
+              },
+            ]}
+            progress={null}
             busy={false}
-            onSelectTarget={async () => {}}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
             onIdentify={noop}
-            onSetDetect={async () => {}}
-            onFinish={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "overview degraded with a lost target",
+      () =>
+        renderToStaticMarkup(
+          <OverviewPage
+            status={{ ...status, state: "degraded", captured_windows: 4, target: { native_id: "GONE", label: "DISPLAY9", present: false } }}
+            settings={{ ...settings, remote_active: true, remote_evidence: message("{name} 已连接", { name: "AnyDesk" }) }}
+            preview={preview}
+            displays={displays}
+            activity={activity}
+            progress={null}
+            busy={false}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
+            onIdentify={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "overview reporting a failure",
+      () =>
+        renderToStaticMarkup(
+          <OverviewPage
+            status={{ ...status, state: "error", last_error: message("journal write failed: io error: os error 183") }}
+            settings={settings}
+            preview={null}
+            displays={displays}
+            activity={[]}
+            progress={null}
+            busy={false}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
+            onIdentify={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "overview while gathering",
+      () =>
+        renderToStaticMarkup(
+          <OverviewPage
+            status={status}
+            settings={settings}
+            preview={null}
+            displays={displays}
+            activity={[]}
+            progress={{ done: 3, total: 7 }}
+            busy={true}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
+            onIdentify={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "overview with one display",
+      () =>
+        renderToStaticMarkup(
+          <OverviewPage
+            status={{ ...status, display_count: 1 }}
+            settings={settings}
+            preview={null}
+            displays={[displays[0]!]}
+            activity={[]}
+            progress={null}
+            busy={false}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
+            onIdentify={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "overview with refused applications",
+      () =>
+        renderToStaticMarkup(
+          <OverviewPage
+            status={{ ...status, last_refused_apps: ["msedge.exe", "notepad.exe"], excluded_apps: ["notepad.exe"] }}
+            settings={settings}
+            preview={null}
+            displays={displays}
+            activity={[]}
+            progress={null}
+            busy={false}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
+            onIdentify={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
           />,
         ),
     ],
@@ -1127,6 +1335,31 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "permission prompt",
+      () =>
+        renderToStaticMarkup(
+          <PermissionPrompt
+            status={{ ...status, has_permission: false, permission_name: "辅助功能" }}
+            busy={false}
+            onRequest={noop}
+            onSettings={noop}
+            onRecheck={noop}
+          />,
+        ),
+    ],
+    [
+      "pending work card",
+      () =>
+        renderToStaticMarkup(
+          <PendingCard
+            pending={{ present: true, windows: 3, may_have_moved: true }}
+            busy={false}
+            onRestore={noop}
+            onDismiss={noop}
           />,
         ),
     ],
