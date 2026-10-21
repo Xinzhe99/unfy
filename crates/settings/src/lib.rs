@@ -66,6 +66,10 @@ pub struct Settings {
     /// gated on this, only the *check* is.
     pub auto_update: bool,
     /// Explicit consent for anonymous usage counters. Default off.
+    ///
+    /// No uploader exists in this build: the flag records the user's choice so a
+    /// future implementation cannot start collecting without consent, and so the
+    /// UI can show the true state.
     pub telemetry: bool,
 }
 

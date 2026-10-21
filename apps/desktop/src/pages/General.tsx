@@ -108,6 +108,25 @@ export function GeneralPage({
       </section>
 
       <section className="rounded-xl border border-[var(--color-border)] p-5">
+        <h2 className="text-sm font-semibold">隐私</h2>
+        <label className="mt-3 flex items-start gap-3">
+          <input
+            type="checkbox"
+            checked={settings.telemetry}
+            disabled={busy}
+            onChange={(event) => onSave({ telemetry: event.currentTarget.checked })}
+            className="mt-0.5 size-4 accent-[var(--color-accent)]"
+          />
+          <span>
+            <span className="block text-xs font-medium">发送匿名使用统计</span>
+            <span className="mt-0.5 block text-xs text-[var(--color-muted)]">
+              默认关闭。只包含版本、平台与成功/失败计数，不含窗口标题、屏幕画面或文件路径。拒绝不影响任何功能。
+            </span>
+          </span>
+        </label>
+      </section>
+
+      <section className="rounded-xl border border-[var(--color-border)] p-5">
         <h2 className="text-sm font-semibold">恢复</h2>
         <label className="mt-3 block">
           <span className="text-xs font-medium">恢复延迟（秒）</span>

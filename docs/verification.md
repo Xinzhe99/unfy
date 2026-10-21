@@ -142,6 +142,20 @@ processes=1
 
 第二次启动由 `tauri-plugin-single-instance` 接管并立即退出，只把已有窗口带到前台。这是引擎"单一写入者"前提的必要条件：两个进程同时操作同一批窗口会各自写一份 journal，恢复语义互相覆盖。
 
+### 诊断导出
+
+点击"导出诊断包"：
+
+```
+诊断包已写入 ...\Conflux\diagnostics\conflux-<uuid>.json（707 字节）
+```
+
+内容核对：只有版本、平台、显示器尺寸/缩放/主屏标记、显示器 ID 的 FNV 摘要、设置项名称与开关状态。**没有窗口标题、文件路径、屏幕画面、原始显示器设备路径**。
+
+### 隐私开关
+
+"发送匿名使用统计"默认关闭，勾选后 `settings.json` 的 `telemetry` 变为 `true`。当前构建**没有任何上传代码**，该字段只记录用户选择。
+
 ### 设置持久化
 
 `settings.json` 在 `%APPDATA%\Conflux\`，写入后包含目标显示器的 `monitorDevicePath`：
