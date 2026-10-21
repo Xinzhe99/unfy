@@ -118,7 +118,11 @@ export function GeneralPage({
 
         <SettingRow
           label="检测到远程时自动整理"
-          hint="关闭时只提示，不移动窗口"
+          hint={
+            settings.auto_gather
+              ? "关闭时会先把窗口恢复原位，再停止自动整理"
+              : "关闭时只提示，不移动窗口"
+          }
           disabled={settings.auto_detect === "off"}
         >
           <Switch

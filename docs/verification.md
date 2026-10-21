@@ -925,6 +925,26 @@ clean 'title'   clean '.exe'   clean 'DISPLAY#'   clean '\\?\'   clean 'C:\\User
 
 **未验证**：真实休眠/唤醒场景（无法在验证环境安全挂起系统）。
 
+### 关闭自动整理时先恢复（规格 P0-11-B）
+
+规格要求"关闭自动整理默认先恢复"。此前关闭只是一个开关：窗口仍停在整理后的位置，而自动整理
+已经不再工作——功能关掉了，效果还在，且下一次整理没有基线可回。
+
+现在关闭时先执行恢复。实测：
+
+```
+20:17:29  migration finished  applied=2  state=Active
+20:17:56  restore finished    restored=2 pending=0  state=Idle
+20:17:56  automation disabled; layout restored
+journal: 1 → 0    auto_gather: False
+```
+
+设置页的说明也随之改变：开关打开时显示"关闭时会先把窗口恢复原位，再停止自动整理"，
+用户在动手之前就知道会发生什么。
+
+锁顺序：`save_settings` 先读引擎状态再取设置锁，与其余路径的 engine→settings 顺序一致，
+避免并发时死锁。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

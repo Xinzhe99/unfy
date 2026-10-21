@@ -884,6 +884,15 @@ pub fn save_settings(
     app: State<'_, AppState>,
     request: SaveSettingsRequest,
 ) -> Result<SettingsDto, String> {
+    // Read before taking the settings lock: the engine lock order is
+    // engine-then-settings elsewhere, and reversing it here would invite a
+    // deadlock the first time both paths run concurrently.
+    let engine_has_open_transaction = app
+        .engine
+        .lock()
+        .map(|engine| engine.current_transaction().is_some())
+        .unwrap_or(false);
+
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
 
     if let Some(mode) = request.layout_mode {
@@ -945,6 +954,12 @@ pub fn save_settings(
         }
         settings.auto_detect = level;
     }
+    // Spec P0-11-B: turning automation off while a layout is active restores
+    // first. The user is saying "stop managing my windows"; leaving them gathered
+    // means the feature keeps having an effect after it was switched off, and the
+    // next gather would have no baseline to return to.
+    let restore_because_disabled =
+        request.auto_gather == Some(false) && settings.auto_gather && engine_has_open_transaction;
     if let Some(auto_gather) = request.auto_gather {
         settings.auto_gather = auto_gather;
     }
@@ -1022,6 +1037,26 @@ pub fn save_settings(
     // change would only take effect at the next launch, and the settings screen
     // would look like it did nothing.
     crate::monitor::apply_sensitivity(&handle);
+
+    if restore_because_disabled {
+        // `save_settings` is synchronous; drive the async restore to completion.
+        // Ignoring the outcome would hide a failed restore, but failing the whole
+        // save would be worse: the setting is already on disk and the user meant
+        // it. The error goes to the overview like any other.
+        match tauri::async_runtime::block_on(restore_after_delay(&handle, &app, false)) {
+            Ok(_) => tracing::info!("automation disabled; layout restored"),
+            Err(e) => {
+                tracing::warn!(error = %e, "automation disabled but the restore failed");
+                note_result(
+                    &app,
+                    Some(format!(
+                        "已关闭自动整理，但恢复没有完成：{}。可以在概览页重试。",
+                        e
+                    )),
+                );
+            }
+        }
+    }
 
     Ok(dto)
 }
