@@ -84,8 +84,31 @@ export default function App() {
     const unlisten = listen("conflux://action", () => {
       void refresh();
     });
+    // The tray cannot show a dialog, so a blocked exit is reported here. Without
+    // this listener the user clicks Quit, nothing happens, and there is no
+    // explanation of why.
+    const unlistenExit = listen("conflux://exit-blocked", () => {
+      setError(
+        "还有窗口没有恢复，已取消退出。请先点「恢复本次布局」，或选择「保留当前布局」再退出。",
+      );
+    });
+    const unlistenUpdate = listen<{ outcome: string; version?: string }>(
+      "conflux://update",
+      (event) => {
+        if (event.payload.outcome === "deferred") {
+          setNotice(
+            `新版本 ${event.payload.version ?? ""} 已下载，将在窗口全部恢复后安装。`,
+          );
+        }
+        if (event.payload.outcome === "installed") {
+          setNotice("更新已安装，应用即将重启。");
+        }
+      },
+    );
     return () => {
       void unlisten.then((fn) => fn());
+      void unlistenExit.then((fn) => fn());
+      void unlistenUpdate.then((fn) => fn());
     };
   }, [refresh]);
 

@@ -8,14 +8,14 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元与集成测试 | `cargo test --workspace` | 79 passed, 0 failed |
+| 单元与集成测试 | `cargo test --workspace` | 82 passed, 0 failed |
 | 静态检查 | `cargo clippy --workspace --all-targets -- -D warnings` | 无告警 |
 | 格式 | `cargo fmt --all -- --check` | 通过 |
 | 前端类型 | `npx tsc --noEmit` | 通过 |
 | 前端构建 | `npm run build` | 通过（245 kB JS / 19 kB CSS） |
 | macOS 编译 | `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` | 通过（仅类型检查，未在 Mac 运行） |
 
-测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 18、settings 12、win 1、mac 4（macOS 目标下编译）、doc 0。
+测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 21（含 3 个退出屏障用例）、settings 12、win 1、mac 4（macOS 目标下编译）。
 
 ## 真实桌面验证
 
@@ -131,6 +131,16 @@ Run key entry removed
 ```
 
 **发现并修复的缺陷（死锁）**：修复前勾选"登录时启动"会让命令线程永久阻塞——`save_settings` 持有设置锁的同时调用了会再次读取设置的 `apply_autostart`，而 `std::sync::Mutex` 不可重入。症状是设置文件已写入、注册表没写、UI 卡住。修复方式是把辅助函数改成接收目标值而不是自己取锁，并用 `drop(settings)` 明确表态；另加了一个回归测试固定这个约束。
+
+### 退出屏障
+
+托盘"退出"在还有未恢复窗口时会先尝试恢复，失败则取消退出并提示。该分支无法用 UI 自动化点托盘图标，所以在引擎层用 3 个用例固定：
+
+- 刚启动的引擎不阻塞退出；
+- 整理后 `has_pending_work()` 为真，恢复成功后解除；
+- 接管的崩溃事务同样阻塞退出，恢复并清理 journal 后解除。
+
+前端也补上了 `conflux://exit-blocked` 与 `conflux://update` 的监听——此前 Rust 会发这两个事件，但界面没有任何反应，用户点退出"没反应"且看不到原因。
 
 ### 单实例
 

@@ -190,3 +190,22 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
     }
     app.exit(0);
 }
+
+/// Exposed for the exit-barrier smoke test: performs the same check the tray
+/// quit does, without terminating the process.
+pub fn exit_blocked<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let state = app.state::<AppState>();
+    let engine = state.engine.lock();
+    match engine {
+        Ok(mut engine) => {
+            if !engine.state().has_pending_work() {
+                return false;
+            }
+            match engine.restore() {
+                Ok(report) => !report.is_complete(),
+                Err(_) => true,
+            }
+        }
+        Err(_) => true,
+    }
+}
