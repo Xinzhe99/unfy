@@ -183,7 +183,8 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
                     // how it was invoked.
                     let state = app.state::<AppState>();
                     let outcome = tauri::async_runtime::block_on(
-                        crate::commands::restore_after_delay(&app, &state, true),
+                        // The shortcut is an explicit instruction; no delay.
+                        crate::commands::restore_after_delay(&app, &state, false),
                     );
                     match &outcome {
                         Ok(report) => {

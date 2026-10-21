@@ -222,13 +222,16 @@ export function GeneralPage({
               type="number"
               defaultValue={settings.restore_delay_secs}
               min={0}
-              max={60}
+              max={120}
               disabled={busy}
               onBlur={(event) => {
                 const next = Number(event.currentTarget.value);
                 if (Number.isFinite(next) && next !== settings.restore_delay_secs) {
                   onSave({
-                    restore_delay_secs: Math.min(60, Math.max(0, Math.round(next))),
+                    // Spec range is 15-120 s; 0 stays legal because a user may
+                    // prefer an immediate restore and accept the risk of two
+                    // migrations on a flapping connection.
+                    restore_delay_secs: Math.min(120, Math.max(0, Math.round(next))),
                   });
                 }
               }}

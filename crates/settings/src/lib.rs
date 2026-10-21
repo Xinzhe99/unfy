@@ -184,7 +184,7 @@ impl Default for Settings {
             theme: ThemeName::System,
             hotkey_gather: None,
             hotkey_restore: None,
-            restore_delay_secs: 0,
+            restore_delay_secs: 15,
             paused: false,
             recovery_dismissed_until: 0,
             onboarding_done: false,

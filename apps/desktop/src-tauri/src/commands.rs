@@ -581,14 +581,19 @@ pub async fn restore(
     handle: tauri::AppHandle,
     app: State<'_, AppState>,
 ) -> Result<RestoreDto, String> {
-    restore_after_delay(&handle, &app, true).await
+    // The button is an explicit instruction; no delay.
+    restore_after_delay(&handle, &app, false).await
 }
 
 /// Restore, optionally honouring the configured delay.
 ///
-/// `honour_delay` is false for the exit barrier and for automatic restores that
-/// follow a remote session ending: both must be immediate, because the user is
-/// waiting for the app to finish, not idling before it starts.
+/// The delay exists to absorb "the remote session dropped and came back": during
+/// it a new gather cancels the restore, so the windows stay where they are.
+///
+/// `honour_delay` is therefore true only for the **automatic** restore that follows
+/// a detected session end. A restore the user asked for - the button, the tray, the
+/// shortcut, quitting - runs immediately: they are waiting for the app, and a
+/// fifteen-second pause looks like a broken button.
 pub async fn restore_after_delay<R: tauri::Runtime>(
     handle: &tauri::AppHandle<R>,
     app: &State<'_, AppState>,

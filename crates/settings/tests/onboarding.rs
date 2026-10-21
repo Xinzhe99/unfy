@@ -163,7 +163,12 @@ fn resetting_keeps_the_target_and_clears_everything_else() {
     assert!(!fresh.auto_gather);
     assert!(!fresh.auto_restore);
     assert_eq!(fresh.auto_detect, "balanced");
-    assert_eq!(fresh.restore_delay_secs, 0);
+    // Assert against the shipped default rather than a literal: the point is
+    // "reset restores defaults", not "the default is zero".
+    assert_eq!(
+        fresh.restore_delay_secs,
+        conflux_settings::Settings::default().restore_delay_secs
+    );
     assert_eq!(fresh.layout_mode, conflux_settings::LayoutModeName::Grid);
     assert_eq!(fresh.margin, 12);
     assert!(fresh.onboarding_done, "the guide must not reappear");

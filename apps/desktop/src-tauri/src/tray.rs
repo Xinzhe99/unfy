@@ -425,7 +425,8 @@ fn run_restore<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let handle = app.clone();
     let state = app.state::<AppState>();
     let result = tauri::async_runtime::block_on(async {
-        crate::commands::restore_after_delay(&handle, &state, true).await
+        // Tray restore is an explicit instruction, same as the button.
+        crate::commands::restore_after_delay(&handle, &state, false).await
     });
     if let Ok(dto) = &result {
         record(
