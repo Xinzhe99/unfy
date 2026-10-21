@@ -36,15 +36,17 @@ restore delta=[0,0,0,0]  PASS
 source \\.\DISPLAY1   1920x1032 @ 0,0
 target \\.\DISPLAY2   1920x1032 @ -1920,-78
 captured 6 windows
-migration: applied=9 rejected=3 skipped=6 (desktop-wide)
+migration: applied=7 rejected=5 skipped=7 (desktop-wide)
 migration PASS: every window is inside the target work area
-restore: complete=true pending=0
+restore: complete=false pending=2 (ours=0 others=2)
 restore PASS: every window returned to its original rectangle (tolerance 4 px)
-journal PASS: no unfinished transactions left behind
+journal PASS: unresolved transaction kept 12 preimages for later recovery
 E2E PASS (6 windows, real desktop)
 ```
 
-`applied=9` 包含 3 个非测试窗口，这是产品的真实行为（整理整块桌面的合格窗口）。断言只覆盖测试自己创建的 6 个窗口。
+`applied`/`rejected`/`skipped` 覆盖整块桌面的合格窗口，因为引擎的正确行为就是整理全部合格窗口。断言只覆盖测试自己创建的 6 个窗口。
+
+`pending=2` 是桌面上两个第三方窗口（Chrome / Electron 系）拒绝被移动。产品行为正确：它们的 preimage 保留在 journal 中，事务保持未完成，而不是假装成功。**这也说明真实使用中，"全部恢复"通常不是 100%** —— UI 会显示待处理数量与进程号，而不是一个笼统的成功。
 
 ### 崩溃恢复
 

@@ -204,10 +204,7 @@ impl<B: Backend> Engine<B> {
     pub fn resolve_target(&self, configured_native_id: Option<&str>) -> Option<DisplayKey> {
         let displays = self.backend.topology().ok()?;
         if let Some(native_id) = configured_native_id {
-            if let Some(found) = displays
-                .iter()
-                .find(|d| d.key.native_id == native_id)
-            {
+            if let Some(found) = displays.iter().find(|d| d.key.native_id == native_id) {
                 return Some(found.key.clone());
             }
         }

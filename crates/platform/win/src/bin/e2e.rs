@@ -127,12 +127,26 @@ fn main() {
     println!("migration PASS: every window is inside the target work area");
 
     let restore = engine.restore().expect("restore must not fail outright");
+    // Other applications on this desktop are also part of the migration, and
+    // some of them refuse to be moved. That is reported honestly rather than
+    // hidden, so the assertion must be scoped to the windows this harness owns;
+    // a foreign window left in `pending` is not a Conflux failure.
+    let ours_pending = restore
+        .pending
+        .iter()
+        .filter(|id| before.contains_key(*id))
+        .count();
     println!(
-        "restore: complete={} pending={}",
+        "restore: complete={} pending={} (ours={} others={})",
         restore.is_complete(),
-        restore.pending.len()
+        restore.pending.len(),
+        ours_pending,
+        restore.pending.len() - ours_pending
     );
-    assert!(restore.is_complete(), "restore must resolve every window");
+    assert_eq!(
+        ours_pending, 0,
+        "every host window must reach a safe terminal state"
+    );
 
     let after_restore = host.rects(&engine);
     let mut drift = Vec::new();
@@ -160,6 +174,10 @@ fn main() {
     );
     println!("restore PASS: every window returned to its original rectangle (tolerance 4 px)");
 
+    // A journal may only be deleted once every window reaches a safe terminal
+    // state. Foreign windows that refuse to move keep it alive, which is the
+    // correct behaviour: deleting it would discard their preimages. When every
+    // window resolved, the file must be gone.
     let leftovers: Vec<_> = std::fs::read_dir(&journal_dir)
         .map(|entries| {
             entries
@@ -169,11 +187,38 @@ fn main() {
                 .collect()
         })
         .unwrap_or_default();
-    assert!(
-        leftovers.is_empty(),
-        "journal files were not cleaned up: {leftovers:?}"
-    );
-    println!("journal PASS: no unfinished transactions left behind");
+
+    if restore.is_complete() {
+        assert!(
+            leftovers.is_empty(),
+            "a resolved transaction must delete its journal: {leftovers:?}"
+        );
+        println!("journal PASS: resolved transaction removed its journal");
+    } else {
+        assert_eq!(
+            leftovers.len(),
+            1,
+            "an unresolved transaction must keep exactly one journal"
+        );
+        // Prove the retained journal is still recoverable rather than merely
+        // present.
+        let recovered = conflux_journal::recover(&leftovers[0]).expect("journal readable");
+        match recovered {
+            conflux_journal::Recovered::Unfinished(tx) => {
+                assert!(
+                    !tx.preimages.is_empty(),
+                    "retained journal must still hold preimages"
+                );
+                println!(
+                    "journal PASS: unresolved transaction kept {} preimages for later recovery",
+                    tx.preimages.len()
+                );
+            }
+            conflux_journal::Recovered::Clean => {
+                panic!("an unresolved transaction was recorded as clean")
+            }
+        }
+    }
 
     host.stop();
     std::fs::remove_dir_all(&journal_dir).ok();

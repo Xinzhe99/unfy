@@ -475,6 +475,7 @@ version = "0.1.0"
 dependencies = [
  "conflux-domain",
  "conflux-engine",
+ "conflux-journal",
  "conflux-platform",
  "serde",
  "thiserror 2.0.21",
