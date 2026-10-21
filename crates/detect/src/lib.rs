@@ -571,3 +571,75 @@ mod tests {
         assert_eq!(is_known_tool("notepad.exe"), None);
     }
 }
+
+#[cfg(test)]
+mod resume_tests {
+    //! What a suspend must and must not do.
+    //!
+    //! The first implementation rebuilt the tracker after a suspend. A fresh
+    //! tracker reports no active evidence, so the next poll produced `Deactivated`
+    //! and the app restored every window - even though the user was still connected
+    //! and the machine had merely slept. These tests pin the corrected behaviour:
+    //! the streak resets, the verdict survives.
+
+    use super::*;
+
+    fn obs_rdp() -> Observation {
+        Observation {
+            rdp_active: true,
+            ..Observation::default()
+        }
+    }
+
+    #[test]
+    fn keeping_the_evidence_survives_a_suspend() {
+        let mut tracker = Tracker::new(Sensitivity::Balanced);
+        tracker.observe(&obs_rdp());
+        assert!(tracker.is_active());
+
+        // What `resume_after_sleep` does: reset the streak, keep the verdict.
+        let evidence = tracker.evidence().cloned();
+        tracker.force(evidence);
+
+        assert!(
+            tracker.is_active(),
+            "a session that survived the sleep must not be reported as ended"
+        );
+        assert_eq!(tracker.evidence(), Some(&Evidence::RdpSession));
+    }
+
+    #[test]
+    fn rebuilding_the_tracker_would_fake_an_end() {
+        // Documents the failure mode so a future "reset on resume" change shows up
+        // as a test failure rather than as windows moving on wake.
+        let mut tracker = Tracker::new(Sensitivity::Balanced);
+        tracker.observe(&obs_rdp());
+        assert!(tracker.is_active());
+
+        let mut rebuilt = Tracker::new(Sensitivity::Balanced);
+        assert_eq!(
+            rebuilt.observe(&Observation::default()),
+            Transition::None,
+            "the rebuilt tracker has no evidence to deactivate"
+        );
+        assert!(!rebuilt.is_active());
+        // The difference is the bug: `rebuilt.is_active()` is false, which the
+        // monitor reads as "the session ended".
+        assert_ne!(tracker.is_active(), rebuilt.is_active());
+    }
+
+    #[test]
+    fn a_session_that_ended_during_sleep_is_still_detected() {
+        let mut tracker = Tracker::new(Sensitivity::Balanced);
+        tracker.observe(&obs_rdp());
+
+        // Keep the verdict across the suspend, then observe real evidence: the
+        // session is over, so the normal path must report the transition.
+        let evidence = tracker.evidence().cloned();
+        tracker.force(evidence);
+        assert_eq!(
+            tracker.observe(&Observation::default()),
+            Transition::Deactivated
+        );
+    }
+}

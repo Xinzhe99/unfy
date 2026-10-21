@@ -34,13 +34,68 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
         .map(|mut tracker| *tracker = Tracker::new(sensitivity))
         .ok();
 
-    std::thread::spawn(move || loop {
-        if STOP.load(Ordering::Relaxed) {
-            return;
+    std::thread::spawn(move || {
+        let mut last = std::time::Instant::now();
+        loop {
+            if STOP.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(conflux_detect::POLL_INTERVAL);
+
+            // Spec P0-10-B: after the machine wakes, nothing observed before sleep
+            // may be trusted. The wall clock jumped by far more than the poll
+            // interval, which is the one signal for "we were suspended" that does
+            // not need a per-platform power callback.
+            //
+            // This matters because both the detector and the topology can change
+            // while the process is frozen: a remote session may have ended, a
+            // monitor may have been unplugged. Acting on the pre-sleep verdict
+            // would move windows based on a stale observation.
+            let elapsed = last.elapsed();
+            last = std::time::Instant::now();
+            if elapsed > conflux_detect::POLL_INTERVAL * 3 {
+                tracing::info!(
+                    elapsed_secs = elapsed.as_secs(),
+                    "long gap between polls; assuming the machine was suspended"
+                );
+                resume_after_sleep(&handle);
+            }
+
+            tick(&handle);
         }
-        std::thread::sleep(conflux_detect::POLL_INTERVAL);
-        tick(&handle);
     });
+}
+
+/// Clear observations that predate a suspend, without inventing a state change.
+///
+/// The tempting implementation - rebuild the tracker - is wrong. A fresh tracker
+/// has no active evidence, so the next poll reports `Deactivated` and the app
+/// restores every window, even though the user is still connected and the machine
+/// only slept. That is worse than acting on stale data.
+///
+/// What is actually stale is everything *observed*: the streak counter and the
+/// last logged evidence summary. The tracker's active verdict is kept, so a
+/// session that survived the sleep stays active and one that ended is detected by
+/// the normal path on the next poll.
+fn resume_after_sleep<R: Runtime>(app: &AppHandle<R>) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    // `Tracker::force` resets the streak while keeping the current evidence.
+    if let Ok(mut tracker) = state.detector.lock() {
+        let evidence = tracker.evidence().cloned();
+        tracker.force(evidence);
+    }
+    // The last-observation summary is compared against the next poll; keeping a
+    // pre-sleep value would suppress the "evidence changed" log line for a genuine
+    // change. The manual marker is a user statement and survives regardless.
+    if let Ok(mut last) = state.last_observation.lock() {
+        *last = None;
+    }
+    let _ = app.emit(
+        "conflux://resumed",
+        serde_json::json!({ "detection": "revalidated" }),
+    );
 }
 
 /// Re-read the sensitivity after the user changes it.
