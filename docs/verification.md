@@ -357,6 +357,25 @@ bun test
 3. 显示器编号角标硬编码 `bg-black/55`——改为 `--color-overlay`，并注明它不随主题变化
    （它叠在截图之上，亮度与主题无关）。
 
+### 启动路径的降级
+
+日志里出现一次 `ERROR panic … tauri/src/app.rs:1444`。定位到 `setup` 中的
+`tray::install(app.handle())?`：托盘创建失败会把 Tauri 的 setup 错误变成 panic，
+进程在显示窗口之前就退出。托盘是可选界面——窗口、快捷键与引擎都不依赖它，因此改为记录错误后继续启动。
+
+修复后连续启动验证：
+
+```
+INFO reconciling autostart desired=false current=true  exe=…\conflux.exe
+INFO autostart registration updated desired=false
+INFO remote-session evidence changed summary=no remote-session evidence
+```
+
+无 panic，且此前 UI 测试遗留的开机自启注册项被正确移除（注册表 Run 键已无 Conflux）。
+
+**这一条没有被任何测试发现**，是读日志时看到的。它说明"启动成功"必须包含"日志里没有 panic"，
+而不只是"窗口出现了"。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
