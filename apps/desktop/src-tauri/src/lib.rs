@@ -279,8 +279,8 @@ pub fn run() {
             commands::health_check,
             commands::keep_current_layout,
             commands::dismiss_last_error,
+            commands::reset_settings,
             commands::toggle_remote_session,
-            commands::live_transaction,
         ])
         .setup(|app| {
             // A tray failure must not abort startup. Tauri turns a `setup` error

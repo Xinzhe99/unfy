@@ -677,6 +677,37 @@ muted 灰（chroma < 0.02）。
 的已知限制），日志显示恢复按 10 秒延迟正常执行——这只证明"未收到取消时会恢复"，没有证明
 "收到取消时会中止"。快捷键与检测器路径的取消依赖上述代码位置与单元测试。
 
+### 恢复默认设置（实机验证）
+
+此前没有任何重置入口：配置出错只能手动找 JSON 文件。
+
+现在设置页底部有「恢复默认设置 → 确认清除」两步确认。真实运行：
+
+```
+BEFORE: excluded_apps=['test-a.exe','test-b.exe'], margin=40, auto_detect=aggressive
+AFTER:  excluded_apps=[], margin=12, auto_detect=balanced, layout_mode=grid
+目标显示器: 保留（number: 2）
+```
+
+**目标显示器是唯一保留的项**：它是用户对着屏幕确认过的结果，重置把它丢掉等于让人重新做一遍
+辨认工作。
+
+**发现并修正**：第一版用 `window.confirm` 做确认，在 Tauri WebView 里弹出了一个标题为 "W" 的
+异常窗口——原生对话框在 WebView 中不可靠。改为页内两步确认（`resetArmed` 本地状态），
+破坏性操作不再依赖可能不出现的对话框。
+
+### 死代码清理
+
+三处「用占位函数压住警告」的写法被清除：
+
+| 位置 | 掩盖的问题 |
+|---|---|
+| `commands.rs` 的 `fn unused(..)` | 未使用的 `HashMap`、`IdentityQuality` 导入 |
+| `engine` 的 `fn unused_capabilities(..)` | 未使用的 `Capabilities`、`Unplaced` |
+| `live_transaction` 命令 | 前端定义、后端注册，无人调用；注释声称"UI 会轮询"但实际没有 |
+
+占位函数只是把编译警告挪走，问题仍在。删掉后立刻暴露了两个未使用的导入。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

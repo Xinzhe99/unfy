@@ -4,10 +4,9 @@
 //! The frontend cannot ask the engine to touch an arbitrary window id — it can
 //! only ask for a preview, a migration, a restore, or a setting change.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use conflux_domain::{DisplaySnapshot, IdentityQuality, Rect, WindowId};
+use conflux_domain::{DisplaySnapshot, Rect, WindowId};
 use conflux_engine::{EngineState, MigrationReport, PendingWork, Preview, RestoreReport};
 use conflux_platform::{DisplayProvider, WindowBackend};
 use conflux_settings::{Settings, TargetDisplay};
@@ -1350,9 +1349,6 @@ fn digest(input: &str) -> String {
     format!("{hash:016x}")
 }
 
-#[allow(dead_code)]
-fn unused(_: HashMap<String, String>, _: IdentityQuality) {}
-
 /// Open the OS permission prompt for window control.
 ///
 /// Returns the permission state before the user answers; the UI polls
@@ -1369,16 +1365,6 @@ pub fn request_permission() -> bool {
 #[tauri::command]
 pub fn open_permission_settings() -> bool {
     platform::open_permission_settings()
-}
-
-/// The transaction the engine is currently running, if any.
-///
-/// The UI polls this alongside `pending_work` so it can distinguish "this is my
-/// own in-flight migration" from "a previous run did not finish".
-#[tauri::command]
-pub fn live_transaction(app: State<'_, AppState>) -> Result<Option<String>, String> {
-    let engine = app.engine.lock().map_err(|e| e.to_string())?;
-    Ok(engine.current_transaction().map(|id| id.to_string()))
 }
 
 #[derive(Debug, Serialize)]
@@ -1477,6 +1463,54 @@ pub fn activity_log(app: State<'_, AppState>) -> Vec<ActivityEntryDto> {
             trigger: e.trigger,
         })
         .collect()
+}
+
+/// Reset every setting to its default, keeping the chosen target display.
+///
+/// The target is deliberately preserved: it is the one value the user had to
+/// determine by looking at their physical screens ("which one is the remote
+/// showing"), and a reset that discards it forces that work again for no reason.
+///
+/// Everything else returns to the shipped defaults, including exclusions - a
+/// "reset" that leaves invisible state behind is worse than no reset at all.
+#[tauri::command]
+pub fn reset_settings(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+) -> Result<SettingsDto, String> {
+    let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
+    let preserved_target = settings.target_display.clone();
+    let fresh = Settings {
+        target_display: preserved_target,
+        // The user has already been through the guide; resetting settings is not
+        // a reason to show it again.
+        onboarding_done: true,
+        ..Default::default()
+    };
+    fresh.save(&app.settings_path).map_err(|e| e.to_string())?;
+    *settings = fresh;
+    drop(settings);
+
+    // The engine reads layout and exclusions from its own config, and the
+    // detector reads its level from settings; without these the reset would only
+    // take effect at the next launch.
+    if let Ok(mut engine) = app.engine.lock() {
+        let mut config = engine.config().clone();
+        config.layout.mode = conflux_layout::LayoutMode::Grid;
+        config.layout.margin = 12;
+        config.layout.gap = 8;
+        config.restore_delay_secs = 0;
+        config.excluded_apps.clear();
+        if let Err(e) = engine.update_config(config) {
+            tracing::warn!(error = %e, "reset could not be applied to the live engine");
+        }
+    }
+    crate::monitor::apply_sensitivity(&handle);
+    crate::session::install(&handle);
+    crate::session::set_autostart(&handle, false);
+    sync_tray(&handle);
+
+    settings_dto(&app, &handle)
 }
 
 /// Dismiss the last error shown on the overview.

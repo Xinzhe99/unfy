@@ -716,6 +716,7 @@ describe("pages render", () => {
         busy={false}
         onSave={noop}
         onCheckUpdate={noop}
+        onReset={noop}
       />,
     );
     expect(configured).toContain("已配置更新源");
@@ -740,9 +741,14 @@ describe("pages render", () => {
         busy={false}
         onSave={noop}
         onCheckUpdate={noop}
+        onReset={noop}
       />,
     );
     expect(unconfigured).toContain("未配置更新源");
+    // A configuration built over weeks needs a way back; the copy must say the
+    // target display survives, or nobody will dare use it.
+    expect(unconfigured).toContain("恢复默认设置");
+    expect(unconfigured).toContain("目标显示器保留");
   });
 
   test("onboarding at every step", () => {

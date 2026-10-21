@@ -795,6 +795,19 @@ export default function App() {
                 updateStatus={updateStatus}
                 busy={busy}
                 onSave={(patch) => void saveSettings(patch)}
+                onReset={() =>
+                  void run(
+                    async () => {
+                      const next = await api.resetSettings();
+                      setSettings(next);
+                      return next;
+                    },
+                    () => ({
+                      tone: "neutral",
+                      text: "已恢复默认设置，目标显示器已保留。",
+                    }),
+                  )
+                }
                 onCheckUpdate={() =>
                   void run(
                     () => api.checkUpdate(),

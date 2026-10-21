@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type {
   HealthItemDto,
   HotkeyStatusDto,
@@ -23,6 +25,7 @@ export function GeneralPage({
   busy,
   onSave,
   onCheckUpdate,
+  onReset,
 }: {
   settings: SettingsDto | null;
   hotkeys: HotkeyStatusDto | null;
@@ -31,7 +34,13 @@ export function GeneralPage({
   busy: boolean;
   onSave: (patch: Partial<SettingsDto>) => void;
   onCheckUpdate: () => void;
+  /** Restore shipped defaults, keeping the target display. */
+  onReset: () => void;
 }) {
+  // The reset row is the one destructive action in the app; arming it is local
+  // state so a stray click cannot wipe a configuration built over weeks.
+  const [resetArmed, setResetArmed] = useState(false);
+
   if (!settings) {
     return <p className="text-xs text-[var(--color-muted)]">正在读取设置…</p>;
   }
@@ -283,6 +292,54 @@ export function GeneralPage({
             ))}
           </ul>
         )}
+      </Card>
+
+      <Card
+        title="重置"
+        description="恢复除目标显示器以外的所有设置为出厂默认。"
+      >
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-xs leading-relaxed text-[var(--color-muted)]">
+            会清除排除规则、快捷键、自启、检测设置与恢复延迟。目标显示器保留，
+            因为那是你对着屏幕确认过的结果。
+          </p>
+          {/* Two-step confirmation in the page, not `window.confirm`: the native
+              dialog does not render reliably inside a Tauri webview (it produced a
+              stray window in verification), and a destructive action must not
+              depend on a dialog that may not appear. */}
+          {resetArmed ? (
+            <div className="flex shrink-0 gap-1.5">
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={busy}
+                onClick={() => {
+                  setResetArmed(false);
+                  onReset();
+                }}
+              >
+                确认清除
+              </Button>
+              <Button
+                size="sm"
+                variant="quiet"
+                disabled={busy}
+                onClick={() => setResetArmed(false)}
+              >
+                取消
+              </Button>
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={busy}
+              onClick={() => setResetArmed(true)}
+            >
+              恢复默认设置
+            </Button>
+          )}
+        </div>
       </Card>
 
       <Card title="隐私">

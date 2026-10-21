@@ -241,7 +241,6 @@ export const api = {
   openPermissionSettings: () => invoke<boolean>("open_permission_settings"),
   updateStatus: () => invoke<UpdateStatusDto>("update_status"),
   checkUpdate: () => invoke<UpdateCheckDto>("check_update"),
-  liveTransaction: () => invoke<string | null>("live_transaction"),
   setPaused: (paused: boolean) => invoke<PauseDto>("set_paused", { paused }),
   hotkeyStatus: () => invoke<HotkeyStatusDto>("hotkey_status"),
   identifyDisplays: (seconds?: number) =>
@@ -253,6 +252,7 @@ export const api = {
   healthCheck: () => invoke<HealthItemDto[]>("health_check"),
   keepCurrentLayout: () => invoke<void>("keep_current_layout"),
   dismissLastError: () => invoke<void>("dismiss_last_error"),
+  resetSettings: () => invoke<SettingsDto>("reset_settings"),
   /** Declare or end a remote session by hand; returns the new active state. */
   toggleRemoteSession: () => invoke<boolean>("toggle_remote_session"),
 };
