@@ -29,7 +29,10 @@
   /* Text */
   --color-fg: oklch(0.235 0.008 265);
   --color-fg-soft: oklch(0.44 0.008 265);
-  --color-muted: oklch(0.60 0.007 265);
+  /* 0.60 failed WCAG AA on white (3.96:1) and carries 11 px hint text, which is
+     not "large text". 0.535 reaches 4.6:1 while staying visibly quieter than
+     `fg-soft`. */
+  --color-muted: oklch(0.535 0.007 265);
 
   /* Accent: the primary button and the selected state, nothing else */
   --color-accent: oklch(0.26 0.006 265);
