@@ -28,6 +28,7 @@ function display(overrides: Partial<DisplayDto> & { native_id: string }): Displa
     primary: false,
     restorable: true,
     is_target: false,
+    number: 1,
     ...overrides,
   };
 }
@@ -45,30 +46,27 @@ function render(displays: DisplayDto[]): string {
 }
 
 describe("display cards", () => {
-  test("numbers a left-hand monitor first even when the platform lists it second", () => {
-    // The real configuration: DISPLAY2 sits at x = -1920, so it is physically to
-    // the left but enumerated second.
+  test("shows the number the backend assigned, not the array position", () => {
+    // The backend numbers by physical position and the on-screen badge uses the
+    // same value. The component must render that number: deriving it from the
+    // array index is what made the overview and the picker name the same monitor
+    // differently.
     const html = render([
-      display({ native_id: "primary", origin_x: 0, primary: true }),
-      display({ native_id: "left", origin_x: -1920 }),
+      display({ native_id: "left", origin_x: -1920, number: 1 }),
+      display({ native_id: "primary", origin_x: 0, primary: true, number: 2 }),
     ]);
 
-    // Cards are in DOM order == reading order, so the left monitor comes first.
-    const leftIndex = html.indexOf("显示器 1");
-    const rightIndex = html.indexOf("显示器 2");
-    expect(leftIndex).toBeGreaterThan(-1);
-    expect(rightIndex).toBeGreaterThan(-1);
-    expect(leftIndex).toBeLessThan(rightIndex);
-
-    // And the badge inside the first card is "1".
-    const firstBadge = html.indexOf(">1<");
-    expect(firstBadge).toBeGreaterThan(-1);
+    expect(html).toContain(">1<");
+    expect(html).toContain("显示器 1");
+    expect(html).toContain("显示器 2（主）");
+    // "显示器 1" must appear before "显示器 2" in reading order.
+    expect(html.indexOf("显示器 1")).toBeLessThan(html.indexOf("显示器 2"));
   });
 
   test("stacks a vertically arranged pair instead of laying it out side by side", () => {
     const html = render([
-      display({ native_id: "top", origin_y: 0 }),
-      display({ native_id: "bottom", origin_y: 1080 }),
+      display({ native_id: "top", origin_y: 0, number: 1 }),
+      display({ native_id: "bottom", origin_y: 1080, number: 2 }),
     ]);
     // The second card is below: its `top` offset is non-zero.
     expect(html).toMatch(/top:\s*50%/);
@@ -77,9 +75,9 @@ describe("display cards", () => {
   });
 
   test("keeps a single display at full width", () => {
-    const html = render([display({ native_id: "only", primary: true })]);
+    const html = render([display({ native_id: "only", primary: true, number: 1 })]);
     expect(html).toMatch(/width:\s*100%/);
-    expect(html).toContain("主显示器");
+    expect(html).toContain("显示器 1（主）");
   });
 
   test("reports an empty topology instead of rendering an empty box", () => {
@@ -89,7 +87,10 @@ describe("display cards", () => {
   test("marks the selected display", () => {
     const html = renderToStaticMarkup(
       <DisplayCards
-        displays={[display({ native_id: "a" }), display({ native_id: "b", origin_x: 1920 })]}
+        displays={[
+          display({ native_id: "a", number: 1 }),
+          display({ native_id: "b", origin_x: 1920, number: 2 }),
+        ]}
         target={{ native_id: "b", label: "b", present: true }}
         thumbnails={{}}
         onSelect={() => {}}

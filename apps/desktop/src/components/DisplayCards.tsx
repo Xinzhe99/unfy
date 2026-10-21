@@ -38,15 +38,10 @@ export function DisplayCards({
     );
   }
 
-  // Order by physical position, left to right then top to bottom, so the numbers
-  // match reading order. The platform enumerates displays in its own order (on
-  // Windows, adapter order), which for a monitor placed to the left of the
-  // primary produces "2" on the left card and "1" on the right - and the badge
-  // flashed on the screen uses this same number, so a mismatch means the user
-  // reads the wrong digit off the remote window.
-  const ordered = [...displays].sort(
-    (a, b) => a.origin_x - b.origin_x || a.origin_y - b.origin_y,
-  );
+  // The backend already returns them in positional order with a `number` that
+  // matches the on-screen badge. Sorting here as well was what let the two pages
+  // disagree: this component sorted, the overview indexed the raw list.
+  const ordered = displays;
   const layout = relativeLayout(ordered);
 
   // Each row gets a fixed height, and the box is that many rows tall. Deriving
@@ -83,7 +78,7 @@ export function DisplayCards({
               onClick={() => onSelect(display.native_id)}
               disabled={disabled}
               aria-pressed={selected}
-              aria-label={`显示器 ${index + 1}${display.primary ? "，主显示器" : ""}，${display.width}×${display.height}`}
+              aria-label={`显示器 ${display.number}${display.primary ? "，主显示器" : ""}，${display.width}×${display.height}`}
               className={`flex size-full flex-col overflow-hidden rounded-[var(--radius-control)] border text-left transition-colors disabled:cursor-not-allowed ${
                 selected
                   ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"
@@ -114,13 +109,13 @@ export function DisplayCards({
                       : "bg-[var(--color-overlay)] text-[var(--color-overlay-fg)]"
                   }`}
                 >
-                  {index + 1}
+                  {display.number}
                 </span>
               </div>
               <div className="flex shrink-0 items-center justify-between gap-2 px-2.5 py-1.5">
                 <div className="min-w-0">
                   <p className="truncate text-xs font-medium">
-                    {display.primary ? "主显示器" : `显示器 ${index + 1}`}
+                    {display.primary ? `显示器 ${display.number}（主）` : `显示器 ${display.number}`}
                   </p>
                   <p className="truncate text-[11px] tabular-nums text-[var(--color-muted)]">
                     {display.width}×{display.height}

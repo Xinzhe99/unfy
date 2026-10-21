@@ -429,15 +429,20 @@ export function OverviewPage({
  * so the same number is used here — that is the one identifier the user can see
  * on their desk.
  */
-function targetDisplayName(
+export function targetDisplayName(
   displays: DisplayDto[],
   target: { native_id: string; present: boolean } | null | undefined,
 ): string {
   if (!target) return "跟随主显示器";
-  const index = displays.findIndex((d) => d.native_id === target.native_id);
-  if (index === -1) return target.present ? "已选择" : "不可用";
-  const display = displays[index]!;
-  return display.primary ? `显示器 ${index + 1}（主）` : `显示器 ${index + 1}`;
+  const display = displays.find((d) => d.native_id === target.native_id);
+  if (!display) return target.present ? "已选择" : "不可用";
+  // `number` comes from the backend, which assigns it in the same order as the
+  // badges drawn on the physical screens. Deriving it here from the array index
+  // was the bug: this list and the picker's list arrived in different orders, so
+  // the two pages named the same monitor differently.
+  return display.primary
+    ? `显示器 ${display.number}（主）`
+    : `显示器 ${display.number}`;
 }
 
 /**

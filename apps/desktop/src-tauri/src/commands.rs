@@ -50,6 +50,9 @@ pub struct DisplayDto {
     /// Whether the identity is strong enough to restore onto without asking.
     pub restorable: bool,
     pub is_target: bool,
+    /// 1-based number shown to the user. Matches the badge flashed on the physical
+    /// screen. Computed once on the backend so no two surfaces can disagree.
+    pub number: usize,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -185,7 +188,7 @@ fn state_name(state: EngineState) -> &'static str {
     }
 }
 
-fn display_dto(d: &DisplaySnapshot, target: Option<&TargetDisplay>) -> DisplayDto {
+fn display_dto(d: &DisplaySnapshot, target: Option<&TargetDisplay>, number: usize) -> DisplayDto {
     DisplayDto {
         native_id: d.key.native_id.clone(),
         label: d.label.clone(),
@@ -199,6 +202,7 @@ fn display_dto(d: &DisplaySnapshot, target: Option<&TargetDisplay>) -> DisplayDt
         primary: d.primary,
         restorable: d.key.quality.is_restorable(),
         is_target: target.is_some_and(|t| t.matches(&d.key)),
+        number,
     }
 }
 
@@ -283,9 +287,19 @@ pub fn list_displays(app: State<'_, AppState>) -> Result<Vec<DisplayDto>, String
     let engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
     let displays = engine.backend().topology().map_err(|e| e.to_string())?;
-    Ok(displays
+
+    // Numbered here, once, in the same order the on-screen badges use. Every
+    // caller that shows a display number - the picker cards, the overview's
+    // "target display" line, the onboarding guide - then agrees by construction.
+    //
+    // The bug this fixes: `list_displays` used to return the platform's own
+    // enumeration order while the picker sorted by position, so the overview said
+    // "显示器 1" for a monitor the picker labelled "显示器 2".
+    let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+    Ok(ordered
         .iter()
-        .map(|d| display_dto(d, settings.target_display.as_ref()))
+        .enumerate()
+        .map(|(index, d)| display_dto(d, settings.target_display.as_ref(), index + 1))
         .collect())
 }
 

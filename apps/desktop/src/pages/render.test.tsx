@@ -23,6 +23,7 @@ import { DisplaysPage } from "../pages/Displays";
 import { ExclusionsPage } from "../pages/Exclusions";
 import { GeneralPage } from "../pages/General";
 import { Onboarding } from "../pages/Onboarding";
+import { DisplaysPage } from "../pages/Displays";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import { PlanPreview } from "../components/PlanPreview";
 import type {
@@ -50,6 +51,7 @@ const displays: DisplayDto[] = [
     primary: true,
     restorable: true,
     is_target: true,
+    number: 1,
   },
   {
     native_id: "DISPLAY2",
@@ -64,6 +66,7 @@ const displays: DisplayDto[] = [
     primary: false,
     restorable: true,
     is_target: false,
+    number: 2,
   },
 ];
 
@@ -407,6 +410,50 @@ describe("pages render", () => {
     // A message about a past failure must be dismissable: once read, it is noise
     // until the next success overwrites it.
     expect(html).toContain("知道了");
+  });
+
+  test("overview names the target display exactly as the picker does", () => {
+    // The reported bug: the overview said "显示器 1" while the picker highlighted
+    // "显示器 2" for the same monitor. They disagreed because each derived the
+    // number differently - one from its array index, the other from a sorted copy.
+    const picker = renderToStaticMarkup(
+      <DisplaysPage
+        displays={displays}
+        settings={settings}
+        target={status.target}
+        thumbnails={{}}
+        busy={false}
+        onSelect={noop}
+        onIdentify={noop}
+        onSave={noop}
+      />,
+    );
+    const overview = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+      />,
+    );
+    // The target is `displays[0]`: numbered 1 and primary.
+    expect(overview).toContain("显示器 1（主）");
+    expect(picker).toContain("显示器 1（主）");
   });
 
   test("overview offers a manual remote-session marker", () => {

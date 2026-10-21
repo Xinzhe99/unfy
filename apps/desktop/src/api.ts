@@ -53,6 +53,8 @@ export interface DisplayDto {
   primary: boolean;
   restorable: boolean;
   is_target: boolean;
+  /** 1-based number shown to the user; matches the badge on the physical screen. */
+  number: number;
 }
 
 export interface RectDto {
