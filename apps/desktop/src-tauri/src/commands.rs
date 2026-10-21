@@ -61,6 +61,10 @@ pub struct TargetDto {
     pub label: String,
     /// False when the saved target is not present in the current topology.
     pub present: bool,
+    /// The user-facing number, from the live topology when the display is present
+    /// and from the saved value when it is not. `None` only for settings written
+    /// before the number was recorded.
+    pub number: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,10 +230,20 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
 
     let displays = engine.backend().topology().map_err(|e| e.to_string())?;
 
-    let target = settings.target_display.as_ref().map(|t| TargetDto {
-        native_id: t.native_id.clone(),
-        label: t.label.clone(),
-        present: displays.iter().any(|d| t.matches(&d.key)),
+    // Live number when the display is present, saved number when it is not: a
+    // disconnected target still has to be named the way the user last saw it.
+    let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+    let target = settings.target_display.as_ref().map(|t| {
+        let live = ordered
+            .iter()
+            .position(|d| t.matches(&d.key))
+            .map(|index| index + 1);
+        TargetDto {
+            native_id: t.native_id.clone(),
+            label: t.label.clone(),
+            present: live.is_some(),
+            number: live.or(t.number),
+        }
     });
 
     // Windows still held by an unfinished transaction, from the same source the
@@ -745,6 +759,33 @@ fn settings_dto(
         dto.remote_active = tracker.is_active();
         dto.remote_evidence = tracker.evidence().map(|e| e.label());
     }
+    // `From<&Settings>` cannot see the topology, so the target's presence and live
+    // number are resolved here. Without this the settings payload claimed the
+    // target was present even after the monitor was unplugged.
+    if let Some(target) = dto.target.as_mut() {
+        let live = app
+            .engine
+            .lock()
+            .ok()
+            .and_then(|engine| conflux_platform::DisplayProvider::topology(engine.backend()).ok())
+            .map(|displays| {
+                let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+                ordered
+                    .iter()
+                    .position(|d| d.key.native_id == target.native_id)
+                    .map(|index| index + 1)
+            });
+        match live {
+            Some(Some(number)) => {
+                target.present = true;
+                target.number = Some(number);
+            }
+            Some(None) => target.present = false,
+            // Topology unavailable: leave the saved values rather than claiming
+            // the display disappeared.
+            None => {}
+        }
+    }
     Ok(dto)
 }
 
@@ -808,10 +849,15 @@ impl From<&Settings> for SettingsDto {
             remote_evidence: None,
             onboarding_done: s.onboarding_done,
             onboarding_step: s.onboarding_step,
+            // `present` and the live number need the topology, which this `From`
+            // impl cannot reach; `settings_dto` fills both in. Claiming
+            // `present: true` here was a second hardcoded truth that made a
+            // disconnected display look available.
             target: s.target_display.as_ref().map(|t| TargetDto {
                 native_id: t.native_id.clone(),
                 label: t.label.clone(),
                 present: true,
+                number: t.number,
             }),
         }
     }
@@ -964,12 +1010,18 @@ pub fn set_target_display(app: State<'_, AppState>, native_id: String) -> Result
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
 
     let displays = engine.backend().topology().map_err(|e| e.to_string())?;
-    let display = displays
+    // Numbered the same way the picker and the on-screen badges are, so the stored
+    // number keeps meaning the same thing after the display is unplugged.
+    let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+    let position = ordered
         .iter()
-        .find(|d| d.key.native_id == native_id)
+        .position(|d| d.key.native_id == native_id)
         .ok_or_else(|| "display_not_found".to_string())?;
+    let display = ordered[position];
 
-    settings.target_display = Some(TargetDisplay::from_key(&display.key, display.label.clone()));
+    let mut target = TargetDisplay::from_key(&display.key, display.label.clone());
+    target.number = Some(position + 1);
+    settings.target_display = Some(target);
     settings.save(&app.settings_path).map_err(|e| e.to_string())
 }
 

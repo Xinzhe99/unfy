@@ -63,6 +63,7 @@ fn a_chosen_target_does_not_imply_completion() {
     // guide must be completed explicitly rather than inferred from a target.
     let settings = Settings {
         target_display: Some(TargetDisplay {
+            number: None,
             native_id: "primary".into(),
             label: "Primary".into(),
         }),

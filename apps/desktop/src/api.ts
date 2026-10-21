@@ -22,6 +22,8 @@ export interface TargetDto {
   native_id: string;
   label: string;
   present: boolean;
+  /** User-facing number; the saved value when the display is currently absent. */
+  number: number | null;
 }
 
 export interface StatusDto {

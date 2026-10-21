@@ -24,6 +24,14 @@ pub const SETTINGS_VERSION: u32 = 1;
 pub struct TargetDisplay {
     pub native_id: String,
     pub label: String,
+    /// The number this display had when it was chosen.
+    ///
+    /// Stored because the number cannot be recomputed once the display is gone:
+    /// the overview still has to say "显示器 2 已断开" rather than print the raw
+    /// device path, which means nothing to the user. Absent in files written
+    /// before this field existed.
+    #[serde(default)]
+    pub number: Option<usize>,
 }
 
 impl TargetDisplay {
@@ -31,6 +39,7 @@ impl TargetDisplay {
         Self {
             native_id: key.native_id.clone(),
             label: label.into(),
+            number: None,
         }
     }
 
@@ -414,6 +423,7 @@ mod tests {
         let path = dir.join("settings.json");
         let settings = Settings {
             target_display: Some(TargetDisplay {
+                number: None,
                 native_id: "DISPLAY#DEL41FF".into(),
                 label: "Dell U2720Q".into(),
             }),
@@ -546,6 +556,7 @@ mod tests {
     #[test]
     fn target_display_matches_by_native_id_only() {
         let target = TargetDisplay {
+            number: None,
             native_id: "display-a".into(),
             label: "Old label".into(),
         };

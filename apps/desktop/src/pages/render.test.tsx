@@ -88,7 +88,7 @@ const settings: SettingsDto = {
   auto_gather: false,
   auto_restore: false,
   last_refused_apps: [],
-  target: { native_id: "DISPLAY1", label: "DISPLAY1", present: true },
+  target: { native_id: "DISPLAY1", label: "DISPLAY1", present: true, number: 1 },
   remote_active: false,
   remote_evidence: null,
 };
@@ -100,7 +100,7 @@ const status: StatusDto = {
   has_permission: true,
   permission_name: "窗口控制",
   display_count: 2,
-  target: { native_id: "DISPLAY1", label: "DISPLAY1", present: true },
+  target: { native_id: "DISPLAY1", label: "DISPLAY1", present: true, number: 1 },
   pending_windows: 0,
   last_error: null,
   paused: false,

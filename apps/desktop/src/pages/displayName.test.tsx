@@ -42,16 +42,31 @@ describe("targetDisplayName", () => {
       display({ native_id: "right", number: 2 }),
       display({ native_id: "left", origin_x: -1920, number: 1, primary: true }),
     ];
-    expect(targetDisplayName(displays, { native_id: "left", present: true })).toBe(
-      "显示器 1（主）",
-    );
-    expect(targetDisplayName(displays, { native_id: "right", present: true })).toBe(
-      "显示器 2",
-    );
+    expect(
+      targetDisplayName(displays, {
+        native_id: "left",
+        label: "DISPLAY1",
+        present: true,
+        number: 1,
+      }),
+    ).toBe("显示器 1（主）");
+    expect(
+      targetDisplayName(displays, {
+        native_id: "right",
+        label: "DISPLAY2",
+        present: true,
+        number: 2,
+      }),
+    ).toBe("显示器 2");
   });
 
   test("names the same display identically regardless of list order", () => {
-    const target = { native_id: "primary", present: true };
+    const target = {
+      native_id: "primary",
+      label: "DISPLAY1",
+      present: true,
+      number: 1,
+    };
     const first = [
       display({ native_id: "primary", number: 1, primary: true }),
       display({ native_id: "secondary", number: 2 }),
@@ -60,13 +75,36 @@ describe("targetDisplayName", () => {
     expect(targetDisplayName(first, target)).toBe(targetDisplayName(second, target));
   });
 
+  test("keeps the number of a display that is currently unplugged", () => {
+    // The list no longer contains it, so a number derived from the list would be
+    // unavailable; the saved one still names it the way the user last saw it.
+    expect(
+      targetDisplayName([display({ native_id: "a", number: 1 })], {
+        native_id: "gone",
+        label: "DISPLAY9",
+        present: false,
+        number: 2,
+      }),
+    ).toBe("显示器 2");
+  });
+
   test("falls back when there is no target or it is gone", () => {
     expect(targetDisplayName([], null)).toBe("跟随主显示器");
     expect(
-      targetDisplayName([display({ native_id: "a" })], { native_id: "gone", present: false }),
+      targetDisplayName([display({ native_id: "a" })], {
+        native_id: "gone",
+        label: "DISPLAY9",
+        present: false,
+        number: null,
+      }),
     ).toBe("不可用");
     expect(
-      targetDisplayName([display({ native_id: "a" })], { native_id: "gone", present: true }),
+      targetDisplayName([display({ native_id: "a" })], {
+        native_id: "gone",
+        label: "DISPLAY9",
+        present: true,
+        number: null,
+      }),
     ).toBe("已选择");
   });
 });

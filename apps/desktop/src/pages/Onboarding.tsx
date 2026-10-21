@@ -85,6 +85,8 @@ export function Onboarding({
                     label:
                       displays.find((d) => d.native_id === chosen)?.label ?? "",
                     present: true,
+                    number:
+                      displays.find((d) => d.native_id === chosen)?.number ?? null,
                   }
                 : null
             }

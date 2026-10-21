@@ -2,6 +2,7 @@ import { stateLabels } from "../api";
 import type {
   ActivityEntryDto,
   DisplayDto,
+  TargetDto,
   PreviewDto,
   SettingsDto,
   StatusDto,
@@ -174,7 +175,9 @@ export function OverviewPage({
         {target && !target.present ? (
           <div className="mt-2.5 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
             <p className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
-              保存的目标显示器（{target.label}）已断开，整理时会改用主显示器。
+              保存的目标显示器（
+              {target.number ? `显示器 ${target.number}` : "已保存的显示器"}
+              ）已断开，整理时会改用主显示器。
             </p>
             <button
               type="button"
@@ -431,15 +434,20 @@ export function OverviewPage({
  */
 export function targetDisplayName(
   displays: DisplayDto[],
-  target: { native_id: string; present: boolean } | null | undefined,
+  target: TargetDto | null | undefined,
 ): string {
   if (!target) return "跟随主显示器";
+  // Prefer the backend's number for the target itself: it is the live value when
+  // the display is present and the saved one when it is not, so the name does not
+  // change depending on whether the monitor is plugged in.
+  if (target.number) {
+    const display = displays.find((d) => d.native_id === target.native_id);
+    return display?.primary
+      ? `显示器 ${target.number}（主）`
+      : `显示器 ${target.number}`;
+  }
   const display = displays.find((d) => d.native_id === target.native_id);
   if (!display) return target.present ? "已选择" : "不可用";
-  // `number` comes from the backend, which assigns it in the same order as the
-  // badges drawn on the physical screens. Deriving it here from the array index
-  // was the bug: this list and the picker's list arrived in different orders, so
-  // the two pages named the same monitor differently.
   return display.primary
     ? `显示器 ${display.number}（主）`
     : `显示器 ${display.number}`;
