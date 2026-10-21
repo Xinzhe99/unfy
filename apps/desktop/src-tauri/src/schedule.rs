@@ -149,41 +149,52 @@ mod tests {
 }
 
 #[cfg(test)]
-mod restore_cancellation_tests {
-    //! A pending restore must be cancellable, because that is the whole point of
-    //! the delay: a remote session that drops and reconnects within it must not
-    //! cause two full migrations. These tests drive the real `Schedule`, not a
-    //! stand-in, so the generation counter is covered.
+mod gather_cancels_restore_tests {
+    //! The reconnect invariant.
+    //!
+    //! The delay exists so a session that drops and reconnects does not cause two
+    //! migrations. That only works if the reconnect (a gather) kills the timer;
+    //! otherwise the timer fires after the fresh layout and undoes it.
+    //!
+    //! All three gather entry points - window button, shortcut, detector - now
+    //! share this, but two of them were missing it, which is why the behaviour is
+    //! pinned here rather than left to reading.
 
     use super::*;
 
     #[test]
-    fn a_gather_during_the_wait_cancels_the_restore() {
+    fn a_claimed_restore_is_cancelled_by_the_next_gather() {
         let mut schedule = Schedule::new();
+
+        // Session ends: a restore is scheduled with a delay.
         let restore = schedule.claim();
 
-        // A gather arrives while the restore is waiting.
+        // Session comes back before the delay elapses: a gather cancels it.
         schedule.cancel();
 
         assert!(
-            !wait_cancellable(Duration::from_millis(50), &restore),
-            "the waiting restore must observe the cancellation"
+            !wait_cancellable(Duration::from_secs(1), &restore),
+            "the restore must not fire after a gather took over"
         );
     }
 
     #[test]
-    fn an_uncancelled_wait_still_proceeds() {
+    fn the_restore_that_survives_its_wait_still_runs() {
         let mut schedule = Schedule::new();
         let restore = schedule.claim();
-        assert!(wait_cancellable(Duration::from_millis(30), &restore));
+        // No gather arrives.
+        assert!(wait_cancellable(Duration::from_millis(20), &restore));
     }
 
     #[test]
-    fn cancelling_twice_is_harmless() {
+    fn a_cancelled_restore_does_not_block_the_next_one() {
         let mut schedule = Schedule::new();
-        let restore = schedule.claim();
+        let first = schedule.claim();
         schedule.cancel();
-        schedule.cancel();
-        assert!(!wait_cancellable(Duration::from_millis(10), &restore));
+        assert!(!wait_cancellable(Duration::from_millis(10), &first));
+
+        // A later session end schedules a new restore that must proceed.
+        let second = schedule.claim();
+        assert!(wait_cancellable(Duration::from_millis(20), &second));
     }
 }

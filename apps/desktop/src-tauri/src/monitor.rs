@@ -267,6 +267,12 @@ fn current_sensitivity<R: Runtime>(app: &AppHandle<R>) -> Sensitivity {
 /// Gather, mapping engine refusals to a message the UI can act on.
 fn gather<R: Runtime>(app: &AppHandle<R>, evidence: &Evidence) -> Result<usize, String> {
     let state = app.state::<AppState>();
+    // A gather supersedes a pending delayed restore. This is the reconnect case:
+    // a session that ends and comes back within the delay must end up gathered,
+    // not restored a moment later by a timer the user has forgotten about.
+    if let Ok(mut schedule) = state.schedule.lock() {
+        schedule.cancel();
+    }
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
 
@@ -326,9 +332,9 @@ fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
             });
         }
     }
-    if let Ok(mut schedule) = state.schedule.lock() {
-        schedule.cancel();
-    }
+    // No cancellation here: this restore owns the newest token, and clearing it
+    // would invalidate nothing useful while making the next claim start from a
+    // different generation. The wait above already checked the token.
     let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
     let report = engine.restore().map_err(|e| e.to_string())?;
     let summary = RestoreSummary {

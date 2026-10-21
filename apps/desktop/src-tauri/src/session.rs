@@ -100,6 +100,16 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
             "hotkey_gather" => {
                 let app = self.clone();
                 std::thread::spawn(move || {
+                    // A gather supersedes a pending delayed restore, exactly as the
+                    // window button does. Without this, pressing the shortcut
+                    // during the wait let the timer fire afterwards and undo the
+                    // layout the user just asked for.
+                    if let Some(hotkey_state) = app.try_state::<AppState>() {
+                        if let Ok(mut schedule) = hotkey_state.schedule.lock() {
+                            schedule.cancel();
+                        }
+                    }
+
                     // Counters are filled inside the engine scope and read after
                     // the locks are dropped, so the history write never happens
                     // while holding the engine mutex.
