@@ -131,7 +131,17 @@ pub struct EngineConfig {
     /// retries. Four physical pixels matches the product spec's tolerance.
     pub tolerance_px: i32,
     /// Attempts per window before it is reported as `Rejected`.
+    ///
+    /// Two is deliberate: the first write and one retry distinguish "the message
+    /// pump was slow" from "this application does not accept the move". A third
+    /// attempt costs another settle delay and has never been observed to succeed
+    /// in the verification harness.
     pub max_attempts: u8,
+    /// Pause before re-requesting a window whose position did not stick.
+    ///
+    /// Only paid on the retry pass, so a batch of N windows costs at most one
+    /// settle wait per diverging window rather than one per window.
+    pub retry_delay_ms: u64,
     /// Where journal files live. One file per transaction.
     pub journal_dir: PathBuf,
     /// A window narrower than this is not considered "reachable".
@@ -143,7 +153,8 @@ impl Default for EngineConfig {
         Self {
             layout: LayoutConfig::default(),
             tolerance_px: 4,
-            max_attempts: 3,
+            max_attempts: 2,
+            retry_delay_ms: 60,
             journal_dir: std::env::temp_dir().join("conflux-journal"),
             min_reachable: conflux_domain::Size::new(64, 32),
         }
@@ -440,7 +451,9 @@ impl<B: Backend> Engine<B> {
             return Err(EngineError::TransactionAlreadyOpen);
         }
 
+        let t0 = std::time::Instant::now();
         let preview = self.build_preview(target)?;
+        let t_preview = t0.elapsed().as_millis();
         if preview.plan.is_empty() {
             self.state = EngineState::Idle;
             return Ok(MigrationReport {
@@ -456,6 +469,7 @@ impl<B: Backend> Engine<B> {
 
         self.state = EngineState::Migrating;
 
+        let t1 = std::time::Instant::now();
         // 1. Durable preimages for every window we are about to touch.
         let journal_path = self
             .config
@@ -529,6 +543,13 @@ impl<B: Backend> Engine<B> {
             preimages.insert(placement.id.clone(), preimage);
         }
 
+        let t_preimage = t1.elapsed().as_millis();
+
+        // The invariant: every preimage is on disk before the first window moves.
+        journal
+            .durable()
+            .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
+
         if preimages.is_empty() {
             journal
                 .close_and_remove()
@@ -555,35 +576,109 @@ impl<B: Backend> Engine<B> {
         self.preimages = preimages;
 
         // 2. Apply, one window at a time, with the intent written first.
+        //    Windows that do not settle are collected here and retried once the
+        //    whole plan has been submitted.
+        let mut settling: Vec<(WindowId, WindowPlan)> = Vec::new();
         let mut applied = Vec::new();
         let mut unplaced = Vec::new();
         for id in preview.plan.unplaced.iter().map(|(id, _)| id.clone()) {
             unplaced.push(id);
         }
 
-        for placement in &preview.plan.placements {
+        // Intents are written in batches: every intent in a batch is durable
+        // before any window in it is touched, so a crash can only leave windows
+        // whose intent is already on disk. Batching keeps the fsync count
+        // proportional to batches rather than windows.
+        const BATCH: usize = 16;
+        let placements = &preview.plan.placements;
+        let mut next = 0usize;
+
+        while next < placements.len() {
+            let end = (next + BATCH).min(placements.len());
             let Some(transaction) = self.transaction.as_mut() else {
                 break;
             };
-            if transaction
-                .journal
-                .write_intent(&placement.id, placement.rect, WindowMode::Normal)
-                .is_err()
-            {
-                // Cannot record the intent, so we must not perform the write.
+            let mut wrote_all = true;
+            for placement in &placements[next..end] {
+                if transaction
+                    .journal
+                    .write_intent(&placement.id, placement.rect, WindowMode::Normal)
+                    .is_err()
+                {
+                    wrote_all = false;
+                    break;
+                }
+            }
+            let durable = transaction.journal.durable().is_ok();
+            if !wrote_all || !durable {
                 break;
             }
 
-            let plan = WindowPlan {
-                visible_rect: placement.rect,
-                mode: WindowMode::Normal,
-            };
+            for placement in &placements[next..end] {
+                let plan = WindowPlan {
+                    visible_rect: placement.rect,
+                    mode: WindowMode::Normal,
+                };
 
-            let outcome = self.apply_with_retry(&placement.id, &plan);
-            let observed = self.backend.read_back(&placement.id).ok();
+                // First pass: submit and read back, never sleep. Diverging windows are
+                // retried after the whole plan has been submitted, so one slow
+                // application cannot serialise a hundred windows behind it.
+                let outcome = self.apply_once(&placement.id, &plan);
+                if outcome == WindowOutcome::Unknown {
+                    settling.push((placement.id.clone(), plan));
+                }
 
+                let observed = self.backend.read_back(&placement.id).ok();
+
+                let record = AppliedResult {
+                    id: placement.id.clone(),
+                    outcome,
+                    observed: observed.map(|o| ObservedRect {
+                        visible_rect: o.visible_rect,
+                        mode: o.mode,
+                    }),
+                };
+                if let Some(transaction) = self.transaction.as_mut() {
+                    let _ = transaction.journal.write_result(&record);
+                    if let Some(observed) = observed {
+                        transaction
+                            .last_applied
+                            .insert(placement.id.clone(), observed);
+                    }
+                }
+                self.outcomes.insert(placement.id.clone(), outcome);
+                if outcome == WindowOutcome::Applied {
+                    applied.push(placement.id.clone());
+                }
+            }
+
+            next = end;
+        }
+
+        let t_apply = t1.elapsed().as_millis().saturating_sub(t_preimage);
+
+        if let Some(transaction) = self.transaction.as_mut() {
+            if transaction.journal.durable().is_err() {
+                tracing::warn!("could not flush first-pass results to disk");
+            }
+        }
+
+        tracing::debug!(
+            enumerate_and_plan_ms = t_preview,
+            preimage_ms = t_preimage,
+            apply_ms = t_apply,
+            "migration phase timings"
+        );
+
+        // 3. Retry pass. Only diverging windows pay the settle delay, and the
+        //    first retry is immediate: an application that simply had not pumped
+        //    its queue yet usually lands correctly on the second request, so
+        //    sleeping before it would waste the budget for no benefit.
+        for (id, plan) in settling {
+            let outcome = self.apply_with_retry(&id, &plan);
+            let observed = self.backend.read_back(&id).ok();
             let record = AppliedResult {
-                id: placement.id.clone(),
+                id: id.clone(),
                 outcome,
                 observed: observed.map(|o| ObservedRect {
                     visible_rect: o.visible_rect,
@@ -593,14 +688,18 @@ impl<B: Backend> Engine<B> {
             if let Some(transaction) = self.transaction.as_mut() {
                 let _ = transaction.journal.write_result(&record);
                 if let Some(observed) = observed {
-                    transaction
-                        .last_applied
-                        .insert(placement.id.clone(), observed);
+                    transaction.last_applied.insert(id.clone(), observed);
                 }
             }
-            self.outcomes.insert(placement.id.clone(), outcome);
-            if outcome == WindowOutcome::Applied {
-                applied.push(placement.id.clone());
+            if outcome == WindowOutcome::Applied && !applied.contains(&id) {
+                applied.push(id.clone());
+            }
+            self.outcomes.insert(id, outcome);
+        }
+
+        if let Some(transaction) = self.transaction.as_mut() {
+            if transaction.journal.durable().is_err() {
+                tracing::warn!("could not flush retry results to disk");
             }
         }
 
@@ -633,11 +732,47 @@ impl<B: Backend> Engine<B> {
         })
     }
 
-    /// Apply one window, reading back and retrying within the tolerance.
+    /// Submit one window and read it back once.
+    ///
+    /// This is the *first* pass: it never sleeps, so a hundred windows cost one
+    /// round of platform calls rather than a worst-case wait per window. Windows
+    /// that have not settled are collected and retried afterwards by
+    /// [`Self::apply_with_retry`], which is where the settle delay is paid.
+    fn apply_once(&self, id: &WindowId, plan: &WindowPlan) -> WindowOutcome {
+        // Async submission: do not block on the target application pumping its
+        // queue. The read-back below still verifies the result, and diverging
+        // windows are retried synchronously afterwards.
+        match self.backend.apply_async(id, plan) {
+            Ok(()) => {}
+            Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
+                return WindowOutcome::Rejected
+            }
+            Err(PlatformError::WindowGone) => return WindowOutcome::Gone,
+            Err(_) => return WindowOutcome::Unknown,
+        }
+
+        match self.backend.read_back(id) {
+            Ok(observed) => {
+                if within_tolerance(
+                    observed.visible_rect,
+                    plan.visible_rect,
+                    self.config.tolerance_px,
+                ) {
+                    WindowOutcome::Applied
+                } else {
+                    // Diverged, but not yet a failure: the retry pass gets a
+                    // chance once every other window has been submitted.
+                    WindowOutcome::Unknown
+                }
+            }
+            Err(PlatformError::WindowGone) => WindowOutcome::Gone,
+            Err(_) => WindowOutcome::Unknown,
+        }
+    }
+
+    /// Retry a window that did not settle on the first pass.
     fn apply_with_retry(&self, id: &WindowId, plan: &WindowPlan) -> WindowOutcome {
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
+        for attempt in 1..=self.config.max_attempts {
             match self.backend.apply(id, plan) {
                 Ok(()) => {}
                 Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
@@ -645,7 +780,7 @@ impl<B: Backend> Engine<B> {
                 }
                 Err(PlatformError::WindowGone) => return WindowOutcome::Gone,
                 Err(_) => {
-                    if attempt >= self.config.max_attempts {
+                    if attempt == self.config.max_attempts {
                         return WindowOutcome::Rejected;
                     }
                     continue;
@@ -661,21 +796,28 @@ impl<B: Backend> Engine<B> {
                     ) {
                         return WindowOutcome::Applied;
                     }
-                    if attempt >= self.config.max_attempts {
+                    if attempt == self.config.max_attempts {
                         return WindowOutcome::Rejected;
                     }
-                    // A short pause lets a self-correcting application settle
-                    // before the next attempt instead of racing it.
-                    std::thread::sleep(std::time::Duration::from_millis(60));
+                    // Let a self-correcting application settle rather than racing
+                    // it; this is the only place the engine sleeps, and the first
+                    // retry skips it because most divergences are just a slow
+                    // message pump.
+                    if attempt > 1 {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            self.config.retry_delay_ms,
+                        ));
+                    }
                 }
                 Err(PlatformError::WindowGone) => return WindowOutcome::Gone,
                 Err(_) => {
-                    if attempt >= self.config.max_attempts {
+                    if attempt == self.config.max_attempts {
                         return WindowOutcome::Unknown;
                     }
                 }
             }
         }
+        WindowOutcome::Unknown
     }
 
     fn display_of(&self, window: &WindowSnapshot) -> Result<DisplaySnapshot, EngineError> {

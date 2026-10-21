@@ -23,8 +23,8 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IsIconic,
     IsWindowVisible, IsZoomed, SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GW_OWNER,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE, WINDOWPLACEMENT,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE,
+    WINDOWPLACEMENT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
 use crate::displays::{hwnd_from_id, process_identity};
@@ -215,6 +215,46 @@ impl WindowBackend for WinWindows {
     }
 
     fn apply(&self, id: &WindowId, plan: &WindowPlan) -> Result<()> {
+        self.apply_inner(id, plan, false)
+    }
+
+    fn apply_async(&self, id: &WindowId, plan: &WindowPlan) -> Result<()> {
+        self.apply_inner(id, plan, true)
+    }
+
+    fn read_back(&self, id: &WindowId) -> Result<ObservedWindow> {
+        let _guard = PerMonitorV2::enter();
+        let hwnd = hwnd_from_id(id)?;
+        let (visible_rect, _) = window_rects(hwnd).ok_or(PlatformError::WindowGone)?;
+        let mode = if unsafe { IsIconic(hwnd) }.as_bool() {
+            WindowMode::Minimized
+        } else if unsafe { IsZoomed(hwnd) }.as_bool() {
+            WindowMode::Maximized
+        } else {
+            WindowMode::Normal
+        };
+        Ok(ObservedWindow { visible_rect, mode })
+    }
+
+    fn restore_native(&self, id: &WindowId, placement: &[u8]) -> Result<()> {
+        if placement.len() != core::mem::size_of::<WINDOWPLACEMENT>() {
+            return Err(PlatformError::Unsupported);
+        }
+        let hwnd = hwnd_from_id(id)?;
+        let mut wp: WINDOWPLACEMENT = unsafe { core::mem::zeroed() };
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                placement.as_ptr(),
+                &mut wp as *mut WINDOWPLACEMENT as *mut u8,
+                placement.len(),
+            );
+        }
+        unsafe { SetWindowPlacement(hwnd, &wp) }.map_err(map_win_error)
+    }
+}
+
+impl WinWindows {
+    fn apply_inner(&self, id: &WindowId, plan: &WindowPlan, asynchronous: bool) -> Result<()> {
         let _guard = PerMonitorV2::enter();
         let hwnd = hwnd_from_id(id)?;
 
@@ -250,7 +290,11 @@ impl WindowBackend for WinWindows {
                 outer.top,
                 outer.width(),
                 outer.height(),
-                SWP_NOZORDER | SWP_NOACTIVATE,
+                if asynchronous {
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS
+                } else {
+                    SWP_NOZORDER | SWP_NOACTIVATE
+                },
             )
         }
         .map_err(map_win_error)?;
@@ -259,36 +303,6 @@ impl WindowBackend for WinWindows {
             let _ = unsafe { ShowWindow(hwnd, SW_MAXIMIZE) };
         }
         Ok(())
-    }
-
-    fn read_back(&self, id: &WindowId) -> Result<ObservedWindow> {
-        let _guard = PerMonitorV2::enter();
-        let hwnd = hwnd_from_id(id)?;
-        let (visible_rect, _) = window_rects(hwnd).ok_or(PlatformError::WindowGone)?;
-        let mode = if unsafe { IsIconic(hwnd) }.as_bool() {
-            WindowMode::Minimized
-        } else if unsafe { IsZoomed(hwnd) }.as_bool() {
-            WindowMode::Maximized
-        } else {
-            WindowMode::Normal
-        };
-        Ok(ObservedWindow { visible_rect, mode })
-    }
-
-    fn restore_native(&self, id: &WindowId, placement: &[u8]) -> Result<()> {
-        if placement.len() != core::mem::size_of::<WINDOWPLACEMENT>() {
-            return Err(PlatformError::Unsupported);
-        }
-        let hwnd = hwnd_from_id(id)?;
-        let mut wp: WINDOWPLACEMENT = unsafe { core::mem::zeroed() };
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                placement.as_ptr(),
-                &mut wp as *mut WINDOWPLACEMENT as *mut u8,
-                placement.len(),
-            );
-        }
-        unsafe { SetWindowPlacement(hwnd, &wp) }.map_err(map_win_error)
     }
 }
 

@@ -26,14 +26,25 @@ use conflux_engine::{Engine, EngineConfig};
 use conflux_platform::{DisplayProvider, WindowBackend};
 use conflux_platform_win::WinPlatform;
 
-/// How many host windows to create. Enough to force a multi-row grid.
-const WINDOWS: usize = 6;
+/// Default number of host windows. Enough to force a multi-row grid.
+const DEFAULT_WINDOWS: usize = 6;
 
 fn main() {
     if std::env::args().any(|arg| arg == "--host") {
         host_main();
         return;
     }
+
+    // `--stress N` raises the window count to exercise the capacity/cascade path
+    // and to measure the timing the product spec budgets for.
+    let args: Vec<String> = std::env::args().collect();
+    let windows = args
+        .iter()
+        .position(|a| a == "--stress")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|n| n.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_WINDOWS);
+    let stress = windows > DEFAULT_WINDOWS;
 
     let displays = WinPlatform::new()
         .topology()
@@ -61,7 +72,7 @@ fn main() {
         target.work_area.top
     );
 
-    let mut host = Host::spawn(WINDOWS, source).expect("spawn host windows");
+    let mut host = Host::spawn(windows, source).expect("spawn host windows");
 
     let journal_dir = std::env::temp_dir().join(format!("conflux-e2e-{}", std::process::id()));
     let config = EngineConfig {
@@ -72,15 +83,28 @@ fn main() {
     let mut engine = Engine::new(WinPlatform::new(), config);
 
     let before = host.rects(&engine);
-    assert_eq!(before.len(), WINDOWS, "host windows must be enumerable");
+    assert_eq!(before.len(), windows, "host windows must be enumerable");
     println!("\ncaptured {} windows", before.len());
     for (id, rect) in &before {
         println!("  {:x} {:?}", id.native_id, rect);
     }
 
+    let enumerate_started = std::time::Instant::now();
+    let _ = engine.backend().enumerate().expect("enumerate");
+    let enumerate_ms = enumerate_started.elapsed().as_millis();
+
+    let preview_started = std::time::Instant::now();
+    let _ = engine.preview(&target.key).expect("preview");
+    let preview_ms = preview_started.elapsed().as_millis();
+
+    let started = std::time::Instant::now();
     let report = engine
         .migrate(&target.key)
         .expect("migration must not fail outright");
+    let migrate_ms = started.elapsed().as_millis();
+    println!(
+        "\ntiming: enumerate {enumerate_ms} ms, preview {preview_ms} ms, migrate {migrate_ms} ms ({windows} host windows)"
+    );
     // The engine moves every eligible window on the desktop, not only the ones
     // this harness created. That is correct product behaviour, but it means the
     // assertions below must be scoped to the host's own handles.
@@ -94,9 +118,19 @@ fn main() {
         .keys()
         .filter(|id| report.applied.iter().any(|a| a == *id))
         .count();
+    // Above the target display's capacity the planner deliberately leaves the
+    // overflow in place rather than producing unusable slivers, so at 100
+    // windows on 1920x1032 only the placed ones can be asserted. The invariant
+    // that still holds for every window: it did not end up invisible.
+    let placed = windows - report.unplaced.len();
     assert_eq!(
-        moved_ours, WINDOWS,
-        "every host window must be in the applied set"
+        moved_ours, placed,
+        "every *placed* host window must be in the applied set ({} of {windows} placed)",
+        placed
+    );
+    println!(
+        "placed {placed} of {windows} host windows; {} left in place by capacity",
+        report.unplaced.len()
     );
 
     // Only the host's own windows matter; other applications on the desktop are
@@ -104,11 +138,19 @@ fn main() {
     let after_migrate = host.rects(&engine);
     let mut failures = Vec::new();
 
+    // Windows the planner left in place (capacity overflow) were never claimed
+    // to be reachable on the target; only the placed ones are asserted.
+    let unplaced: std::collections::HashSet<u64> =
+        report.unplaced.iter().map(|id| id.native_id).collect();
+
     for (id, original) in &before {
         let Some(now) = after_migrate.get(id) else {
             failures.push(format!("{:x}: disappeared during migration", id.native_id));
             continue;
         };
+        if unplaced.contains(&id.native_id) {
+            continue;
+        }
         if !now.reachable_in(&target.work_area, 64, 32) {
             failures.push(format!(
                 "{:x}: not reachable on target work area, sits at {now:?}",
@@ -126,7 +168,10 @@ fn main() {
     );
     println!("migration PASS: every window is inside the target work area");
 
+    let restore_started = std::time::Instant::now();
     let restore = engine.restore().expect("restore must not fail outright");
+    let restore_ms = restore_started.elapsed().as_millis();
+    println!("restore wall time: {restore_ms} ms");
     // Other applications on this desktop are also part of the migration, and
     // some of them refuse to be moved. That is reported honestly rather than
     // hidden, so the assertion must be scoped to the windows this harness owns;
@@ -223,7 +268,16 @@ fn main() {
     host.stop();
     std::fs::remove_dir_all(&journal_dir).ok();
 
-    println!("\nE2E PASS ({WINDOWS} windows, real desktop)");
+    if stress {
+        // The spec budgets p95 < 300 ms for the first submission pass and <= 1 s
+        // for visible stability at 100 windows. This harness measures one run,
+        // not a p95, so it reports rather than asserts; a gross regression still
+        // shows up as an obviously wrong number.
+        println!("\nstress: {windows} windows, migration {migrate_ms} ms, restore {restore_ms} ms");
+        println!("note: single run, not a p95; use repeated runs for a distribution");
+    }
+
+    println!("\nE2E PASS ({windows} windows, real desktop)");
 }
 
 trait MigrationCounts {

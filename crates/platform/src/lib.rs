@@ -89,6 +89,20 @@ pub trait WindowBackend {
     /// callers must `read_back` to confirm.
     fn apply(&self, id: &WindowId, plan: &WindowPlan) -> Result<()>;
 
+    /// Submit without waiting for the target application to process the request.
+    ///
+    /// Cross-process window moves are synchronous by default: `SetWindowPos` on
+    /// another process's window blocks until that process pumps its message
+    /// queue. Doing that for every window serialises a migration behind the
+    /// slowest application on the desktop. Callers that batch submissions use
+    /// this and then read back once the batch has been submitted.
+    ///
+    /// The default is the synchronous call, so a backend that cannot do better
+    /// stays correct.
+    fn apply_async(&self, id: &WindowId, plan: &WindowPlan) -> Result<()> {
+        self.apply(id, plan)
+    }
+
     fn read_back(&self, id: &WindowId) -> Result<ObservedWindow>;
 
     /// Restore a previously captured native placement blob.

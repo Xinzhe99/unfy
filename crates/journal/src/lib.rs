@@ -104,6 +104,8 @@ pub struct Journal {
     /// Byte offset just past the last complete record. Recovery uses this to
     /// know whether a later append would overwrite a torn tail.
     end: u64,
+    /// Whether appended bytes still need a `sync_all` before they are trusted.
+    dirty: bool,
 }
 
 /// What recovery found on disk.
@@ -185,7 +187,7 @@ impl Journal {
             std::fs::create_dir_all(parent)?;
         }
 
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
@@ -198,6 +200,7 @@ impl Journal {
             file: file.try_clone()?,
             transaction,
             end: 0,
+            dirty: false,
         };
         journal.append(&Record::Begin {
             schema_version: SCHEMA_VERSION,
@@ -205,8 +208,7 @@ impl Journal {
             display_summary: display_summary.to_string(),
             created_unix_ms: now_unix_ms(),
         })?;
-        file.flush()?;
-        journal.file.sync_all()?;
+        journal.durable()?;
         Ok(journal)
     }
 
@@ -250,19 +252,36 @@ impl Journal {
             file,
             transaction,
             end: offset as u64,
+            dirty: false,
         })
     }
 
-    /// Append and flush a single record. Returns only after the bytes are on
-    /// disk, because callers use this as the "it is now safe to move windows"
-    /// barrier.
+    /// Append one record to the file without forcing it to disk.
+    ///
+    /// Callers must follow with [`Journal::durable`] before acting on the record.
+    /// Batching the fsync is what keeps a hundred-window gather inside its
+    /// latency budget: a per-record `sync_all` costs milliseconds on a real disk,
+    /// and the invariant only requires that *no window moves before its preimage
+    /// is on disk*, not that every record is synced individually.
     fn append(&mut self, record: &Record) -> Result<()> {
         let bytes = record.encode()?;
         self.file.seek(SeekFrom::Start(self.end))?;
         self.file.write_all(&bytes)?;
+        self.end += bytes.len() as u64;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Force everything appended so far to disk.
+    ///
+    /// This is the barrier the engine waits on before touching windows.
+    pub fn durable(&mut self) -> Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
         self.file.flush()?;
         self.file.sync_all()?;
-        self.end += bytes.len() as u64;
+        self.dirty = false;
         Ok(())
     }
 
@@ -306,6 +325,7 @@ impl Journal {
             transaction: self.transaction,
             closed_unix_ms: now_unix_ms(),
         })?;
+        self.durable()?;
         Ok(())
     }
 
@@ -315,6 +335,7 @@ impl Journal {
             transaction: self.transaction,
             closed_unix_ms: now_unix_ms(),
         })?;
+        self.durable()?;
         drop(self.file);
         std::fs::remove_file(&self.path)?;
         Ok(())
