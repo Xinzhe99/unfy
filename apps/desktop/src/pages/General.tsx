@@ -28,6 +28,7 @@ export function GeneralPage({
   onSave,
   onCheckUpdate,
   onReset,
+  onShowGuide,
 }: {
   settings: SettingsDto | null;
   hotkeys: HotkeyStatusDto | null;
@@ -38,6 +39,8 @@ export function GeneralPage({
   onCheckUpdate: () => void;
   /** Restore shipped defaults, keeping the target display. */
   onReset: () => void;
+  /** Walk through the first-run guide again. */
+  onShowGuide: () => void;
 }) {
   // The reset row is the one destructive action in the app; arming it is local
   // state so a stray click cannot wipe a configuration built over weeks.
@@ -409,6 +412,17 @@ export function GeneralPage({
             >{t("恢复默认设置")}</Button>
           )}
         </div>
+      </Card>
+
+      <Card title={t("帮助")}>
+        <SettingRow
+          label={t("重新显示引导")}
+          hint={t("五步走一遍：这个工具做什么、哪块屏是远端能看到的那块、以及如何随时纠正")}
+        >
+          <Button size="sm" onClick={onShowGuide} disabled={busy}>
+            {t("重新显示")}
+          </Button>
+        </SettingRow>
       </Card>
 
       <Card title={t("隐私")}>

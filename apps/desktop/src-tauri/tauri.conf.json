@@ -48,7 +48,11 @@
     },
     "macOS": {
       "minimumSystemVersion": "13.0"
-    }
+    },
+    "publisher": "Conflux",
+    "category": "Utility",
+    "shortDescription": "Keep remote-session windows on the display the client can see",
+    "longDescription": "Conflux notices when a remote client is connected to this machine, gathers the windows from your other displays onto the one the client can see, and puts them back when the session ends."
   },
   "plugins": {
     "updater": {

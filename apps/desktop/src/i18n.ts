@@ -486,6 +486,11 @@ const EN: Record<string, string> = {
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
   "用户": "User",
+  "帮助": "Help",
+  "重新显示引导": "Show the guide again",
+  "重新显示": "Show again",
+  "五步走一遍：这个工具做什么、哪块屏是远端能看到的那块、以及如何随时纠正":
+    "Walks through five steps: what this tool does, which screen the remote client sees, and how to correct it",
   "设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。":
     "Settings saved, but a gather is still running; the new layout applies from the next gather.",
   "已关闭自动整理，但恢复没有完成：{error}。可以在概览页重试。":

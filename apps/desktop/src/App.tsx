@@ -919,6 +919,21 @@ export default function App() {
                 updateStatus={updateStatus}
                 busy={busy}
                 onSave={(patch) => void saveSettings(patch)}
+                onShowGuide={() =>
+                  void run(
+                    async () => {
+                      // Only the guide's own flags: a user re-reading the guide must
+                      // not lose their target display or detection settings.
+                      const next = await api.saveSettings({
+                        onboarding_done: false,
+                        onboarding_step: 0,
+                      });
+                      setSettings(next);
+                      return next;
+                    },
+                    () => null,
+                  )
+                }
                 onReset={() =>
                   void run(
                     async () => {
