@@ -1,65 +1,107 @@
 @import "tailwindcss";
 
-@theme {
-  --color-surface: oklch(0.99 0 0);
-  --color-surface-2: oklch(0.965 0.002 250);
-  --color-border: oklch(0.9 0.004 250);
-  --color-fg: oklch(0.2 0.005 250);
-  --color-muted: oklch(0.52 0.008 250);
-  --color-accent: oklch(0.55 0.16 258);
-  --color-accent-soft: oklch(0.95 0.03 258);
-  --color-success: oklch(0.58 0.13 150);
-  --color-warning: oklch(0.68 0.14 75);
-  --color-danger: oklch(0.56 0.19 25);
-}
-
 /*
- * Dark palette. Applied two ways:
+ * Design tokens.
  *
- *  * `.theme-dark` — the user explicitly chose dark in settings;
- *  * `@media (prefers-color-scheme: dark)` with `.theme-system` — follow the OS.
- *
- * Both are expressed as the same custom properties so no component needs to
- * know which one is active.
+ * Every colour the UI uses comes from here, in both palettes, so a component can
+ * never accidentally hardcode a value that breaks in dark mode. The scale is
+ * deliberately small: one accent, one neutral ramp, three semantic colours.
  */
 @theme {
-  --conflux-dark-surface: oklch(0.17 0.006 250);
-  --conflux-dark-surface-2: oklch(0.22 0.008 250);
-  --conflux-dark-border: oklch(0.3 0.008 250);
-  --conflux-dark-fg: oklch(0.94 0.003 250);
-  --conflux-dark-muted: oklch(0.66 0.008 250);
-  --conflux-dark-accent: oklch(0.7 0.14 258);
-  --conflux-dark-accent-soft: oklch(0.3 0.04 258);
-  --conflux-dark-success: oklch(0.7 0.13 150);
-  --conflux-dark-warning: oklch(0.78 0.13 75);
-  --conflux-dark-danger: oklch(0.68 0.18 25);
+  --color-surface: oklch(0.985 0.001 250);
+  --color-surface-2: oklch(0.958 0.002 250);
+  --color-surface-3: oklch(0.925 0.003 250);
+  --color-border: oklch(0.895 0.004 250);
+  --color-border-strong: oklch(0.82 0.006 250);
+  --color-fg: oklch(0.21 0.006 250);
+  --color-fg-soft: oklch(0.38 0.007 250);
+  --color-muted: oklch(0.54 0.008 250);
+  --color-accent: oklch(0.55 0.17 262);
+  --color-accent-hover: oklch(0.5 0.18 262);
+  --color-accent-soft: oklch(0.95 0.035 262);
+  --color-accent-fg: oklch(0.99 0 0);
+  --color-success: oklch(0.55 0.14 152);
+  --color-success-soft: oklch(0.95 0.04 152);
+  --color-warning: oklch(0.62 0.15 72);
+  --color-warning-soft: oklch(0.96 0.05 72);
+  --color-danger: oklch(0.55 0.2 25);
+  --color-danger-soft: oklch(0.96 0.035 25);
+
+  --radius-card: 14px;
+  --radius-control: 9px;
+
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.04), 0 4px 16px oklch(0 0 0 / 0.04);
+  --shadow-pop: 0 8px 32px oklch(0 0 0 / 0.14);
+}
+
+@theme {
+  --conflux-dark-surface: oklch(0.185 0.007 255);
+  --conflux-dark-surface-2: oklch(0.225 0.009 255);
+  --conflux-dark-surface-3: oklch(0.265 0.011 255);
+  --conflux-dark-border: oklch(0.315 0.012 255);
+  --conflux-dark-border-strong: oklch(0.4 0.014 255);
+  --conflux-dark-fg: oklch(0.945 0.004 255);
+  --conflux-dark-fg-soft: oklch(0.82 0.006 255);
+  --conflux-dark-muted: oklch(0.655 0.01 255);
+  --conflux-dark-accent: oklch(0.72 0.15 262);
+  --conflux-dark-accent-hover: oklch(0.78 0.15 262);
+  --conflux-dark-accent-soft: oklch(0.3 0.055 262);
+  --conflux-dark-accent-fg: oklch(0.17 0.01 262);
+  --conflux-dark-success: oklch(0.74 0.14 152);
+  --conflux-dark-success-soft: oklch(0.28 0.05 152);
+  --conflux-dark-warning: oklch(0.8 0.14 72);
+  --conflux-dark-warning-soft: oklch(0.3 0.05 72);
+  --conflux-dark-danger: oklch(0.7 0.18 25);
+  --conflux-dark-danger-soft: oklch(0.3 0.06 25);
 }
 
 :root.theme-dark {
+  color-scheme: dark;
   --color-surface: var(--conflux-dark-surface);
   --color-surface-2: var(--conflux-dark-surface-2);
+  --color-surface-3: var(--conflux-dark-surface-3);
   --color-border: var(--conflux-dark-border);
+  --color-border-strong: var(--conflux-dark-border-strong);
   --color-fg: var(--conflux-dark-fg);
+  --color-fg-soft: var(--conflux-dark-fg-soft);
   --color-muted: var(--conflux-dark-muted);
   --color-accent: var(--conflux-dark-accent);
+  --color-accent-hover: var(--conflux-dark-accent-hover);
   --color-accent-soft: var(--conflux-dark-accent-soft);
+  --color-accent-fg: var(--conflux-dark-accent-fg);
   --color-success: var(--conflux-dark-success);
+  --color-success-soft: var(--conflux-dark-success-soft);
   --color-warning: var(--conflux-dark-warning);
+  --color-warning-soft: var(--conflux-dark-warning-soft);
   --color-danger: var(--conflux-dark-danger);
+  --color-danger-soft: var(--conflux-dark-danger-soft);
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.3), 0 4px 16px oklch(0 0 0 / 0.25);
+  --shadow-pop: 0 8px 32px oklch(0 0 0 / 0.5);
 }
 
 @media (prefers-color-scheme: dark) {
   :root.theme-system {
+    color-scheme: dark;
     --color-surface: var(--conflux-dark-surface);
     --color-surface-2: var(--conflux-dark-surface-2);
+    --color-surface-3: var(--conflux-dark-surface-3);
     --color-border: var(--conflux-dark-border);
+    --color-border-strong: var(--conflux-dark-border-strong);
     --color-fg: var(--conflux-dark-fg);
+    --color-fg-soft: var(--conflux-dark-fg-soft);
     --color-muted: var(--conflux-dark-muted);
     --color-accent: var(--conflux-dark-accent);
+    --color-accent-hover: var(--conflux-dark-accent-hover);
     --color-accent-soft: var(--conflux-dark-accent-soft);
+    --color-accent-fg: var(--conflux-dark-accent-fg);
     --color-success: var(--conflux-dark-success);
+    --color-success-soft: var(--conflux-dark-success-soft);
     --color-warning: var(--conflux-dark-warning);
+    --color-warning-soft: var(--conflux-dark-warning-soft);
     --color-danger: var(--conflux-dark-danger);
+    --color-danger-soft: var(--conflux-dark-danger-soft);
+    --shadow-card: 0 1px 2px oklch(0 0 0 / 0.3), 0 4px 16px oklch(0 0 0 / 0.25);
+    --shadow-pop: 0 8px 32px oklch(0 0 0 / 0.5);
   }
 }
 
@@ -67,18 +109,14 @@
   color-scheme: light;
 }
 
-:root.theme-dark {
-  color-scheme: dark;
-}
-
 :root {
-  color-scheme: light dark;
   font-family:
-    "Inter", -apple-system, "Segoe UI Variable", "Segoe UI", "PingFang SC",
+    "Inter", -apple-system, "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
     "Microsoft YaHei UI", system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
 }
 
 html,
@@ -86,19 +124,59 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 body {
   background: var(--color-surface);
   color: var(--color-fg);
+  font-size: 14px;
+  line-height: 1.5;
 }
 
-/* Keyboard focus must always be visible; the app is fully operable without a
-   mouse, which is the only way the hotkey-first workflow is usable. */
+/* Keyboard focus must always be visible: the hotkey-first workflow means a
+   keyboard-only user has to be able to reach everything. */
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Motion is a hint, never a requirement. */
+@keyframes conflux-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-in {
+  animation: conflux-fade-in 180ms ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -25,6 +25,8 @@ pub struct AppState {
     pub engine: Arc<std::sync::Mutex<Engine<platform::Backend>>>,
     pub settings: Arc<std::sync::Mutex<Settings>>,
     pub settings_path: std::path::PathBuf,
+    /// Which global shortcuts actually registered, and why any failed.
+    pub hotkey_status: Arc<std::sync::Mutex<commands::HotkeyStatusDto>>,
 }
 
 impl Default for AppState {
@@ -37,7 +39,16 @@ impl AppState {
     pub fn new() -> Self {
         let settings_path = Settings::default_path();
         let settings = Settings::load(&settings_path).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "settings unreadable, starting from defaults");
+            // Do not silently overwrite the user's file: it may be recoverable
+            // by hand, and the next save would destroy the evidence. Keep a copy
+            // next to it and start from defaults.
+            tracing::error!(error = %e, "settings unreadable; preserving a copy");
+            let backup = settings_path.with_extension("json.invalid");
+            if let Err(copy_err) = std::fs::copy(&settings_path, &backup) {
+                tracing::warn!(error = %copy_err, "could not preserve the unreadable file");
+            } else {
+                tracing::info!(path = %backup.display(), "unreadable settings preserved");
+            }
             Settings::default()
         });
 
@@ -49,10 +60,18 @@ impl AppState {
                 ..Default::default()
             },
             journal_dir: conflux_settings::config_dir().join("journal"),
+            restore_delay_secs: settings.restore_delay_secs,
             ..Default::default()
         };
 
         let mut engine = Engine::new(platform::make(), config.clone());
+        // A persisted pause must survive a restart: the user paused because they
+        // did not want automation acting, and a restart is not consent.
+        if settings.paused {
+            if let Err(e) = engine.pause() {
+                tracing::warn!(error = %e, "could not restore paused state");
+            }
+        }
         // Take over any transaction a previous run left behind, before the UI
         // can offer a restore that would otherwise have nothing to restore.
         match engine.recover_latest(&config.journal_dir) {
@@ -67,6 +86,9 @@ impl AppState {
             engine: Arc::new(std::sync::Mutex::new(engine)),
             settings: Arc::new(std::sync::Mutex::new(settings)),
             settings_path,
+            hotkey_status: Arc::new(std::sync::Mutex::new(
+                commands::HotkeyStatusDto::default(),
+            )),
         }
     }
 }
@@ -122,11 +144,14 @@ pub fn run() {
             commands::open_permission_settings,
             commands::update_status,
             commands::check_update,
+            commands::set_paused,
+            commands::hotkey_status,
+            commands::identify_displays,
             commands::live_transaction,
         ])
         .setup(|app| {
             tray::install(app.handle())?;
-            session::install(app.handle())?;
+            session::install(app.handle());
 
             // A manual launch opens the window; an autostart launch stays in the
             // tray. Users who double-click the app expect to see something.

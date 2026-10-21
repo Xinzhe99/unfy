@@ -26,8 +26,9 @@
 | 100 窗口性能 | 迁移 181–200 ms、恢复 94–125 ms（目标 300 ms / 1 s） |
 | 用户改动保护 | 远程期间用户拖动的窗口，恢复时保留新位置 |
 | 全局热键 | `Ctrl+Alt+G` 移动 3 个窗口；`Ctrl+Alt+Shift+G` 让 11/11 个窗口精确回到原位 |
+| 识别屏幕编号 | 每块屏显示大号数字 4 秒后自动消失（双屏实测） |
 
-测试总数 **82**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
+测试总数 **87**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
 
 完整记录（含未验证项与复现命令）见 [docs/verification.md](docs/verification.md)。
 
@@ -71,6 +72,16 @@ cd apps/desktop && npm run tauri build
 ```
 
 需要 Rust stable + MSVC 工具链、Node 22+。Tauri 首次打包会从 GitHub 下载 NSIS/WiX；无法直连时用 `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR` 指向镜像。
+
+## 界面
+
+三个页面，都是围绕"当前能做什么"组织，而不是围绕功能清单：
+
+- **概览**：当前状态 → 一个主操作（整理 / 恢复）→ 上次结果 → 工具（救援、识别编号、诊断）。
+- **显示器与布局**：按真实相对位置画出显示器，点选目标；布局方式与间距。
+- **通用**：自启、快捷键录制、主题、恢复延迟、更新与隐私。
+
+托盘菜单随状态变化：未整理时只能"整理"，已整理时"恢复"才可用，并多出"暂停自动整理"。
 
 ## 明确不做
 

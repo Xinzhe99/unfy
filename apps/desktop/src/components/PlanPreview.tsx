@@ -1,100 +1,129 @@
-import type { PreviewDto } from "../api";
+import type { PreviewDto, RectDto } from "../api";
 import { skipLabel } from "../api";
 
 /**
  * Plan preview.
  *
- * Draws every planned rectangle inside a proportional work-area canvas. This is
- * the user's only chance to see what will happen before windows move, so the
- * canvas must reflect the real coordinates rather than an idealised grid.
+ * Draws the target work area and every planned rectangle inside it, at the real
+ * proportions. This is the only chance the user gets to see what will happen
+ * before windows move, so it must not idealise the layout: if the planner had to
+ * cascade because the screen is too small, the preview has to show overlapping
+ * rectangles rather than a tidy grid.
  */
 export function PlanPreview({ preview }: { preview: PreviewDto }) {
-  if (preview.placements.length === 0) {
+  const work = preview.target_work;
+  const placed = preview.placements.length;
+
+  if (placed === 0 && preview.skipped.length === 0) {
     return (
-      <p className="text-xs text-[var(--color-muted)]">
-        没有可整理的窗口。部分窗口可能已最小化、全屏或被排除。
+      <p className="rounded-[var(--radius-control)] border border-dashed border-[var(--color-border-strong)] px-4 py-6 text-center text-xs text-[var(--color-muted)]">
+        当前没有可整理的窗口。
       </p>
     );
   }
 
-  const bounds = preview.placements.reduce(
-    (acc, p) => ({
-      minX: Math.min(acc.minX, p.rect.left),
-      minY: Math.min(acc.minY, p.rect.top),
-      maxX: Math.max(acc.maxX, p.rect.left + p.rect.width),
-      maxY: Math.max(acc.maxY, p.rect.top + p.rect.height),
-    }),
-    {
-      minX: Number.POSITIVE_INFINITY,
-      minY: Number.POSITIVE_INFINITY,
-      maxX: Number.NEGATIVE_INFINITY,
-      maxY: Number.NEGATIVE_INFINITY,
-    },
-  );
-
-  const width = Math.max(bounds.maxX - bounds.minX, 1);
-  const height = Math.max(bounds.maxY - bounds.minY, 1);
-  const viewBox = `${bounds.minX} ${bounds.minY} ${width} ${height}`;
-
   return (
-    <div className="space-y-2">
-      <svg
-        viewBox={viewBox}
-        className="h-40 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]"
-        role="img"
-        aria-label={`布局预览，共 ${preview.placements.length} 个窗口`}
-        preserveAspectRatio="xMidYMid meet"
-      >
-        {preview.placements.map((placement, index) => (
-          <g key={placement.window_id}>
-            <rect
-              x={placement.rect.left}
-              y={placement.rect.top}
-              width={placement.rect.width}
-              height={placement.rect.height}
-              rx={Math.max(4, width * 0.006)}
-              fill="var(--color-accent)"
-              fillOpacity={0.12}
-              stroke="var(--color-accent)"
-              strokeWidth={Math.max(1, width * 0.002)}
-            />
-            <text
-              x={placement.rect.left + placement.rect.width / 2}
-              y={placement.rect.top + placement.rect.height / 2}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              fontSize={Math.max(8, width * 0.028)}
-              fill="var(--color-fg)"
-            >
-              {index + 1}
-            </text>
-          </g>
-        ))}
-      </svg>
-      {preview.cascaded ? (
-        <p className="text-xs text-[var(--color-warning)]">
-          目标屏空间不足，窗口将以叠放方式排布，标题栏保持可点击。
-        </p>
-      ) : null}
-      {preview.unplaced.length > 0 ? (
-        <p className="text-xs text-[var(--color-warning)]">
-          另有 {preview.unplaced.length} 个窗口无法排入，将保持原位。
-        </p>
-      ) : null}
-      {preview.skipped.length > 0 ? (
-        <details className="text-xs text-[var(--color-muted)]">
-          <summary className="cursor-pointer select-none">
-            已跳过 {preview.skipped.length} 个窗口
-          </summary>
-          <ul className="mt-1 space-y-0.5 pl-4">
-            {preview.skipped.map((skip) => (
-              <li key={skip.window_id}>
-                {skip.window_id} · {skipLabel(skip.reason)}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
+    <div className="space-y-3">
+      <div className="relative overflow-hidden rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)]">
+        <svg
+          viewBox={`${work.left} ${work.top} ${work.width} ${work.height}`}
+          className="block h-auto w-full"
+          style={{ aspectRatio: `${work.width} / ${work.height}` }}
+          role="img"
+          aria-label={`布局预览：${placed} 个窗口排入 ${work.width}×${work.height} 的区域`}
+          preserveAspectRatio="xMidYMid meet"
+        >
+          {/* Work-area boundary, so the user can see the margin is respected. */}
+          <rect
+            x={work.left}
+            y={work.top}
+            width={work.width}
+            height={work.height}
+            fill="none"
+            stroke="var(--color-border-strong)"
+            strokeWidth={Math.max(2, work.width * 0.002)}
+          />
+          {preview.placements.map((placement, index) => (
+            <g key={placement.window_id}>
+              <rect
+                x={placement.rect.left}
+                y={placement.rect.top}
+                width={placement.rect.width}
+                height={placement.rect.height}
+                rx={work.width * 0.004}
+                fill="var(--color-accent)"
+                fillOpacity={placement.clamped ? 0.06 : 0.12}
+                stroke="var(--color-accent)"
+                strokeOpacity={placement.clamped ? 0.5 : 1}
+                strokeWidth={Math.max(2, work.width * 0.0025)}
+                strokeDasharray={placement.clamped ? "8 6" : undefined}
+              />
+              <text
+                x={placement.rect.left + placement.rect.width / 2}
+                y={placement.rect.top + placement.rect.height / 2}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={Math.max(work.width * 0.03, 10)}
+                fill="var(--color-fg-soft)"
+                fontFamily="inherit"
+              >
+                {index + 1}
+              </text>
+            </g>
+          ))}
+        </svg>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--color-muted)]">
+        <span>
+          将移动 <strong className="font-medium text-[var(--color-fg)]">{placed}</strong> 个窗口
+        </span>
+        {preview.cascaded ? (
+          <span className="text-[var(--color-warning)]">
+            空间不足，窗口将叠放
+          </span>
+        ) : null}
+        {preview.unplaced.length > 0 ? (
+          <span className="text-[var(--color-warning)]">
+            {preview.unplaced.length} 个窗口放不下，保持原位
+          </span>
+        ) : null}
+      </div>
+
+      {preview.skipped.length > 0 ? <SkippedList skipped={preview.skipped} /> : null}
     </div>
   );
+}
+
+function SkippedList({ skipped }: { skipped: PreviewDto["skipped"] }) {
+  // Group by reason: "6 个窗口因最小化被跳过" is actionable, six separate rows
+  // of the same sentence is not.
+  const groups = new Map<string, number>();
+  for (const item of skipped) {
+    groups.set(item.reason, (groups.get(item.reason) ?? 0) + 1);
+  }
+  const entries = [...groups.entries()].sort((a, b) => b[1] - a[1]);
+
+  return (
+    <details className="group text-xs text-[var(--color-muted)]">
+      <summary className="cursor-pointer select-none list-none rounded-[var(--radius-control)] px-1 py-1 hover:text-[var(--color-fg)]">
+        <span className="inline-block transition-transform group-open:rotate-90">
+          ›
+        </span>{" "}
+        已跳过 {skipped.length} 个窗口
+      </summary>
+      <ul className="mt-1 space-y-0.5 pl-4">
+        {entries.map(([reason, count]) => (
+          <li key={reason}>
+            {skipLabel(reason)} · {count} 个
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/** Convert a rect to a CSS-friendly string; used by tests and future overlays. */
+export function rectLabel(rect: RectDto): string {
+  return `${rect.width}×${rect.height} @ ${rect.left},${rect.top}`;
 }

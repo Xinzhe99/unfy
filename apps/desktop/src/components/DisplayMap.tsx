@@ -1,12 +1,15 @@
 import type { DisplayDto, TargetDto } from "../api";
 
 /**
- * Visual display picker.
+ * Display picker.
  *
- * Each display is drawn to scale inside a shared bounding box so the spatial
- * arrangement matches what the user sees in the OS settings. Clicking selects a
- * target; the selected one is highlighted with a labelled border, never colour
- * alone.
+ * Draws the displays at their real relative positions and sizes, because the
+ * whole task is spatial: the user is looking at one physical screen and needs to
+ * pick the matching rectangle. A vertical list of resolutions does not answer
+ * "which one is the remote showing?"; a map that matches the OS arrangement does.
+ *
+ * Displays with no usable identity are marked, since choosing one means restore
+ * can only fall back to a visible area rather than the exact original screen.
  */
 export function DisplayMap({
   displays,
@@ -25,20 +28,31 @@ export function DisplayMap({
     );
   }
 
-  const maxWidth = Math.max(...displays.map((d) => d.width), 1);
-  const totalHeight = displays.reduce((sum, d) => sum + d.height, 0);
-  const canvasWidth = 320;
-  const scale = canvasWidth / maxWidth;
+  // Normalise into a 0-based box so negative coordinates (a display to the left
+  // of the primary) still render in the right relative position.
+  const minX = Math.min(...displays.map((d) => d.origin_x));
+  const minY = Math.min(...displays.map((d) => d.origin_y));
+  const maxX = Math.max(...displays.map((d) => d.origin_x + d.width));
+  const maxY = Math.max(...displays.map((d) => d.origin_y + d.height));
+  const spanX = Math.max(maxX - minX, 1);
+  const spanY = Math.max(maxY - minY, 1);
+
+  const canvasW = 420;
+  const canvasH = 190;
+  const scale = Math.min(canvasW / spanX, canvasH / spanY);
 
   return (
-    <div className="flex flex-wrap items-start gap-3">
-      {displays.map((display) => {
+    <div
+      className="relative mx-auto"
+      style={{ width: spanX * scale, height: spanY * scale }}
+    >
+      {displays.map((display, index) => {
         const selected = target?.native_id === display.native_id;
-        const width = Math.max(64, Math.round(display.width * scale));
-        const height = Math.max(
-          40,
-          Math.round((display.height / Math.max(totalHeight, 1)) * 160),
-        );
+        const left = (display.origin_x - minX) * scale;
+        const top = (display.origin_y - minY) * scale;
+        const width = display.width * scale;
+        const height = display.height * scale;
+
         return (
           <button
             key={display.native_id}
@@ -46,31 +60,37 @@ export function DisplayMap({
             onClick={() => onSelect(display.native_id)}
             disabled={disabled}
             aria-pressed={selected}
-            className={`group relative flex flex-col items-center justify-center rounded-lg border-2 transition-colors disabled:cursor-not-allowed ${
+            aria-label={`显示器 ${index + 1}${display.primary ? "（主显示器）" : ""}，${display.width}×${display.height}`}
+            title={`${display.label} · ${display.width}×${display.height} · ${Math.round(display.scale * 100)}%`}
+            className={`absolute flex flex-col items-center justify-center gap-0.5 rounded-md border-2 transition-all disabled:cursor-not-allowed ${
               selected
                 ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)]"
-                : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]/50"
+                : "border-[var(--color-border-strong)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]/60"
             }`}
-            style={{ width, height }}
-            title={`${display.label} · ${display.width}×${display.height}`}
+            style={{ left, top, width, height }}
           >
-            <span className="text-xs font-medium">{display.label}</span>
-            <span className="text-[10px] text-[var(--color-muted)]">
-              {display.width}×{display.height} · {Math.round(display.scale * 100)}%
+            <span
+              className={`text-lg font-semibold leading-none ${selected ? "text-[var(--color-accent)]" : "text-[var(--color-fg-soft)]"}`}
+            >
+              {index + 1}
+            </span>
+            <span className="text-[10px] leading-tight text-[var(--color-muted)]">
+              {display.width}×{display.height}
             </span>
             {display.primary ? (
-              <span className="mt-0.5 text-[10px] text-[var(--color-muted)]">
-                主显示器
-              </span>
-            ) : null}
-            {selected ? (
-              <span className="absolute -top-2 left-2 rounded-full bg-[var(--color-accent)] px-1.5 py-0.5 text-[10px] font-medium text-white">
-                目标
+              <span className="text-[10px] leading-tight text-[var(--color-muted)]">
+                主屏
               </span>
             ) : null}
             {!display.restorable ? (
-              <span className="absolute -bottom-2 right-2 rounded-full bg-[var(--color-warning)] px-1.5 py-0.5 text-[10px] font-medium text-white">
-                身份弱
+              <span
+                aria-label="身份较弱"
+                className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--color-warning)]"
+              />
+            ) : null}
+            {selected ? (
+              <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-[var(--color-accent)] px-1.5 py-px text-[10px] font-medium text-[var(--color-accent-fg)]">
+                目标
               </span>
             ) : null}
           </button>

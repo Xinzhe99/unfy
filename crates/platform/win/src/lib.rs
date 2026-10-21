@@ -13,6 +13,7 @@
 
 mod displays;
 mod dpi;
+mod labels;
 mod windows_impl;
 
 pub use displays::{display_at, WinDisplays};
@@ -97,4 +98,13 @@ impl WindowBackend for WinPlatform {
     ) -> conflux_platform::Result<()> {
         self.windows.restore_native(id, placement)
     }
+}
+
+/// Show a large numbered badge on each display for `seconds`.
+///
+/// The badge is a borderless, click-through, topmost window per display. It is
+/// removed automatically, so it cannot be left behind even if the app crashes
+/// (the thread that owns it is detached and exits on its own timer).
+pub fn flash_display_labels(seconds: u64) -> bool {
+    crate::labels::flash(seconds)
 }

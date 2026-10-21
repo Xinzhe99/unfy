@@ -95,3 +95,21 @@ pub fn permission_name() -> &'static str {
         "窗口控制"
     }
 }
+
+/// Show a numbered badge on every display for a few seconds.
+///
+/// This answers the question the product cannot answer by inspection: which
+/// physical screen is the remote client actually showing? The user sees "2" in
+/// the remote window and picks display 2. Without it, "choose the target
+/// display" is a guess based on resolution labels the remote view does not show.
+pub fn flash_display_labels(seconds: u64) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        conflux_platform_win::flash_display_labels(seconds)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = seconds;
+        false
+    }
+}

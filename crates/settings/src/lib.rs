@@ -58,10 +58,24 @@ pub struct Settings {
     pub hotkey_restore: Option<String>,
     /// Seconds to wait after a restore request before acting. Zero restores
     /// immediately.
+    ///
+    /// This exists because a remote session often drops and reconnects within a
+    /// few seconds; restoring instantly would move every window back and then
+    /// move it out again. The engine reads it on each `restore()` call.
     pub restore_delay_secs: u32,
-    /// Keep the journal but skip automatic recovery on next launch. Set when the
-    /// user explicitly chooses "keep current layout" after a crash.
-    pub suppress_recovery: bool,
+    /// Stop acting on new requests while keeping the current layout.
+    ///
+    /// Distinct from "no transaction": paused means the windows are still
+    /// gathered and the journal is still open, so the user can resume or
+    /// restore. The tray shows this state.
+    pub paused: bool,
+    /// Timestamp (unix seconds) until which a dismissed recovery banner stays
+    /// dismissed.
+    ///
+    /// Storing a deadline instead of a permanent flag matters: a permanent flag
+    /// means the user dismisses one banner and never sees another crash warning
+    /// for the rest of the installation's life.
+    pub recovery_dismissed_until: u64,
     /// Check for updates automatically. Default on; security updates are never
     /// gated on this, only the *check* is.
     pub auto_update: bool,
@@ -122,7 +136,8 @@ impl Default for Settings {
             hotkey_gather: None,
             hotkey_restore: None,
             restore_delay_secs: 0,
-            suppress_recovery: false,
+            paused: false,
+            recovery_dismissed_until: 0,
             auto_update: true,
             telemetry: false,
         }
@@ -160,8 +175,13 @@ impl Settings {
             return Ok(Self::default());
         }
         let text = std::fs::read_to_string(path)?;
+        // Editors on Windows commonly write UTF-8 with a BOM (PowerShell's
+        // `Set-Content -Encoding UTF8` does it by default). `serde_json` rejects
+        // the BOM as "expected value at line 1 column 1", which used to make a
+        // hand-edited settings file look corrupt and silently reset everything.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let settings: Settings =
-            serde_json::from_str(&text).map_err(|e| SettingsError::Parse(e.to_string()))?;
+            serde_json::from_str(text).map_err(|e| SettingsError::Parse(e.to_string()))?;
         if settings.version > SETTINGS_VERSION {
             return Err(SettingsError::VersionTooNew {
                 found: settings.version,
@@ -328,7 +348,7 @@ mod tests {
             r#"{"version": 99, "target_display": null, "layout_mode": "grid",
                 "margin": 12, "gap": 8, "autostart": false, "theme": "system",
                 "hotkey_gather": null, "hotkey_restore": null,
-                "restore_delay_secs": 0, "suppress_recovery": false}"#,
+                "restore_delay_secs": 0}"#,
         )
         .unwrap();
         assert!(matches!(
@@ -345,7 +365,7 @@ mod tests {
             &path,
             r#"{"version": 1, "mystery": true, "layout_mode": "grid",
                 "margin": 12, "gap": 8, "autostart": false, "theme": "system",
-                "restore_delay_secs": 0, "suppress_recovery": false}"#,
+                "restore_delay_secs": 0}"#,
         )
         .unwrap();
         assert!(matches!(
@@ -470,5 +490,25 @@ mod lock_tests {
         );
         drop(outer);
         assert!(guard.try_lock().is_ok(), "guard must be released");
+    }
+}
+
+#[cfg(test)]
+mod bom_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn utf8_bom_is_tolerated() {
+        // Windows editors add a BOM; rejecting it made a valid file look corrupt.
+        let dir = std::env::temp_dir().join(format!("conflux-bom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path: PathBuf = dir.join("settings.json");
+
+        let body = r#"{"version":1,"margin":30,"layout_mode":"grid"}"#;
+        std::fs::write(&path, format!("\u{feff}{body}")).unwrap();
+
+        let loaded = Settings::load(&path).expect("BOM must not be fatal");
+        assert_eq!(loaded.margin, 30);
     }
 }

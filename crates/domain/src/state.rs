@@ -133,6 +133,8 @@ pub enum EngineError {
     /// otherwise the new preimages would record the positions this engine just
     /// produced as if they were the user's original layout.
     TransactionAlreadyOpen,
+    /// The user paused automation; the current layout is still in effect.
+    Paused,
 }
 
 impl std::fmt::Display for EngineError {
@@ -151,6 +153,7 @@ impl std::fmt::Display for EngineError {
                     "windows are still captured; restore before gathering again"
                 )
             }
+            EngineError::Paused => write!(f, "automation is paused"),
         }
     }
 }

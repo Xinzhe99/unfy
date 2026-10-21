@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 import type {
   MigrationDto,
   PreviewDto,
@@ -7,12 +5,20 @@ import type {
   SettingsDto,
   StatusDto,
 } from "../api";
+import { stateHints } from "../api";
 import { PlanPreview } from "../components/PlanPreview";
+import { Badge, Button, Card } from "../components/ui";
 
 /**
- * Overview page: the whole workflow in one screen — preview, gather, restore,
- * rescue. Everything here is reachable from the tray as well, so the page is a
- * convenience rather than a requirement.
+ * Overview: the whole workflow on one screen.
+ *
+ * Ordering is deliberate and follows what the user needs to know, not what the
+ * code happens to expose:
+ *
+ *  1. what state am I in, and what is the target;
+ *  2. the one action that matters right now (gather, or restore);
+ *  3. what will happen / what did happen;
+ *  4. secondary tools (rescue, identify, diagnostics).
  */
 export function OverviewPage({
   status,
@@ -24,7 +30,9 @@ export function OverviewPage({
   onPreview,
   onMigrate,
   onRestore,
+  onPause,
   onRescue,
+  onIdentify,
   onExport,
 }: {
   status: StatusDto | null;
@@ -36,142 +44,197 @@ export function OverviewPage({
   onPreview: () => void;
   onMigrate: () => void;
   onRestore: () => void;
+  onPause: (paused: boolean) => void;
   onRescue: () => void;
+  onIdentify: () => void;
   onExport: () => void;
 }) {
   const supported = status?.supported ?? false;
-  const [showSkipped, setShowSkipped] = useState(false);
+  const state = status?.state ?? "idle";
+  const active = state === "active";
+  const paused = status?.paused ?? false;
+  const captured = status?.captured_windows ?? 0;
   const target = status?.target;
 
   return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold">把窗口收拢到一块屏</h2>
-            <p className="mt-1 text-xs leading-relaxed text-[var(--color-muted)]">
-              {target
-                ? `目标：${target.label}${target.present ? "" : "（当前不可用，请重新选择）"}`
-                : "尚未选择目标显示器，将使用主显示器。"}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onPreview}
-              disabled={busy || !supported}
-              className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
-            >
-              预览
-            </button>
-            <button
-              type="button"
-              onClick={onMigrate}
-              disabled={busy || !supported}
-              className="rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-            >
-              整理到目标屏
-            </button>
-            <button
-              type="button"
-              onClick={onRestore}
-              disabled={busy}
-              className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
-            >
-              恢复本次布局
-            </button>
-          </div>
+    <div className="flex flex-col gap-4">
+      <Card
+        title="当前状态"
+        description={stateHints[state]}
+        aside={
+          paused ? <Badge tone="warning">已暂停</Badge> : null
+        }
+      >
+        <dl className="grid grid-cols-3 gap-3">
+          <Stat label="目标显示器" value={target?.label ?? "主显示器"} muted={!target} />
+          <Stat
+            label="已收拢窗口"
+            value={captured > 0 ? `${captured} 个` : "—"}
+            muted={captured === 0}
+          />
+          <Stat
+            label="布局"
+            value={layoutLabel(settings?.layout_mode)}
+          />
+        </dl>
+
+        {target && !target.present ? (
+          <p className="mt-3 rounded-[var(--radius-control)] border border-[var(--color-warning)]/35 bg-[var(--color-warning-soft)] px-3 py-2 text-xs text-[var(--color-warning)]">
+            已保存的目标显示器当前不可用，将回退到主显示器。请到「显示器与布局」重新选择。
+          </p>
+        ) : null}
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {active ? (
+            <>
+              <Button tone="accent" onClick={onRestore} disabled={busy}>
+                恢复本次布局
+              </Button>
+              <Button
+                onClick={() => onPause(!paused)}
+                disabled={busy}
+              >
+                {paused ? "取消暂停" : "暂停自动整理"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button tone="accent" onClick={onMigrate} disabled={busy || !supported}>
+                整理到目标屏
+              </Button>
+              <Button onClick={onPreview} disabled={busy || !supported}>
+                预览布局
+              </Button>
+            </>
+          )}
+          <Button tone="quiet" size="sm" onClick={onIdentify} disabled={busy}>
+            识别屏幕编号
+          </Button>
         </div>
 
-        {preview ? (
-          <div className="mt-4 space-y-2">
-            <PlanPreview preview={preview} />
-            <p className="text-xs text-[var(--color-muted)]">
-              将移动 {preview.placements.length} 个窗口。预览不会改变任何窗口。
-            </p>
-          </div>
-        ) : null}
-
-        {lastRestore ? (
-          <p className="mt-3 text-xs text-[var(--color-muted)]">
-            已恢复 {lastRestore.restored} 个窗口
-            {lastRestore.kept_user_change > 0
-              ? `，保留你的改动 ${lastRestore.kept_user_change} 个`
-              : ""}
-            {lastRestore.fallback_visible > 0
-              ? `，原屏不可用回退 ${lastRestore.fallback_visible} 个`
-              : ""}
-            {lastRestore.pending > 0
-              ? `，仍有 ${lastRestore.pending} 个待处理`
-              : ""}
-            。
-          </p>
-        ) : null}
-
-        {lastMigration && lastMigration.refused_pids.length > 0 ? (
-          <p className="mt-3 text-xs text-[var(--color-warning)]">
-            {lastMigration.refused_pids.length} 个应用没有接受位置调整，已停止重试：
-            进程 {lastMigration.refused_pids.join("、")}。这些窗口会保持原位，不影响其他窗口。
-          </p>
-        ) : null}
-
-        {lastMigration && lastMigration.skipped > 0 ? (
-          <button
-            type="button"
-            onClick={() => setShowSkipped((v) => !v)}
-            className="mt-3 text-xs text-[var(--color-muted)] underline-offset-2 hover:underline"
-          >
-            {showSkipped ? "隐藏" : "查看"}被跳过的 {lastMigration.skipped} 个窗口
-          </button>
-        ) : null}
-      </section>
-
-      <section className="grid grid-cols-3 gap-3">
-        <Stat label="检测到的显示器" value={String(status?.display_count ?? 0)} />
-        <Stat label="布局" value={layoutLabel(settings?.layout_mode)} />
-        <Stat
-          label="快捷键"
-          value={settings?.hotkey_gather ? settings.hotkey_gather : "未设置"}
-        />
-      </section>
-
-      <section className="rounded-xl border border-[var(--color-border)] p-5">
-        <h2 className="text-xs font-semibold">救援与诊断</h2>
-        <p className="mt-1 text-xs leading-relaxed text-[var(--color-muted)]">
-          如果窗口被留在了不存在的坐标上（例如拔掉显示器、或上次未正常退出），可以把它们移回可见区域。这个操作不需要恢复记录，也不会覆盖你的布局。
+        <p className="mt-2 text-[11px] text-[var(--color-muted)]">
+          识别编号会在每块屏幕上短暂显示数字，用于确认远程端正在看哪一块。
         </p>
-        <div className="mt-3 flex gap-2">
-          <button
-            type="button"
-            onClick={onRescue}
-            disabled={busy || !supported}
-            className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
-          >
+      </Card>
+
+      {preview ? (
+        <Card title="布局预览" description="预览不会移动任何窗口。">
+          <PlanPreview preview={preview} />
+        </Card>
+      ) : null}
+
+      {lastMigration ? (
+        <Card title="上次整理结果">
+          <ResultRow
+            items={[
+              { label: "已移动", value: lastMigration.applied, tone: "success" },
+              { label: "应用拒绝", value: lastMigration.rejected, tone: "warning" },
+              { label: "已关闭", value: lastMigration.gone, tone: "neutral" },
+              { label: "跳过", value: lastMigration.skipped, tone: "neutral" },
+              { label: "放不下", value: lastMigration.unplaced, tone: "warning" },
+            ]}
+          />
+          {lastMigration.refused_pids.length > 0 ? (
+            <p className="mt-3 text-xs leading-relaxed text-[var(--color-muted)]">
+              进程 {lastMigration.refused_pids.join("、")} 的窗口没有接受位置调整，已停止重试。
+              这些窗口保持原位，不影响其他窗口。
+            </p>
+          ) : null}
+        </Card>
+      ) : null}
+
+      {lastRestore ? (
+        <Card title="上次恢复结果">
+          <ResultRow
+            items={[
+              { label: "精确恢复", value: lastRestore.restored, tone: "success" },
+              {
+                label: "保留改动",
+                value: lastRestore.kept_user_change,
+                tone: "neutral",
+              },
+              {
+                label: "回退可见",
+                value: lastRestore.fallback_visible,
+                tone: "neutral",
+              },
+              { label: "仍待处理", value: lastRestore.pending, tone: "warning" },
+            ]}
+          />
+        </Card>
+      ) : null}
+
+      <Card
+        title="工具"
+        description="这些操作不需要恢复记录，也不会覆盖你的布局。"
+      >
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={onRescue} disabled={busy || !supported}>
             救援越界窗口
-          </button>
-          <button
-            type="button"
-            onClick={onExport}
-            className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-fg)]"
-          >
+          </Button>
+          <Button size="sm" onClick={onExport} disabled={busy}>
             导出诊断包
-          </button>
+          </Button>
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-muted)]">
-          诊断包包含版本、显示器数量与设置项名称，不包含窗口标题、屏幕画面或文件路径。
+          「救援」把停留在不存在坐标上的窗口移回可见区域。诊断包只含版本、显示器数量与设置项名称，不含窗口标题、屏幕画面或文件路径。
         </p>
-      </section>
+      </Card>
     </div>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  muted,
+}: {
+  label: string;
+  value: string;
+  muted?: boolean;
+}) {
   return (
-    <div className="rounded-xl border border-[var(--color-border)] p-4">
-      <p className="text-xs text-[var(--color-muted)]">{label}</p>
-      <p className="mt-1 truncate text-sm font-semibold" title={value}>
+    <div className="rounded-[var(--radius-control)] bg-[var(--color-surface)] px-3 py-2">
+      <dt className="text-[11px] text-[var(--color-muted)]">{label}</dt>
+      <dd
+        className={`mt-0.5 truncate text-[13px] font-medium ${muted ? "text-[var(--color-muted)]" : ""}`}
+        title={value}
+      >
         {value}
-      </p>
+      </dd>
+    </div>
+  );
+}
+
+function ResultRow({
+  items,
+}: {
+  items: {
+    label: string;
+    value: number;
+    tone: "success" | "warning" | "neutral";
+  }[];
+}) {
+  return (
+    <div className="flex flex-wrap gap-x-6 gap-y-2">
+      {items.map((item) => (
+        <div key={item.label} className="flex items-baseline gap-1.5">
+          <span
+            className={`text-lg font-semibold tabular-nums ${
+              item.value === 0
+                ? "text-[var(--color-muted)]"
+                : item.tone === "success"
+                  ? "text-[var(--color-success)]"
+                  : item.tone === "warning"
+                    ? "text-[var(--color-warning)]"
+                    : "text-[var(--color-fg)]"
+            }`}
+          >
+            {item.value}
+          </span>
+          <span className="text-xs text-[var(--color-muted)]">{item.label}</span>
+        </div>
+      ))}
     </div>
   );
 }

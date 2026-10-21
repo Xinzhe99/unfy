@@ -10,21 +10,35 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::AppState;
 
-/// Register the shortcuts from settings. Called from `setup` and again whenever
-/// settings change.
-pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+/// Register the shortcuts from settings.
+///
+/// Called at startup and again whenever settings change. Any previously
+/// registered shortcut is released first, otherwise changing a hotkey would
+/// leave the old combination still bound.
+///
+/// The outcome is stored in `AppState::hotkey_status`, not merely logged: the UI
+/// must be able to say "this combination is taken by another application"
+/// instead of showing a shortcut that never registered.
+pub fn install<R: Runtime>(app: &AppHandle<R>) {
     let (gather, restore) = {
         let state = app.state::<AppState>();
         let settings = match state.settings.lock() {
             Ok(s) => s.clone(),
-            Err(_) => return Ok(()),
+            Err(_) => return,
         };
         (settings.hotkey_gather, settings.hotkey_restore)
     };
 
     let plugin = app.global_shortcut();
+    // Re-registration must start from a clean slate.
+    if let Err(e) = plugin.unregister_all() {
+        tracing::warn!(error = %e, "could not clear previous shortcuts");
+    }
+
+    let mut status = crate::commands::HotkeyStatusDto::default();
 
     if let Some(accelerator) = gather {
+        status.gather = Some(accelerator.clone());
         match accelerator.parse::<tauri_plugin_global_shortcut::Shortcut>() {
             Ok(shortcut) => {
                 let registered = plugin.on_shortcut(shortcut, move |app, _shortcut, event| {
@@ -34,13 +48,18 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 });
                 if let Err(e) = registered {
                     tracing::warn!(%accelerator, error = %e, "gather hotkey unavailable");
+                    status.gather_error = Some(format!("{e}"));
                 }
             }
-            Err(e) => tracing::warn!(%accelerator, error = %e, "gather hotkey is invalid"),
+            Err(e) => {
+                tracing::warn!(%accelerator, error = %e, "gather hotkey is invalid");
+                status.gather_error = Some(format!("无效的组合键：{e}"));
+            }
         }
     }
 
     if let Some(accelerator) = restore {
+        status.restore = Some(accelerator.clone());
         match accelerator.parse::<tauri_plugin_global_shortcut::Shortcut>() {
             Ok(shortcut) => {
                 let registered = plugin.on_shortcut(shortcut, move |app, _shortcut, event| {
@@ -50,13 +69,19 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 });
                 if let Err(e) = registered {
                     tracing::warn!(%accelerator, error = %e, "restore hotkey unavailable");
+                    status.restore_error = Some(format!("{e}"));
                 }
             }
-            Err(e) => tracing::warn!(%accelerator, error = %e, "restore hotkey is invalid"),
+            Err(e) => {
+                tracing::warn!(%accelerator, error = %e, "restore hotkey is invalid");
+                status.restore_error = Some(format!("无效的组合键：{e}"));
+            }
         }
     }
 
-    Ok(())
+    if let Ok(mut slot) = app.state::<AppState>().hotkey_status.lock() {
+        *slot = status;
+    }
 }
 
 /// A tiny trait so the shortcut closures do not need to know about the tray.

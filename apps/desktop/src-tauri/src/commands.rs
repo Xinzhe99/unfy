@@ -27,6 +27,10 @@ pub struct StatusDto {
     pub target: Option<TargetDto>,
     pub pending_windows: usize,
     pub last_error: Option<String>,
+    /// Automation paused; the current layout is retained.
+    pub paused: bool,
+    /// How many windows the open transaction holds.
+    pub captured_windows: usize,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -35,6 +39,9 @@ pub struct DisplayDto {
     pub label: String,
     pub width: i32,
     pub height: i32,
+    /// Position in the virtual desktop, so the UI can draw the real arrangement.
+    pub origin_x: i32,
+    pub origin_y: i32,
     pub work_width: i32,
     pub work_height: i32,
     pub scale: f64,
@@ -76,6 +83,8 @@ pub struct PreviewDto {
     pub unplaced: Vec<String>,
     pub skipped: Vec<SkipDto>,
     pub cascaded: bool,
+    /// Work area of the target display, so the preview draws real proportions.
+    pub target_work: RectDto,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +132,12 @@ pub struct SaveSettingsRequest {
     pub telemetry: Option<bool>,
 }
 
+/// Refresh the tray after a state change so its labels, enabled set and tooltip
+/// never disagree with the engine.
+fn sync_tray(handle: &tauri::AppHandle) {
+    crate::tray::refresh(handle);
+}
+
 fn state_name(state: EngineState) -> &'static str {
     match state {
         EngineState::Idle => "idle",
@@ -141,6 +156,8 @@ fn display_dto(d: &DisplaySnapshot, target: Option<&TargetDisplay>) -> DisplayDt
         label: d.label.clone(),
         width: d.bounds.width(),
         height: d.bounds.height(),
+        origin_x: d.bounds.left,
+        origin_y: d.bounds.top,
         work_width: d.work_area.width(),
         work_height: d.work_area.height(),
         scale: d.scale.x,
@@ -186,6 +203,8 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
         target,
         pending_windows: 0,
         last_error: None,
+        paused: engine.is_paused(),
+        captured_windows: engine.captured_window_count(),
     })
 }
 
@@ -216,6 +235,19 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
 
     let preview: Preview = engine.preview(&target).map_err(|e| e.to_string())?;
 
+    let target_work = engine
+        .backend()
+        .topology()
+        .ok()
+        .and_then(|displays| displays.into_iter().find(|d| d.key == target))
+        .map(|d| rect_dto(d.work_area))
+        .unwrap_or(RectDto {
+            left: 0,
+            top: 0,
+            width: 1920,
+            height: 1080,
+        });
+
     Ok(PreviewDto {
         target_present: true,
         placements: preview
@@ -244,6 +276,7 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
             })
             .collect(),
         cascaded: preview.plan.cascaded,
+        target_work,
     })
 }
 
@@ -253,7 +286,10 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
 /// transient error: the caller must restore first, otherwise the new preimages
 /// would record the moved positions as the user's original layout.
 #[tauri::command]
-pub fn migrate(app: State<'_, AppState>) -> Result<MigrationDto, String> {
+pub fn migrate(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+) -> Result<MigrationDto, String> {
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
@@ -270,9 +306,10 @@ pub fn migrate(app: State<'_, AppState>) -> Result<MigrationDto, String> {
     // the user the action that actually helps instead of a raw error string.
     let report: MigrationReport = engine.migrate(&target).map_err(|e| match e {
         conflux_domain::EngineError::TransactionAlreadyOpen => "already_active".to_string(),
+        conflux_domain::EngineError::Paused => "paused".to_string(),
         other => other.to_string(),
     })?;
-    Ok(MigrationDto {
+    let dto = MigrationDto {
         transaction: report.transaction.to_string(),
         applied: report.applied_count(),
         rejected: report.failed_count(),
@@ -286,20 +323,41 @@ pub fn migrate(app: State<'_, AppState>) -> Result<MigrationDto, String> {
         cascaded: report.cascaded,
         state: state_name(engine.state()),
         refused_pids: report.refused.iter().map(|r| r.id.process_id).collect(),
-    })
+    };
+    drop(engine);
+    sync_tray(&handle);
+    Ok(dto)
 }
 
 #[tauri::command]
-pub fn restore(app: State<'_, AppState>) -> Result<RestoreDto, String> {
+pub fn restore(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+) -> Result<RestoreDto, String> {
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
     let report: RestoreReport = engine.restore().map_err(|e| e.to_string())?;
+    let state = state_name(engine.state());
+    let complete = report.is_complete();
+    drop(engine);
+
+    // A completed restore means there is nothing left to warn about, so an
+    // earlier dismissal is stale. Leaving it would suppress the next, unrelated
+    // crash banner.
+    if complete {
+        if let Ok(mut settings) = app.settings.lock() {
+            clear_recovery_dismissal(&mut settings);
+            let _ = settings.save(&app.settings_path);
+        }
+    }
+
+    sync_tray(&handle);
     Ok(RestoreDto {
         restored: report.count(conflux_domain::WindowOutcome::Restored),
         kept_user_change: report.count(conflux_domain::WindowOutcome::KeptUserChange),
         fallback_visible: report.count(conflux_domain::WindowOutcome::FallbackVisible),
         rejected: report.count(conflux_domain::WindowOutcome::Rejected),
         pending: report.pending.len(),
-        state: state_name(engine.state()),
+        state,
     })
 }
 
@@ -389,6 +447,7 @@ pub fn save_settings(
         settings.autostart = autostart;
     }
     let autostart_changed = request.autostart;
+    let hotkeys_changed = request.hotkey_gather.is_some() || request.hotkey_restore.is_some();
     if let Some(theme) = request.theme {
         settings.theme = match theme.as_str() {
             "system" => conflux_settings::ThemeName::System,
@@ -437,6 +496,29 @@ pub fn save_settings(
     if autostart_changed.is_some() {
         crate::session::set_autostart(&handle, dto.autostart);
     }
+    if hotkeys_changed {
+        // Re-register so the new combination takes effect immediately, and so a
+        // conflict is reported while the user is still looking at the field.
+        crate::session::install(&handle);
+    }
+
+    // Layout and timing settings live in the engine's config, which is otherwise
+    // only read at startup. Without this the next gather would keep using the
+    // old margin/gap/layout, and the settings UI would be lying.
+    if let Ok(mut engine) = app.engine.lock() {
+        let mut config = engine.config().clone();
+        config.layout.mode = match dto.layout_mode.as_str() {
+            "primary_side" => conflux_layout::LayoutMode::PrimarySide,
+            "preserve_order" => conflux_layout::LayoutMode::PreserveOrder,
+            _ => conflux_layout::LayoutMode::Grid,
+        };
+        config.layout.margin = dto.margin;
+        config.layout.gap = dto.gap;
+        config.restore_delay_secs = dto.restore_delay_secs;
+        if let Err(e) = engine.update_config(config) {
+            tracing::warn!(error = %e, "could not apply settings to the engine");
+        }
+    }
 
     Ok(dto)
 }
@@ -478,7 +560,9 @@ pub struct PendingWorkDto {
 #[tauri::command]
 pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> {
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
-    if settings.suppress_recovery {
+    // A dismissal expires. A permanent flag would mean the user dismisses one
+    // crash banner and never learns about a later, different crash.
+    if settings.recovery_dismissed_until > now_unix_secs() {
         return Ok(PendingWorkDto {
             present: false,
             windows: 0,
@@ -546,11 +630,28 @@ pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> 
     })
 }
 
+/// Hide the recovery banner for a while, without discarding the journal.
+///
+/// Dismissing is a UI preference, not a decision about the windows: the journal
+/// stays on disk and `restore` still works. It expires after a day so a later,
+/// unrelated crash is reported again.
 #[tauri::command]
 pub fn dismiss_pending_work(app: State<'_, AppState>) -> Result<(), String> {
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
-    settings.suppress_recovery = true;
+    settings.recovery_dismissed_until = now_unix_secs() + 24 * 60 * 60;
     settings.save(&app.settings_path).map_err(|e| e.to_string())
+}
+
+/// Clear the dismissal, for example after the user actually restores.
+fn clear_recovery_dismissal(settings: &mut conflux_settings::Settings) {
+    settings.recovery_dismissed_until = 0;
+}
+
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Serialize)]
@@ -679,4 +780,61 @@ pub fn update_status(
 pub async fn check_update(handle: tauri::AppHandle) -> Result<String, String> {
     let outcome = crate::update::check_and_install(handle, true).await;
     Ok(outcome.as_str().to_string())
+}
+
+#[derive(Debug, Serialize)]
+pub struct PauseDto {
+    pub paused: bool,
+    pub state: &'static str,
+}
+
+/// Pause or resume automation while keeping the current layout.
+///
+/// Pausing keeps the journal and the window positions; resuming does not move
+/// anything. Only "restore" puts windows back.
+#[tauri::command]
+pub fn set_paused(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+    paused: bool,
+) -> Result<PauseDto, String> {
+    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+    if paused {
+        engine.pause().map_err(|e| e.to_string())?;
+    } else {
+        engine.resume().map_err(|e| e.to_string())?;
+    }
+    let state = state_name(engine.state());
+    drop(engine);
+
+    let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
+    settings.paused = paused;
+    settings.save(&app.settings_path).map_err(|e| e.to_string())?;
+    drop(settings);
+
+    sync_tray(&handle);
+    Ok(PauseDto { paused, state })
+}
+
+/// Result of the last hotkey registration attempt, so the UI can tell the truth
+/// instead of showing a shortcut that never got registered.
+#[derive(Debug, Serialize, Default, Clone)]
+pub struct HotkeyStatusDto {
+    pub gather: Option<String>,
+    pub gather_error: Option<String>,
+    pub restore: Option<String>,
+    pub restore_error: Option<String>,
+}
+
+#[tauri::command]
+pub fn hotkey_status(app: State<'_, AppState>) -> Result<HotkeyStatusDto, String> {
+    let status = app.hotkey_status.lock().map_err(|e| e.to_string())?;
+    Ok(status.clone())
+}
+
+/// Flash a numbered badge on every display so the user can identify which screen
+/// the remote client is showing.
+#[tauri::command]
+pub fn identify_displays(seconds: Option<u64>) -> bool {
+    platform::flash_display_labels(seconds.unwrap_or(4))
 }

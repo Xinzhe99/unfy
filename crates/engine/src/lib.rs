@@ -146,6 +146,8 @@ pub struct EngineConfig {
     pub journal_dir: PathBuf,
     /// A window narrower than this is not considered "reachable".
     pub min_reachable: conflux_domain::Size,
+    /// Seconds to wait at the start of `restore()`.
+    pub restore_delay_secs: u32,
 }
 
 impl Default for EngineConfig {
@@ -157,6 +159,7 @@ impl Default for EngineConfig {
             retry_delay_ms: 60,
             journal_dir: std::env::temp_dir().join("conflux-journal"),
             min_reachable: conflux_domain::Size::new(64, 32),
+            restore_delay_secs: 0,
         }
     }
 }
@@ -172,6 +175,8 @@ pub struct Engine<B: Backend> {
     outcomes: HashMap<WindowId, WindowOutcome>,
     /// Preimages captured for the current transaction, keyed by window.
     preimages: HashMap<WindowId, Preimage>,
+    /// Set by `pause()`; blocks new gathers without discarding the layout.
+    paused: bool,
 }
 
 struct Transaction {
@@ -191,6 +196,7 @@ impl<B: Backend> Engine<B> {
             transaction: None,
             outcomes: HashMap::new(),
             preimages: HashMap::new(),
+            paused: false,
         }
     }
 
@@ -200,6 +206,20 @@ impl<B: Backend> Engine<B> {
 
     pub fn config(&self) -> &EngineConfig {
         &self.config
+    }
+
+    /// Apply changed layout or timing settings.
+    ///
+    /// Refused while a transaction is open: the plan for the current gather was
+    /// computed with the old settings, and swapping them mid-flight would make
+    /// the journal disagree with what the user saw in the preview. The caller
+    /// must either wait for the next gather or restore first.
+    pub fn update_config(&mut self, config: EngineConfig) -> Result<(), EngineError> {
+        if self.state.may_write() {
+            return Err(EngineError::InvalidTransition { from: self.state });
+        }
+        self.config = config;
+        Ok(())
     }
 
     pub fn backend(&self) -> &B {
@@ -237,6 +257,55 @@ impl<B: Backend> Engine<B> {
     /// from a previous run".
     pub fn current_transaction(&self) -> Option<uuid::Uuid> {
         self.transaction.as_ref().map(|t| t.id)
+    }
+
+    /// Stop acting on new gather requests while keeping captured windows.
+    ///
+    /// Pausing is not the same as restoring: the layout stays, the journal stays
+    /// open, and `resume()` puts the engine back to `Active` without touching a
+    /// window. This is what the user needs when they briefly work locally on the
+    /// host and do not want the next hotkey press to move anything.
+    pub fn pause(&mut self) -> Result<(), EngineError> {
+        if self.transaction.is_none() {
+            return Ok(());
+        }
+        if self.state == EngineState::Migrating || self.state == EngineState::Restoring {
+            return Err(EngineError::InvalidTransition { from: self.state });
+        }
+        self.paused = true;
+        tracing::info!("engine paused; layout and journal retained");
+        Ok(())
+    }
+
+    /// Resume acting on gather requests.
+    pub fn resume(&mut self) -> Result<(), EngineError> {
+        if !self.paused {
+            return Ok(());
+        }
+        self.paused = false;
+        if self.transaction.is_some() {
+            self.state = EngineState::Active;
+        }
+        tracing::info!("engine resumed");
+        Ok(())
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Apply the user's restore delay.
+    ///
+    /// Returns immediately when the delay is zero, which is the default. The wait
+    /// exists so a remote session that drops and reconnects within a few seconds
+    /// does not cause two full window migrations.
+    fn wait_restore_delay(&self) {
+        let delay = self.config.restore_delay_secs;
+        if delay == 0 {
+            return;
+        }
+        tracing::info!(delay, "waiting before restore");
+        std::thread::sleep(std::time::Duration::from_secs(u64::from(delay)));
     }
 
     /// Adopt a journal left behind by a previous run.
@@ -447,6 +516,12 @@ impl<B: Backend> Engine<B> {
         // preimages: the windows have already moved, so the "original" position
         // would be recorded as the position this engine just produced. The user
         // asked to change the target, not to redefine home. Restore first.
+        // Pause is checked first: when both apply, "automation is paused" is the
+        // actionable message, and telling the user to restore would be wrong —
+        // resuming is what they actually need to do.
+        if self.paused {
+            return Err(EngineError::Paused);
+        }
         if self.transaction.is_some() {
             return Err(EngineError::TransactionAlreadyOpen);
         }
@@ -858,7 +933,12 @@ impl<B: Backend> Engine<B> {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
 
+        // A remote session that reconnects within a few seconds must not cause
+        // two migrations, so the user's delay is applied before anything moves.
+        self.wait_restore_delay();
+
         self.state = EngineState::Restoring;
+        self.paused = false;
 
         let Some(transaction) = self.transaction.as_ref() else {
             self.state = EngineState::Idle;

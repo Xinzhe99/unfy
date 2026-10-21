@@ -35,6 +35,8 @@ export interface StatusDto {
   target: TargetDto | null;
   pending_windows: number;
   last_error: string | null;
+  paused: boolean;
+  captured_windows: number;
 }
 
 export interface DisplayDto {
@@ -42,6 +44,9 @@ export interface DisplayDto {
   label: string;
   width: number;
   height: number;
+  /** Position in the virtual desktop; used to draw the real arrangement. */
+  origin_x: number;
+  origin_y: number;
   work_width: number;
   work_height: number;
   scale: number;
@@ -75,6 +80,8 @@ export interface PreviewDto {
   unplaced: string[];
   skipped: SkipDto[];
   cascaded: boolean;
+  /** Work area of the target, so the preview can draw the real bounds. */
+  target_work: RectDto;
 }
 
 export interface MigrationDto {
@@ -125,6 +132,18 @@ export interface DiagnosticsDto {
   bytes: number;
 }
 
+export interface PauseDto {
+  paused: boolean;
+  state: EngineStateName;
+}
+
+export interface HotkeyStatusDto {
+  gather: string | null;
+  gather_error: string | null;
+  restore: string | null;
+  restore_error: string | null;
+}
+
 export interface UpdateStatusDto {
   current_version: string;
   auto_update: boolean;
@@ -153,17 +172,32 @@ export const api = {
   updateStatus: () => invoke<UpdateStatusDto>("update_status"),
   checkUpdate: () => invoke<string>("check_update"),
   liveTransaction: () => invoke<string | null>("live_transaction"),
+  setPaused: (paused: boolean) => invoke<PauseDto>("set_paused", { paused }),
+  hotkeyStatus: () => invoke<HotkeyStatusDto>("hotkey_status"),
+  identifyDisplays: (seconds?: number) =>
+    invoke<boolean>("identify_displays", { seconds }),
 };
 
 /** Human-readable Chinese labels for the engine states shown in the UI. */
 export const stateLabels: Record<EngineStateName, string> = {
-  idle: "未整理",
+  idle: "就绪",
   planning: "正在计划",
   migrating: "正在整理窗口",
   active: "布局已启用",
   restoring: "正在恢复",
   degraded: "部分受限",
   error: "需要处理",
+};
+
+/** One-sentence explanation of what the state means for the user right now. */
+export const stateHints: Record<EngineStateName, string> = {
+  idle: "窗口保持原位。按快捷键或点「整理到目标屏」开始。",
+  planning: "正在计算布局，还没有移动任何窗口。",
+  migrating: "正在把窗口移到目标屏。",
+  active: "窗口已收拢到目标屏。结束后点「恢复本次布局」。",
+  restoring: "正在把窗口放回原来的位置。",
+  degraded: "部分窗口没能处理，详情见下方结果。",
+  error: "出现了无法自动处理的问题，请查看提示。",
 };
 
 /** Chinese labels for skip reasons returned by the engine. */
@@ -187,14 +221,17 @@ export function skipLabel(reason: string): string {
 /**
  * Turn an engine error into something a user can act on.
  *
- * The Rust side returns sentinels for the cases that need a specific next step
- * (`already_active`); everything else is passed through unchanged rather than
- * being flattened into a generic failure message.
+ * The Rust side returns sentinels for the cases that need a specific next step;
+ * everything else is passed through unchanged rather than being flattened into a
+ * generic failure message.
  */
 export function errorMessage(error: unknown): string {
   const raw = String(error);
   if (raw.includes("already_active")) {
     return "窗口仍处于整理状态。请先点「恢复本次布局」，再重新整理到新的目标屏。";
+  }
+  if (raw.includes("paused")) {
+    return "自动整理已暂停。在托盘菜单或概览页取消暂停后重试。";
   }
   if (raw.includes("TargetDisplayMissing") || raw.includes("no_displays")) {
     return "目标显示器当前不可用，请在「显示器与布局」里重新选择。";
@@ -203,4 +240,10 @@ export function errorMessage(error: unknown): string {
     return "系统拒绝了窗口操作权限，请检查授权后重试。";
   }
   return raw;
+}
+
+/** Format a byte count for the diagnostics line. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
 }
