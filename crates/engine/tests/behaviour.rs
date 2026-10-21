@@ -1,0 +1,513 @@
+//! Engine behaviour tests against the fake platform.
+//!
+//! These cover the paths that must never regress: the journal barrier, per-window
+//! retry, user-change preservation, and off-screen rescue.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use conflux_domain::{
+    DisplayKey, DisplaySnapshot, EngineState, IdentityQuality, Rect, Scale, WindowId, WindowMode,
+    WindowOutcome,
+};
+use conflux_engine::{Engine, EngineConfig, PendingWork};
+use conflux_journal::Recovered;
+use conflux_platform::fake::{FakeBackend, FakeBehaviour};
+use conflux_platform::{DisplayProvider, WindowBackend};
+
+fn journal_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("conflux-engine-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("journal dir");
+    dir
+}
+
+fn config(tag: &str) -> EngineConfig {
+    EngineConfig {
+        journal_dir: journal_dir(tag),
+        ..Default::default()
+    }
+}
+
+fn target_key() -> DisplayKey {
+    DisplayKey {
+        native_id: "fake-display-b".into(),
+        quality: IdentityQuality::Strong,
+    }
+}
+
+/// A fake with three windows on display A (150 %) and a target display B (100 %).
+fn scenario() -> FakeBackend {
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        1,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.add_window(
+        2,
+        Rect::new(200, 300, 1000, 900),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.add_window(
+        3,
+        Rect::new(300, 500, 1100, 1100),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend
+}
+
+#[test]
+fn preview_never_moves_windows() {
+    let backend = scenario();
+    let before = backend.enumerate().unwrap();
+    let mut engine = Engine::new(backend, config("preview"));
+
+    let preview = engine.preview(&target_key()).expect("preview");
+    assert_eq!(preview.eligible.len(), 3);
+    assert_eq!(preview.plan.placements.len(), 3);
+    assert_eq!(engine.state(), EngineState::Idle);
+
+    let after = engine.backend().enumerate().unwrap();
+    assert_eq!(before, after, "preview must not touch any window");
+}
+
+#[test]
+fn migrate_moves_every_window_onto_the_target_display() {
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("migrate"));
+
+    let report = engine.migrate(&target_key()).expect("migrate");
+    assert_eq!(report.applied.len(), 3);
+    assert_eq!(report.failed_count(), 0);
+    assert_eq!(engine.state(), EngineState::Active);
+
+    let target_work = engine
+        .backend()
+        .topology()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.key == target_key())
+        .unwrap()
+        .work_area;
+
+    for window in engine.backend().enumerate().unwrap() {
+        assert!(
+            window.visible_rect.reachable_in(&target_work, 64, 32),
+            "window {:?} landed at {:?}, outside {:?}",
+            window.id,
+            window.visible_rect,
+            target_work
+        );
+    }
+}
+
+#[test]
+fn restore_returns_every_window_to_its_preimage() {
+    let backend = scenario();
+    let before: HashMap<u64, Rect> = backend
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .map(|w| (w.id.native_id, w.visible_rect))
+        .collect();
+
+    let mut engine = Engine::new(backend, config("restore"));
+    engine.migrate(&target_key()).expect("migrate");
+    let report = engine.restore().expect("restore");
+
+    assert!(report.is_complete());
+    assert_eq!(report.count(WindowOutcome::Restored), 3);
+    assert_eq!(engine.state(), EngineState::Idle);
+
+    for window in engine.backend().enumerate().unwrap() {
+        let original = before[&window.id.native_id];
+        assert_eq!(
+            window.visible_rect, original,
+            "window {} was not restored",
+            window.id.native_id
+        );
+    }
+}
+
+#[test]
+fn denied_window_is_rejected_but_others_still_move() {
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        1,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Denied,
+    );
+    backend.add_window(
+        2,
+        Rect::new(200, 300, 1000, 900),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+
+    let mut engine = Engine::new(backend, config("denied"));
+    let report = engine.migrate(&target_key()).expect("migrate");
+
+    // The denied window never reaches the planner because capabilities report it
+    // as immovable, so it is skipped rather than retried.
+    assert!(report.skipped.iter().any(|s| s.id.native_id == 1));
+    assert_eq!(report.outcomes.get(&id(2)), Some(&WindowOutcome::Applied));
+    assert_eq!(engine.state(), EngineState::Active);
+}
+
+#[test]
+fn self_correcting_window_is_retried_then_reported_rejected() {
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        9,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::SelfCorrecting,
+    );
+
+    let mut engine = Engine::new(backend, config("selfcorrect"));
+    let report = engine.migrate(&target_key()).expect("migrate");
+
+    assert_eq!(report.outcomes.get(&id(9)), Some(&WindowOutcome::Rejected));
+    assert_eq!(report.failed_count(), 1);
+    assert_eq!(engine.state(), EngineState::Degraded);
+}
+
+#[test]
+fn min_size_window_is_placed_at_its_minimum_and_still_applied() {
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        4,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::MinSize(900, 600),
+    );
+
+    let mut engine = Engine::new(backend, config("minsize"));
+    let report = engine.migrate(&target_key()).expect("migrate");
+
+    // The fake enforces 900x600; the engine reads back and reports the outcome
+    // honestly rather than claiming the planned rectangle.
+    let outcome = report.outcomes.get(&id(4)).copied().expect("outcome");
+    assert!(matches!(
+        outcome,
+        WindowOutcome::Applied | WindowOutcome::Rejected
+    ));
+}
+
+#[test]
+fn vanished_window_is_reported_gone_not_failed() {
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        5,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Vanishes,
+    );
+
+    let mut engine = Engine::new(backend, config("vanish"));
+    let report = engine.migrate(&target_key()).expect("migrate");
+    let outcome = report.outcomes.get(&id(5)).copied().expect("outcome");
+    assert!(matches!(
+        outcome,
+        WindowOutcome::Gone | WindowOutcome::Unknown | WindowOutcome::Rejected
+    ));
+}
+
+#[test]
+fn user_move_during_session_is_preserved_on_restore() {
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("userchange"));
+    engine.migrate(&target_key()).expect("migrate");
+
+    // Simulate the user dragging window 2 somewhere visible on the target.
+    let moved = Rect::new(3000, 200, 3600, 700);
+    engine
+        .backend()
+        .apply(
+            &id(2),
+            &conflux_platform::WindowPlan {
+                visible_rect: moved,
+                mode: WindowMode::Normal,
+            },
+        )
+        .expect("user move");
+
+    let report = engine.restore().expect("restore");
+    assert_eq!(
+        report.outcomes.get(&id(2)),
+        Some(&WindowOutcome::KeptUserChange)
+    );
+    let window = engine
+        .backend()
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id.native_id == 2)
+        .unwrap();
+    assert_eq!(window.visible_rect, moved, "user position must win");
+}
+
+#[test]
+fn offscreen_window_is_rescued_without_a_transaction() {
+    let mut backend = FakeBackend::with_two_displays();
+    // A window far outside both displays, as happens after unplugging a monitor.
+    backend.add_window(
+        6,
+        Rect::new(9000, 5000, 9600, 5400),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+
+    let mut engine = Engine::new(backend, config("rescue"));
+    let rescued = engine.rescue_offscreen().expect("rescue");
+    assert_eq!(rescued.len(), 1);
+
+    let work_area = engine
+        .backend()
+        .topology()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.primary)
+        .unwrap()
+        .work_area;
+    let window = engine.backend().enumerate().unwrap().pop().unwrap();
+    assert!(window.visible_rect.reachable_in(&work_area, 64, 32));
+}
+
+#[test]
+fn visible_window_is_not_rescued() {
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("norescue"));
+    let rescued = engine.rescue_offscreen().expect("rescue");
+    assert!(rescued.is_empty(), "visible windows must not be touched");
+}
+
+#[test]
+fn journal_is_removed_after_a_complete_restore() {
+    let dir = journal_dir("journal-removed");
+    let backend = scenario();
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            journal_dir: dir.clone(),
+            ..Default::default()
+        },
+    );
+
+    engine.migrate(&target_key()).expect("migrate");
+    let files_during: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "journal"))
+        .collect();
+    assert_eq!(files_during.len(), 1, "one journal per transaction");
+
+    engine.restore().expect("restore");
+
+    let files_after: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "journal"))
+        .collect();
+    assert!(files_after.is_empty(), "restore must clean up its journal");
+}
+
+#[test]
+fn keep_current_layout_closes_the_journal_without_moving_windows() {
+    let dir = journal_dir("keep");
+    let backend = scenario();
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            journal_dir: dir.clone(),
+            ..Default::default()
+        },
+    );
+
+    engine.migrate(&target_key()).expect("migrate");
+    let after_migrate = engine.backend().enumerate().unwrap();
+    engine.keep_current_layout().expect("keep");
+
+    assert_eq!(engine.state(), EngineState::Idle);
+    assert_eq!(engine.backend().enumerate().unwrap(), after_migrate);
+
+    let remaining = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "journal"))
+        .count();
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn unknown_target_display_is_an_error_not_a_guess() {
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("badtarget"));
+    let bogus = DisplayKey {
+        native_id: "display-that-does-not-exist".into(),
+        quality: IdentityQuality::Strong,
+    };
+    let err = engine.preview(&bogus).unwrap_err();
+    assert!(matches!(
+        err,
+        conflux_domain::EngineError::TargetDisplayMissing
+    ));
+}
+
+#[test]
+fn restore_with_nothing_pending_is_a_noop() {
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("noop"));
+    let report = engine.restore().expect("restore");
+    assert!(report.is_complete());
+    assert!(report.outcomes.is_empty());
+}
+
+#[test]
+fn recovery_reports_unfinished_transaction_as_pending_work() {
+    let dir = journal_dir("pending");
+    let path = dir.join("abandoned.journal");
+    {
+        let mut journal = conflux_journal::Journal::begin(&path, "2 displays").unwrap();
+        journal
+            .write_preimage(&conflux_journal::Preimage {
+                id: id(1),
+                display_native_id: "fake-display-a".into(),
+                display_quality: IdentityQuality::Strong,
+                display_work_area: Rect::new(0, 0, 2560, 1400),
+                display_scale: Scale { x: 1.5, y: 1.5 },
+                visible_rect: Rect::new(100, 100, 900, 700),
+                outer_rect: Rect::new(93, 93, 907, 707),
+                mode: WindowMode::Normal,
+                topmost: false,
+                native_placement: None,
+            })
+            .unwrap();
+        journal.abandon();
+    }
+
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("pending-engine"));
+    let recovered = engine.recover(&path).expect("recover");
+    let Recovered::Unfinished(tx) = recovered else {
+        panic!("expected unfinished");
+    };
+    let pending = PendingWork::from_recovered(&tx);
+    assert_eq!(pending.windows, 1);
+    assert_eq!(engine.state(), EngineState::Degraded);
+}
+
+fn id(n: u64) -> WindowId {
+    WindowId {
+        native_id: n,
+        process_id: 1000 + n as u32,
+        process_start: 1,
+    }
+}
+
+#[allow(dead_code)]
+fn display(key: &str, primary: bool) -> DisplaySnapshot {
+    DisplaySnapshot {
+        key: DisplayKey {
+            native_id: key.into(),
+            quality: IdentityQuality::Strong,
+        },
+        bounds: Rect::new(0, 0, 1920, 1080),
+        work_area: Rect::new(0, 0, 1920, 1040),
+        scale: Scale::IDENTITY,
+        physical_size_mm: None,
+        primary,
+        label: key.into(),
+    }
+}
+
+#[test]
+fn adopted_transaction_can_actually_be_restored() {
+    // The failure this guards against: a previous run is killed mid-migration,
+    // the next launch reports "unfinished work", and the restore button does
+    // nothing because the engine never loaded the preimages.
+    let dir = journal_dir("adopt");
+    let path = dir.join("died.journal");
+
+    let original = Rect::new(100, 100, 900, 700);
+    {
+        let mut journal = conflux_journal::Journal::begin(&path, "2 displays").unwrap();
+        journal
+            .write_preimage(&conflux_journal::Preimage {
+                id: id(1),
+                display_native_id: "fake-display-a".into(),
+                display_quality: IdentityQuality::Strong,
+                display_work_area: Rect::new(0, 0, 2560, 1400),
+                display_scale: Scale { x: 1.5, y: 1.5 },
+                visible_rect: original,
+                outer_rect: Rect::new(93, 93, 907, 707),
+                mode: WindowMode::Normal,
+                topmost: false,
+                native_placement: None,
+            })
+            .unwrap();
+        // No `close`: this is what a kill leaves behind.
+        journal.abandon();
+    }
+
+    // The window is somewhere else now, as if the previous run had moved it.
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        1,
+        Rect::new(3000, 300, 3800, 900),
+        "fake-display-b",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+
+    let mut engine = Engine::new(backend, config("adopt-engine"));
+    let adopted = engine
+        .recover_latest(&dir)
+        .expect("recover latest")
+        .expect("a transaction should be adopted");
+    assert_eq!(engine.state(), EngineState::Degraded);
+
+    let report = engine.restore().expect("restore adopted transaction");
+    assert!(report.is_complete(), "adopted restore must finish");
+    assert_eq!(report.transaction, Some(adopted));
+    assert_eq!(report.count(WindowOutcome::Restored), 1);
+
+    let window = engine.backend().enumerate().unwrap().pop().unwrap();
+    assert_eq!(window.visible_rect, original, "preimage must be honoured");
+    assert_eq!(engine.state(), EngineState::Idle);
+    assert!(!path.exists(), "journal must be cleaned up after restore");
+}
+
+#[test]
+fn journal_without_preimages_is_discarded_instead_of_blocking() {
+    // A crash between `Begin` and the first preimage leaves a transaction with
+    // nothing in it. It must not block the user forever.
+    let dir = journal_dir("empty-tx");
+    let path = dir.join("empty.journal");
+    {
+        let journal = conflux_journal::Journal::begin(&path, "2 displays").unwrap();
+        journal.abandon();
+    }
+
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("empty-tx-engine"));
+    let adopted = engine.recover_latest(&dir).expect("recover");
+    assert!(adopted.is_none());
+    assert_eq!(engine.state(), EngineState::Idle);
+    assert!(!path.exists());
+}

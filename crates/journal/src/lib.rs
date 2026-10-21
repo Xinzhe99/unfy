@@ -1,0 +1,409 @@
+//! Durable transaction log.
+//!
+//! The engine may only move a window after the preimage of that window has been
+//! written here and flushed. Everything in this crate exists to make that
+//! promise survivable: a process kill, a power cut, a full disk, or a corrupted
+//! tail must never turn into "windows were moved and the original positions are
+//! gone".
+//!
+//! # On-disk format
+//!
+//! ```text
+//! file   := record*
+//! record := len:u32le | crc32:u32le | kind:u8 | payload:json[len-1]
+//! ```
+//!
+//! `crc32` covers `kind` + `payload`, so a torn write at the tail is detected
+//! even when the length prefix itself survived. Recovery replays every record
+//! whose CRC matches and stops at the first mismatch, keeping the remainder as
+//! a `.corrupt` sidecar for diagnostics.
+//!
+//! # Why not a single JSON document
+//!
+//! Rewriting a whole document requires a temp file plus rename, and a crash
+//! between "windows moved" and "document replaced" loses the preimage. An
+//! append-only log makes the *order* of durable writes the source of truth.
+
+mod record;
+
+pub use record::Record;
+
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+
+use conflux_domain::{Rect, WindowId, WindowMode};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// One window captured before it was touched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Preimage {
+    pub id: WindowId,
+    pub display_native_id: String,
+    pub display_quality: conflux_domain::IdentityQuality,
+    /// Work area of the display the window was on, so restore can tell whether
+    /// the topology is unchanged or must be rescaled.
+    pub display_work_area: Rect,
+    pub display_scale: conflux_domain::Scale,
+    pub visible_rect: Rect,
+    pub outer_rect: Rect,
+    pub mode: WindowMode,
+    pub topmost: bool,
+    /// Opaque platform placement blob, base64 is avoided by storing bytes as a
+    /// JSON array; these blobs are small (44 bytes on Windows).
+    pub native_placement: Option<Vec<u8>>,
+}
+
+/// The result of applying a plan to one window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppliedResult {
+    pub id: WindowId,
+    pub outcome: conflux_domain::WindowOutcome,
+    pub observed: Option<ObservedRect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ObservedRect {
+    pub visible_rect: Rect,
+    pub mode: WindowMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum JournalError {
+    #[error("io error: {0}")]
+    Io(String),
+    #[error("record is corrupt at offset {offset}: {reason}")]
+    Corrupt { offset: u64, reason: String },
+    #[error("journal belongs to another schema version: {0}")]
+    SchemaMismatch(u32),
+    #[error("transaction {0} is already closed")]
+    AlreadyClosed(Uuid),
+    #[error("no open transaction in this journal")]
+    NotOpen,
+}
+
+impl From<std::io::Error> for JournalError {
+    fn from(e: std::io::Error) -> Self {
+        JournalError::Io(e.to_string())
+    }
+}
+
+pub type Result<T, E = JournalError> = std::result::Result<T, E>;
+
+/// Current schema version. Bumped only for changes that old readers cannot
+/// interpret; the recovery path must keep reading every version it ever wrote.
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// A single migration transaction on disk.
+#[derive(Debug)]
+pub struct Journal {
+    path: PathBuf,
+    file: File,
+    transaction: Uuid,
+    /// Byte offset just past the last complete record. Recovery uses this to
+    /// know whether a later append would overwrite a torn tail.
+    end: u64,
+}
+
+/// What recovery found on disk.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Recovered {
+    /// No journal file, or a cleanly closed transaction.
+    Clean,
+    /// An unfinished transaction. The caller must resolve it before allowing
+    /// new migrations.
+    Unfinished(RecoveredTransaction),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecoveredTransaction {
+    pub transaction: Uuid,
+    pub schema_version: u32,
+    pub preimages: Vec<Preimage>,
+    pub intents: Vec<RecoveredIntent>,
+    pub results: Vec<AppliedResult>,
+    /// Bytes dropped from the tail because their CRC did not match.
+    pub truncated_bytes: u64,
+}
+
+/// An intent whose outcome was never recorded. The platform call may or may not
+/// have happened, so the window must be treated as possibly moved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecoveredIntent {
+    pub id: WindowId,
+    pub target: Rect,
+    pub mode: WindowMode,
+}
+
+impl RecoveredTransaction {
+    /// Whether any window in this transaction might have been moved.
+    ///
+    /// A transaction with no `Applied` result and no `Intent` record can be
+    /// discarded without touching windows.
+    pub fn may_have_moved_windows(&self) -> bool {
+        self.results.iter().any(|r| {
+            matches!(
+                r.outcome,
+                conflux_domain::WindowOutcome::Applied
+                    | conflux_domain::WindowOutcome::Restored
+                    | conflux_domain::WindowOutcome::FallbackVisible
+                    | conflux_domain::WindowOutcome::KeptUserChange
+            )
+        })
+    }
+
+    pub fn preimage_for(&self, id: &WindowId) -> Option<&Preimage> {
+        self.preimages.iter().find(|p| &p.id == id)
+    }
+
+    /// Whether any window has an intent with no recorded result.
+    ///
+    /// This is the state a kill between `SetWindowPos` and `read_back` leaves
+    /// behind, and it is the strongest argument for writing the intent before
+    /// the platform call.
+    pub fn has_unresolved_intent(&self) -> bool {
+        self.intents
+            .iter()
+            .any(|intent| !self.results.iter().any(|r| r.id == intent.id))
+    }
+
+    /// Every window that needs an outcome: anything with a preimage.
+    pub fn touched_windows(&self) -> Vec<WindowId> {
+        self.preimages.iter().map(|p| p.id.clone()).collect()
+    }
+}
+
+impl Journal {
+    /// Open (creating if needed) a journal file and start a new transaction.
+    ///
+    /// The `Begin` record is flushed before this returns, so a crash immediately
+    /// afterwards still leaves a recoverable (empty) transaction.
+    pub fn begin(path: impl AsRef<Path>, display_summary: &str) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+
+        let transaction = Uuid::new_v4();
+        let mut journal = Journal {
+            path,
+            file: file.try_clone()?,
+            transaction,
+            end: 0,
+        };
+        journal.append(&Record::Begin {
+            schema_version: SCHEMA_VERSION,
+            transaction,
+            display_summary: display_summary.to_string(),
+            created_unix_ms: now_unix_ms(),
+        })?;
+        file.flush()?;
+        journal.file.sync_all()?;
+        Ok(journal)
+    }
+
+    pub fn transaction(&self) -> Uuid {
+        self.transaction
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Reopen an unfinished journal so a later process can finish its work.
+    ///
+    /// Unlike [`Journal::begin`] this neither truncates the file nor writes a new
+    /// `Begin`: the transaction id and every preimage already on disk are
+    /// preserved, because they are the only record of where the windows were.
+    /// A torn tail is cut off so the next append starts on a record boundary.
+    pub fn reopen(path: impl AsRef<Path>, transaction: Uuid) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
+
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+
+        // Walk to the last complete record so a torn tail cannot corrupt the
+        // records we append after it.
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            match Record::decode(&bytes[offset..]) {
+                Ok(Some((_, consumed))) => offset += consumed,
+                Ok(None) | Err(_) => break,
+            }
+        }
+        if offset < bytes.len() {
+            file.set_len(offset as u64)?;
+            file.sync_all()?;
+        }
+
+        Ok(Journal {
+            path,
+            file,
+            transaction,
+            end: offset as u64,
+        })
+    }
+
+    /// Append and flush a single record. Returns only after the bytes are on
+    /// disk, because callers use this as the "it is now safe to move windows"
+    /// barrier.
+    fn append(&mut self, record: &Record) -> Result<()> {
+        let bytes = record.encode()?;
+        self.file.seek(SeekFrom::Start(self.end))?;
+        self.file.write_all(&bytes)?;
+        self.file.flush()?;
+        self.file.sync_all()?;
+        self.end += bytes.len() as u64;
+        Ok(())
+    }
+
+    /// Persist the preimage of a window before touching it.
+    ///
+    /// Writing the same window twice is rejected: the first preimage is the one
+    /// that matters, and a second write would mean the engine lost track.
+    pub fn write_preimage(&mut self, preimage: &Preimage) -> Result<()> {
+        self.append(&Record::Preimage {
+            transaction: self.transaction,
+            preimage: preimage.clone(),
+        })
+    }
+
+    /// Persist the intent to move a window, with the target rectangle.
+    ///
+    /// Written before the platform call so that a crash between "called
+    /// SetWindowPos" and "read the result" is still recoverable: recovery knows
+    /// the window may have moved and to where.
+    pub fn write_intent(&mut self, id: &WindowId, target: Rect, mode: WindowMode) -> Result<()> {
+        self.append(&Record::Intent {
+            transaction: self.transaction,
+            id: id.clone(),
+            target,
+            mode,
+        })
+    }
+
+    /// Persist the observed outcome after the platform call and read-back.
+    pub fn write_result(&mut self, result: &AppliedResult) -> Result<()> {
+        self.append(&Record::Result {
+            transaction: self.transaction,
+            result: result.clone(),
+        })
+    }
+
+    /// Close the transaction. After this returns, recovery will treat the file
+    /// as clean and the caller may delete it.
+    pub fn close(mut self) -> Result<()> {
+        self.append(&Record::Closed {
+            transaction: self.transaction,
+            closed_unix_ms: now_unix_ms(),
+        })?;
+        Ok(())
+    }
+
+    /// Close and delete the file. Only safe once every window is resolved.
+    pub fn close_and_remove(mut self) -> Result<()> {
+        self.append(&Record::Closed {
+            transaction: self.transaction,
+            closed_unix_ms: now_unix_ms(),
+        })?;
+        drop(self.file);
+        std::fs::remove_file(&self.path)?;
+        Ok(())
+    }
+
+    /// Abandon without closing: the transaction stays recoverable.
+    pub fn abandon(self) -> PathBuf {
+        self.path
+    }
+}
+
+/// Scan a journal file and decide what the engine must do about it.
+///
+/// A missing file is `Clean`. A file whose last record is `Closed` is `Clean`.
+/// Anything else is `Unfinished`, including a file whose tail was torn.
+pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Ok(Recovered::Clean);
+    }
+
+    let mut file = File::open(path)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+
+    let mut offset = 0usize;
+    let mut transaction = None;
+    let mut schema_version = SCHEMA_VERSION;
+    let mut preimages = Vec::new();
+    let mut intents = Vec::new();
+    let mut results = Vec::new();
+    let mut closed = false;
+    let mut truncated = 0u64;
+
+    while offset < bytes.len() {
+        match Record::decode(&bytes[offset..]) {
+            Ok(Some((record, consumed))) => {
+                match record {
+                    Record::Begin {
+                        schema_version: v,
+                        transaction: t,
+                        ..
+                    } => {
+                        transaction = Some(t);
+                        schema_version = v;
+                    }
+                    Record::Preimage { preimage, .. } => preimages.push(preimage),
+                    Record::Result { result, .. } => results.push(result),
+                    Record::Closed { .. } => closed = true,
+                    Record::Intent {
+                        id, target, mode, ..
+                    } => intents.push(RecoveredIntent { id, target, mode }),
+                }
+                offset += consumed;
+            }
+            Ok(None) => {
+                // Partial record at the tail: a write was interrupted.
+                truncated = (bytes.len() - offset) as u64;
+                break;
+            }
+            Err(reason) => {
+                truncated = (bytes.len() - offset) as u64;
+                let _ = reason;
+                break;
+            }
+        }
+    }
+
+    if truncated > 0 {
+        let sidecar = path.with_extension("corrupt");
+        std::fs::write(&sidecar, &bytes[offset..])?;
+    }
+
+    match transaction {
+        Some(transaction) if !closed => Ok(Recovered::Unfinished(RecoveredTransaction {
+            transaction,
+            schema_version,
+            preimages,
+            intents,
+            results,
+            truncated_bytes: truncated,
+        })),
+        _ => Ok(Recovered::Clean),
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}

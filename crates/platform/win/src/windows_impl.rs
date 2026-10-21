@@ -219,9 +219,15 @@ impl WindowBackend for WinWindows {
         let hwnd = hwnd_from_id(id)?;
 
         // A maximized window ignores the size part of SetWindowPos, and Chromium
-        // rewrites the whole rectangle. Restore first, move, then re-maximize.
+        // rewrites the whole rectangle. Restore first so the move applies.
+        //
+        // It is deliberately *not* re-maximized afterwards: a maximized window
+        // covers the whole target display and would hide every other window we
+        // just placed there. The plan decides the end state, and the plan uses
+        // `Normal` for tiled slots. Restoring the original mode is the restore
+        // path's job, using the preimage.
         let was_zoomed = unsafe { IsZoomed(hwnd) }.as_bool();
-        if was_zoomed {
+        if was_zoomed && plan.mode != WindowMode::Maximized {
             let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
         }
 
@@ -249,7 +255,7 @@ impl WindowBackend for WinWindows {
         }
         .map_err(map_win_error)?;
 
-        if was_zoomed || plan.mode == WindowMode::Maximized {
+        if plan.mode == WindowMode::Maximized {
             let _ = unsafe { ShowWindow(hwnd, SW_MAXIMIZE) };
         }
         Ok(())

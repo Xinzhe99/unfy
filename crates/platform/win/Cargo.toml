@@ -11,6 +11,7 @@ conflux-platform = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+conflux-engine = { workspace = true }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Devices_Display",

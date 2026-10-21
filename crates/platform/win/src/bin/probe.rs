@@ -24,6 +24,11 @@ fn main() {
         return;
     }
 
+    if args.iter().any(|a| a == "--dump") {
+        dump_positions();
+        return;
+    }
+
     let should_move = args.iter().any(|a| a == "--move");
 
     let displays = WinDisplays::new();
@@ -283,5 +288,30 @@ fn run_host() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+}
+
+/// Print every visible top-level window as one JSON object per line.
+///
+/// Used by the end-to-end verification to compare window positions before and
+/// after a migration, so a restore can be checked for pixel fidelity rather than
+/// "the app said it worked".
+fn dump_positions() {
+    let windows = WinWindows::new();
+    let raw = windows.enumerate_raw().expect("enumerate");
+    for w in raw {
+        if !w.style_flags.visible || w.style_flags.tool_window || w.style_flags.cloaked {
+            continue;
+        }
+        println!(
+            "{{\"hwnd\":{},\"pid\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{},\"mode\":\"{:?}\"}}",
+            w.snapshot.id.native_id,
+            w.snapshot.id.process_id,
+            w.snapshot.visible_rect.left,
+            w.snapshot.visible_rect.top,
+            w.snapshot.visible_rect.width(),
+            w.snapshot.visible_rect.height(),
+            w.snapshot.mode,
+        );
     }
 }

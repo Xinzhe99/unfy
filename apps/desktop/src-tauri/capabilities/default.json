@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Capabilities for the Conflux settings window. Deliberately minimal: no filesystem, no shell, no arbitrary window handles.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-close"
+  ]
+}

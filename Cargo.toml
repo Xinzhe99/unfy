@@ -2,8 +2,14 @@
 resolver = "2"
 members = [
     "crates/domain",
+    "crates/journal",
+    "crates/layout",
+    "crates/engine",
+    "crates/settings",
     "crates/platform",
     "crates/platform/win",
+    "crates/platform/mac",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
@@ -14,7 +20,13 @@ license = "MIT"
 
 [workspace.dependencies]
 conflux-domain = { path = "crates/domain" }
+conflux-engine = { path = "crates/engine" }
+conflux-journal = { path = "crates/journal" }
+conflux-layout = { path = "crates/layout" }
+conflux-settings = { path = "crates/settings" }
 conflux-platform = { path = "crates/platform" }
+conflux-platform-win = { path = "crates/platform/win" }
+conflux-platform-mac = { path = "crates/platform/mac" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

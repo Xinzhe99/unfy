@@ -82,7 +82,7 @@ pub enum WindowMode {
 /// `native_id` alone is not enough: Windows reuses `HWND` values, and macOS
 /// `CGWindowID` is only unique within a session. `process_start` disambiguates
 /// a recycled handle that now belongs to a different process instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WindowId {
     pub native_id: u64,
     pub process_id: u32,
