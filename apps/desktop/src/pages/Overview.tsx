@@ -120,13 +120,13 @@ export function OverviewPage({
           ) : busyState || busy ? (
             // `busy` covers the window between the click and the engine's first
             // state change, which on a busy desktop can be a second of silence.
-            <Status tone="accent">
+            <Status tone="live">
               {stateLabels[state === "idle" ? "migrating" : state]}
             </Status>
           ) : hasWork ? (
-            <Status tone="accent">布局已启用</Status>
+            <Status tone="live">布局已启用</Status>
           ) : (
-            <Status tone="neutral">就绪</Status>
+            <Status tone="success">就绪</Status>
           )
         }
       >

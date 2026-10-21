@@ -29,7 +29,7 @@ import {
   IconSettings,
   IconShield,
 } from "./components/icons";
-import { Status } from "./components/ui";
+import { Status, type StatusTone } from "./components/ui";
 
 export type Page = "overview" | "displays" | "exclusions" | "general";
 
@@ -45,15 +45,21 @@ const navigation: {
   { id: "general", label: "设置", icon: IconSettings, group: "设置" },
 ];
 
-const stateTone: Record<
-  EngineStateName,
-  "neutral" | "accent" | "success" | "warning" | "danger"
-> = {
-  idle: "neutral",
-  planning: "accent",
-  migrating: "accent",
-  active: "accent",
-  restoring: "accent",
+/**
+ * State to dot colour.
+ *
+ * `idle` is `success`, not `neutral`: an idle engine with nothing pending is the
+ * healthy state, and a grey dot next to "就绪" reads as "disabled" or "unknown".
+ * `active` and the working states are `live` (blue) rather than the monochrome
+ * accent, so "a layout is in effect" is visible at a glance instead of looking
+ * like ordinary text.
+ */
+const stateTone: Record<EngineStateName, StatusTone> = {
+  idle: "success",
+  planning: "live",
+  migrating: "live",
+  active: "live",
+  restoring: "live",
   degraded: "warning",
   error: "danger",
 };

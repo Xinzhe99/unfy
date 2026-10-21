@@ -53,6 +53,10 @@
   --color-success: oklch(0.52 0.11 155);
   --color-warning: oklch(0.55 0.1 70);
   --color-danger: oklch(0.51 0.16 25);
+  /* Live state: a layout is currently gathering windows. Distinct from the
+     accent, which stays monochrome for buttons and selection. Without a hue here
+     "布局已启用" rendered as a near-black dot that read as plain text. */
+  --color-active: oklch(0.55 0.13 250);
 
   --radius-card: 10px;
   --radius-control: 7px;
@@ -82,6 +86,7 @@
   --conflux-dark-success: oklch(0.7 0.11 155);
   --conflux-dark-warning: oklch(0.76 0.1 70);
   --conflux-dark-danger: oklch(0.68 0.15 25);
+  --conflux-dark-active: oklch(0.68 0.13 250);
   --shadow-card: 0 1px 2px oklch(0 0 0 / 0.25);
 }
 
@@ -105,6 +110,7 @@
   --color-success: var(--conflux-dark-success);
   --color-warning: var(--conflux-dark-warning);
   --color-danger: var(--conflux-dark-danger);
+  --color-active: var(--conflux-dark-active);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -128,6 +134,7 @@
     --color-success: var(--conflux-dark-success);
     --color-warning: var(--conflux-dark-warning);
     --color-danger: var(--conflux-dark-danger);
+    --color-active: var(--conflux-dark-active);
   }
 }
 

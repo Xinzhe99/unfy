@@ -207,3 +207,98 @@ describe("text contrast", () => {
     expect(muted).toBeLessThan(fg - 5);
   });
 });
+
+/**
+ * Status dots are the only place semantic colour appears, so they carry the whole
+ * "can I tell what this app is doing" load. Two rules:
+ *
+ *   * every dot must be distinguishable from the surface it sits on;
+ *   * "idle and healthy" must not look like "disabled".
+ *
+ * The second rule exists because it was violated: `就绪` rendered as a grey dot,
+ * which in this palette is the same colour used for disabled controls.
+ */
+describe("status dots", () => {
+  test("every dot reaches the 3:1 UI-component contrast minimum", async () => {
+    const css = await Bun.file(`${ROOT}/src/styles.css`).text();
+
+    // Tokens, in the order they appear for the light theme.
+    const tokens = ["success", "active", "warning", "danger"] as const;
+    const failures: { token: string; ratio: number }[] = [];
+
+    for (const token of tokens) {
+      const line = css
+        .split("\n")
+        .find(
+          (l) =>
+            l.trimStart().startsWith(`--color-${token}:`) && l.includes("oklch("),
+        );
+      expect(line, `missing token --color-${token}`).toBeDefined();
+      const nums = line!.match(/oklch\(([\d.]+)\s+([\d.]+)\s+([\d.]+)\)/);
+      expect(nums).not.toBeNull();
+      const rgb = oklchToRgbLight(
+        Number(nums![1]),
+        Number(nums![2]),
+        Number(nums![3]),
+      );
+      const ratio = contrast(rgb, [255, 255, 255]);
+      if (ratio < 3) failures.push({ token, ratio });
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  test("the idle dot is a distinct hue, not the muted grey", async () => {
+    const css = await Bun.file(`${ROOT}/src/styles.css`).text();
+    const dotOf = (token: string) => {
+      const line = css
+        .split("\n")
+        .find(
+          (l) =>
+            l.trimStart().startsWith(`--color-${token}:`) && l.includes("oklch("),
+        );
+      const m = line!.match(/oklch\(([\d.]+)\s+([\d.]+)\s+([\d.]+)\)/);
+      return { chroma: Number(m![2]), hue: Number(m![3]) };
+    };
+
+    const success = dotOf("success");
+    const muted = dotOf("muted");
+    // Chroma below ~0.02 is perceptually grey; the idle dot must not be.
+    expect(success.chroma).toBeGreaterThan(0.05);
+    expect(muted.chroma).toBeLessThan(0.02);
+    expect(success.hue).not.toBeCloseTo(muted.hue, 0);
+  });
+});
+
+function oklchToRgbLight(L: number, C: number, h: number): [number, number, number] {
+  const a = C * Math.cos((h * Math.PI) / 180);
+  const b = C * Math.sin((h * Math.PI) / 180);
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.291485548 * b;
+  const l = l_ ** 3;
+  const m = m_ ** 3;
+  const s = s_ ** 3;
+  const enc = (x: number) => {
+    const v = x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
+    return Math.max(0, Math.min(255, Math.round(v * 255)));
+  };
+  return [
+    enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+    enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+    enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s),
+  ];
+}
+
+function contrast(a: [number, number, number], b: [number, number, number]): number {
+  const lum = ([r, g, bl]: [number, number, number]) => {
+    const f = (c: number) => {
+      const s = c / 255;
+      return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(bl);
+  };
+  const la = lum(a);
+  const lb = lum(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}

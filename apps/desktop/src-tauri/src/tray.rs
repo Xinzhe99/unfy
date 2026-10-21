@@ -108,18 +108,26 @@ fn state_icon<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::image::Image<'sta
         (engine.state(), engine.is_paused())
     };
 
+    // Same palette as the window's status dots, so the tray and the overview never
+    // disagree about what a colour means. The values mirror the `oklch` tokens in
+    // `styles.css` (the tray works on raw pixels and cannot read CSS):
+    //
+    //   --color-success  idle, nothing pending
+    //   --color-active   a layout is in effect, or a gather is running
+    //   --color-warning  paused
+    //   --color-danger   error or degraded
     let (r, g, b) = match state {
-        // Active: the accent blue, matching the UI.
-        (conflux_domain::EngineState::Active, false) => (74u8, 108u8, 220u8),
-        // Paused or degraded: amber, "look at me".
-        (conflux_domain::EngineState::Degraded, _)
-        | (conflux_domain::EngineState::Error, _)
-        | (_, true) => (214u8, 158u8, 46u8),
-        // Busy: accent, but the tooltip carries the detail.
-        (conflux_domain::EngineState::Migrating, _)
-        | (conflux_domain::EngineState::Restoring, _) => (74u8, 108u8, 220u8),
-        // Idle: neutral grey.
-        _ => (130u8, 136u8, 150u8),
+        // Idle and healthy: green, matching the green "就绪" dot in the window.
+        (conflux_domain::EngineState::Idle, false) => (38u8, 123u8, 76u8),
+        // A live layout, and the working states that lead to one: blue.
+        (conflux_domain::EngineState::Active, false)
+        | (conflux_domain::EngineState::Migrating, _)
+        | (conflux_domain::EngineState::Restoring, _)
+        | (conflux_domain::EngineState::Planning, _) => (56u8, 110u8, 200u8),
+        // Needs attention: amber when paused or degraded, red when broken.
+        (conflux_domain::EngineState::Error, _) => (175u8, 52u8, 51u8),
+        // Remaining combinations: degraded, or paused in any state.
+        _ => (150u8, 102u8, 38u8),
     };
 
     let source = app.default_window_icon()?;

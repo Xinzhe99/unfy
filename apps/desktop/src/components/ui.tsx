@@ -219,6 +219,27 @@ export function Segmented<T extends string>({
 }
 
 /**
+ * How much colour a status dot carries.
+ *
+ * The dot is the only place semantic hue appears, so its value matters:
+ *
+ * * `success` - ready, nothing pending. Green, because "idle and healthy" is
+ *   genuinely good news and a grey dot reads as disabled.
+ * * `live` - windows are gathered right now. Blue, deliberately not the
+ *   monochrome accent: an active layout is a state the user must recognise at a
+ *   glance, and a near-black dot was indistinguishable from body text.
+ * * `warning` / `danger` - something needs attention.
+ * * `neutral` - genuinely unknown or inactive.
+ */
+export type StatusTone =
+  | "neutral"
+  | "accent"
+  | "live"
+  | "success"
+  | "warning"
+  | "danger";
+
+/**
  * Status indicator: a coloured dot plus neutral text.
  *
  * Deliberately not a filled pill. The state is already named in words; the dot
@@ -228,19 +249,21 @@ export function Status({
   tone = "neutral",
   children,
 }: {
-  tone?: "neutral" | "accent" | "success" | "warning" | "danger";
+  tone?: StatusTone;
   children: ReactNode;
 }) {
-  const dot: Record<string, string> = {
+  const dot: Record<StatusTone, string> = {
     neutral: "bg-[var(--color-muted)]",
     accent: "bg-[var(--color-accent)]",
+    live: "bg-[var(--color-active)]",
     success: "bg-[var(--color-success)]",
     warning: "bg-[var(--color-warning)]",
     danger: "bg-[var(--color-danger)]",
   };
-  const text: Record<string, string> = {
+  const text: Record<StatusTone, string> = {
     neutral: "text-[var(--color-muted)]",
     accent: "text-[var(--color-fg-soft)]",
+    live: "text-[var(--color-fg)]",
     success: "text-[var(--color-fg-soft)]",
     warning: "text-[var(--color-fg-soft)]",
     danger: "text-[var(--color-danger)]",
