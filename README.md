@@ -28,9 +28,10 @@
 | 全局热键 | `Ctrl+Alt+G` 移动 3 个窗口；`Ctrl+Alt+Shift+G` 让 11/11 个窗口精确回到原位 |
 | 识别屏幕编号 | 每块屏显示大号数字 4 秒后自动消失（双屏实测） |
 | 显示器选择器 | 每块屏的真实截图 + 与屏幕编号一致的角标（双屏实测，1920×1080 各一张） |
+| 界面全流程 | 引导 3 步 → 整理 3 个窗口 → 恢复 3 个窗口（精确 3 / 待处理 0），浅色与深色各截图核对 |
 | 排除的应用 | 从正在运行的应用中勾选，实测 `msedge.exe` 在整理后位置未变 |
 
-测试总数 **95**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
+测试总数 **104**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
 
 完整记录（含未验证项与复现命令）见 [docs/verification.md](docs/verification.md)。
 
