@@ -302,6 +302,36 @@ describe("pages render", () => {
     expect(html).toContain("msedge.exe");
     expect(html).not.toContain(">notepad.exe<");
     expect(html).toContain("没有接受位置调整");
+    // A single remaining name needs no bulk action.
+    expect(html).not.toContain("全部排除");
+  });
+
+  test("overview offers a bulk exclude when several applications refused", () => {
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={{
+          ...settings,
+          last_refused_apps: ["a.exe", "b.exe", "c.exe"],
+          excluded_apps: [],
+        }}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+      />,
+    );
+    expect(html).toContain("全部排除");
   });
 
   test("displays page", () => {

@@ -652,15 +652,21 @@ export default function App() {
                   )
                 }
                 onOpenDisplays={() => setPage("displays")}
-                onExclude={(appName) => {
-                  const current = settings?.excluded_apps ?? [];
-                  void saveSettings({
-                    excluded_apps: current.some(
-                      (rule) => rule.toLowerCase() === appName.toLowerCase(),
-                    )
-                      ? current
-                      : [...current, appName],
-                  });
+                onExclude={(appNames) => {
+                  // Merge in one pass: each name is compared against the current
+                  // rules and against the names added earlier in this batch, so a
+                  // batch of three cannot produce duplicate rules.
+                  const next = [...(settings?.excluded_apps ?? [])];
+                  for (const name of appNames) {
+                    if (
+                      !next.some(
+                        (rule) => rule.toLowerCase() === name.toLowerCase(),
+                      )
+                    ) {
+                      next.push(name);
+                    }
+                  }
+                  void saveSettings({ excluded_apps: next });
                 }}
               />
             ) : null}

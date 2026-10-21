@@ -54,8 +54,14 @@ export function OverviewPage({
   onIdentify: () => void;
   onExport: () => void;
   onOpenDisplays: () => void;
-  /** Add an application to the exclusion rules, from a report row. */
-  onExclude: (appName: string) => void;
+  /**
+   * Add applications to the exclusion rules, from a report row.
+   *
+   * Takes a list even for the single-row case: calling it once per row would
+   * issue one save per name, each built from the settings snapshot the caller
+   * read before the first save landed, so only the last rule would survive.
+   */
+  onExclude: (appNames: string[]) => void;
 }) {
   const supported = status?.supported ?? false;
   const state = status?.state ?? "idle";
@@ -232,6 +238,18 @@ export function OverviewPage({
         <Card
           title="没有接受位置调整的应用"
           description="这些应用会自己纠正窗口位置。排除它们可以避免每次都重试。"
+          aside={
+            lastRefused.length > 1 ? (
+              <Button
+                size="sm"
+                variant="quiet"
+                disabled={busy}
+                onClick={() => onExclude(lastRefused)}
+              >
+                全部排除
+              </Button>
+            ) : null
+          }
         >
           <ul className="space-y-1">
             {lastRefused.map((app) => (
@@ -246,7 +264,7 @@ export function OverviewPage({
                   size="sm"
                   variant="quiet"
                   disabled={busy}
-                  onClick={() => onExclude(app)}
+                  onClick={() => onExclude([app])}
                 >
                   排除
                 </Button>
