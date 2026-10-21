@@ -80,9 +80,12 @@ fn a_chosen_target_does_not_imply_completion() {
 fn window_geometry_round_trips_and_is_range_checked() {
     let path = temp_path("geometry");
 
-    let mut settings = conflux_settings::Settings::default();
+    let settings = conflux_settings::Settings::default();
     assert_eq!(settings.window_geometry, None);
-    settings.window_geometry = Some((200, 120, 1040, 800));
+    let settings = conflux_settings::Settings {
+        window_geometry: Some((200, 120, 1040, 800)),
+        ..Default::default()
+    };
     settings.save(&path).expect("save");
     assert_eq!(
         conflux_settings::Settings::load(&path)
@@ -97,8 +100,10 @@ fn window_geometry_round_trips_and_is_range_checked() {
         (0, 0, 9000, 800),       // wider than any display
         (999_999, 0, 1040, 800), // unreachable position
     ] {
-        let mut settings = conflux_settings::Settings::default();
-        settings.window_geometry = Some(bad);
+        let settings = conflux_settings::Settings {
+            window_geometry: Some(bad),
+            ..Default::default()
+        };
         assert!(
             settings.save(&path).is_err(),
             "geometry {bad:?} should be rejected"
