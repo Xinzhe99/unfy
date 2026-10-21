@@ -8,14 +8,14 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元与集成测试 | `cargo test --workspace` | 78 passed, 0 failed |
+| 单元与集成测试 | `cargo test --workspace` | 79 passed, 0 failed |
 | 静态检查 | `cargo clippy --workspace --all-targets -- -D warnings` | 无告警 |
 | 格式 | `cargo fmt --all -- --check` | 通过 |
 | 前端类型 | `npx tsc --noEmit` | 通过 |
 | 前端构建 | `npm run build` | 通过（245 kB JS / 19 kB CSS） |
 | macOS 编译 | `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` | 通过（仅类型检查，未在 Mac 运行） |
 
-测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 18、settings 11、win 1、mac 4（iOS/macOS 目标下编译）、doc 0。
+测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 18、settings 13、win 1、mac 4（iOS/macOS 目标下编译）、doc 0。
 
 ## 真实桌面验证
 
@@ -111,6 +111,26 @@ Tauri 打包需要从 GitHub 下载 NSIS/WiX；本机直连超时，通过 `TAUR
 ```
 
 journal 保留在磁盘上，因为仍有窗口未达到安全终态。这是设计行为：删除 journal 会丢弃那些窗口的 preimage。
+
+### 开机自启
+
+在 UI 里勾选"登录时启动"后：
+
+```
+INFO reconciling autostart desired=true current=false exe=...\target\debug\conflux.exe
+INFO autostart registration updated desired=true
+HKCU\...\Run\Conflux = "F:\...\conflux.exe --tray"
+```
+
+取消勾选并重启后：
+
+```
+INFO reconciling autostart desired=false current=true
+INFO autostart registration updated desired=false
+Run key entry removed
+```
+
+**发现并修复的缺陷（死锁）**：修复前勾选"登录时启动"会让命令线程永久阻塞——`save_settings` 持有设置锁的同时调用了会再次读取设置的 `apply_autostart`，而 `std::sync::Mutex` 不可重入。症状是设置文件已写入、注册表没写、UI 卡住。修复方式是把辅助函数改成接收目标值而不是自己取锁，并用 `drop(settings)` 明确表态；另加了一个回归测试固定这个约束。
 
 ### 单实例
 

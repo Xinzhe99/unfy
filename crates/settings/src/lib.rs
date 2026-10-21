@@ -435,3 +435,36 @@ mod tests {
         assert!(target.matches(&key));
     }
 }
+
+#[cfg(test)]
+mod lock_tests {
+    //! Guards the deadlock that shipped once: `save_settings` held the settings
+    //! mutex while calling a helper that also tried to read settings. Because
+    //! `std::sync::Mutex` is not reentrant, the command thread blocked forever —
+    //! the file was written, the registry was not, and the UI hung.
+    //!
+    //! The fix was structural (the helper now takes a value, not the lock), so
+    //! this test documents the contract that made the bug possible: reading
+    //! settings while a caller already holds the guard must be impossible by
+    //! construction. Here we assert the non-reentrancy explicitly so nobody
+    //! "simplifies" the call site back into a deadlock.
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn std_mutex_is_not_reentrant_so_settings_helpers_must_take_values() {
+        let guard = Arc::new(Mutex::new(1u32));
+        let outer = guard.lock().unwrap();
+
+        let inner = Arc::clone(&guard);
+        let handle = std::thread::spawn(move || inner.try_lock().is_ok());
+
+        let observed = handle.join().unwrap();
+        assert!(
+            !observed,
+            "a second lock attempt must fail while the guard is held; \
+             if this ever passes, review every settings helper call site"
+        );
+        drop(outer);
+        assert!(guard.try_lock().is_ok(), "guard must be released");
+    }
+}

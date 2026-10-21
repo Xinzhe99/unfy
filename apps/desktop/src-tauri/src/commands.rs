@@ -426,13 +426,19 @@ pub fn save_settings(
         .save(&app.settings_path)
         .map_err(|e| e.to_string())?;
 
+    let dto = SettingsDto::from(&*settings);
+
+    // Drop the settings lock *before* touching the OS registration. The
+    // registration path does not read settings, but keeping the guard out of the
+    // call makes that independence explicit and prevents a future edit from
+    // reintroducing a self-deadlock.
+    drop(settings);
+
     if autostart_changed.is_some() {
-        // The settings file is already saved; if the OS refuses the registration
-        // the preference stays as written and the next launch retries.
-        crate::session::apply_autostart_handle(&handle);
+        crate::session::set_autostart(&handle, dto.autostart);
     }
 
-    Ok(SettingsDto::from(&*settings))
+    Ok(dto)
 }
 
 #[tauri::command]

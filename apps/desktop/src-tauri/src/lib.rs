@@ -140,7 +140,7 @@ pub fn run() {
             // Apply the persisted autostart preference on every launch: the
             // registration lives outside the settings file, so the two can drift
             // if the user removes it from Task Manager.
-            session::apply_autostart(app.handle());
+            session::apply_saved_autostart(app.handle());
             update::check_in_background(app.handle().clone());
             Ok(())
         })

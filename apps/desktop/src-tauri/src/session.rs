@@ -118,28 +118,26 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
     }
 }
 
-/// Reconcile autostart from a borrowed state reference (used by the settings
-/// command, which already holds the state lock).
-pub fn apply_autostart_handle<R: Runtime>(app: &AppHandle<R>) {
-    apply_autostart(app);
-}
-
-/// Reconcile the OS autostart registration with the saved preference.
+/// Apply an autostart preference to the OS.
+///
+/// Takes the desired value instead of reading settings. The caller that already
+/// holds the settings lock must drop it first: `std::sync::Mutex` is not
+/// reentrant, so reading settings from here would deadlock the command thread.
 ///
 /// Failures are logged, never fatal: a locked-down machine may forbid the
 /// registry write, and the app must still run.
-pub fn apply_autostart<R: Runtime>(app: &AppHandle<R>) {
-    let desired = {
-        let state = app.state::<AppState>();
-        let settings = state.settings.lock();
-        match settings {
-            Ok(settings) => settings.autostart,
-            Err(_) => return,
-        }
-    };
-
+pub fn set_autostart<R: Runtime>(app: &AppHandle<R>, desired: bool) {
     let manager = app.autolaunch();
+    // Log the resolved executable too. The plugin registers `current_exe`, and a
+    // debug build run from `target\debug` registers that path, not the installed
+    // one. Seeing the path is the difference between "the registry write failed"
+    // and "it wrote the wrong binary".
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "<unknown>".into());
     let current = manager.is_enabled().unwrap_or(false);
+    tracing::info!(desired, current, %exe, "reconciling autostart");
+
     if current == desired {
         return;
     }
@@ -149,7 +147,23 @@ pub fn apply_autostart<R: Runtime>(app: &AppHandle<R>) {
     } else {
         manager.disable()
     };
-    if let Err(e) = result {
-        tracing::warn!(desired, error = %e, "could not change autostart registration");
+    match &result {
+        Ok(()) => tracing::info!(desired, "autostart registration updated"),
+        Err(e) => tracing::warn!(desired, error = %e, "could not change autostart registration"),
     }
+}
+
+/// Reconcile the OS autostart registration with the saved preference at startup.
+///
+/// No settings lock is held at this point, so reading it here is safe.
+pub fn apply_saved_autostart<R: Runtime>(app: &AppHandle<R>) {
+    let desired = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock();
+        match settings {
+            Ok(settings) => settings.autostart,
+            Err(_) => return,
+        }
+    };
+    set_autostart(app, desired);
 }
