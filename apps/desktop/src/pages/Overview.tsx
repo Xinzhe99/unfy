@@ -36,6 +36,7 @@ export function OverviewPage({
   onRescue,
   onIdentify,
   onExport,
+  onOpenConfigDir,
   onOpenDisplays,
   onExclude,
   onKeepLayout,
@@ -57,6 +58,8 @@ export function OverviewPage({
   onRescue: () => void;
   onIdentify: () => void;
   onExport: () => void;
+  /** Reveal the config directory, which also holds the logs and diagnostics. */
+  onOpenConfigDir: () => void;
   onOpenDisplays: () => void;
   /**
    * Add applications to the exclusion rules, from a report row.
@@ -415,6 +418,9 @@ export function OverviewPage({
           </Button>
           <Button size="sm" onClick={onExport} disabled={busy}>
             导出诊断包
+          </Button>
+          <Button size="sm" variant="quiet" onClick={onOpenConfigDir} disabled={busy}>
+            打开配置目录
           </Button>
         </div>
         <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-[var(--color-muted)]">

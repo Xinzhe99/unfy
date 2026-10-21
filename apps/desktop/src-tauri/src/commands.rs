@@ -1222,14 +1222,39 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
 
     // 4. Log directory. If it is unwritable, the next problem will leave no
     //    evidence, and the support flow starts from nothing.
+    //
+    //    Probed at most once every ten minutes. The probe creates and deletes a
+    //    file, and `health_check` is polled every four seconds while the window is
+    //    open: running it each time was constant disk churn for a fact that changes
+    //    approximately never. A failure is remembered for the same window, so a
+    //    recovered disk shows up within ten minutes rather than instantly.
     let dir = conflux_settings::config_dir();
-    let writable = std::fs::create_dir_all(&dir)
-        .and_then(|_| {
-            let probe = dir.join(".write-probe");
-            std::fs::write(&probe, b"ok")?;
-            std::fs::remove_file(&probe)
-        })
-        .is_ok();
+    let writable = {
+        const TTL: std::time::Duration = std::time::Duration::from_secs(600);
+        let cached = app
+            .storage_probe
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .filter(|(at, _)| at.elapsed() < TTL)
+            .map(|(_, ok)| ok);
+        match cached {
+            Some(ok) => ok,
+            None => {
+                let ok = std::fs::create_dir_all(&dir)
+                    .and_then(|_| {
+                        let probe = dir.join(".write-probe");
+                        std::fs::write(&probe, b"ok")?;
+                        std::fs::remove_file(&probe)
+                    })
+                    .is_ok();
+                if let Ok(mut guard) = app.storage_probe.lock() {
+                    *guard = Some((std::time::Instant::now(), ok));
+                }
+                ok
+            }
+        }
+    };
     items.push(HealthItemDto {
         id: "storage".into(),
         label: "配置目录".into(),
@@ -1539,6 +1564,36 @@ pub fn reset_settings(
     sync_tray(&handle);
 
     settings_dto(&app, &handle)
+}
+
+/// Reveal a directory in the OS file manager.
+///
+/// The diagnostics line prints a path, but a path in a toast is not findable; the
+/// user has to retype it. This is the same action the OS context menu would offer.
+#[tauri::command]
+pub fn open_path(app: State<'_, AppState>, path: Option<String>) -> Result<bool, String> {
+    // Only directories this app owns may be opened. Accepting an arbitrary path
+    // from the webview would turn a convenience into a file-system primitive, so
+    // the request names a *location* rather than a path, and an explicit path is
+    // still validated against the config root.
+    let config = conflux_settings::config_dir();
+    let target = match path.as_deref() {
+        // `None` or empty: the config directory, which holds logs and diagnostics.
+        None | Some("") => config,
+        Some(requested) => {
+            let requested = std::path::Path::new(requested);
+            let normalized = requested
+                .canonicalize()
+                .unwrap_or_else(|_| requested.to_path_buf());
+            let root = config.canonicalize().unwrap_or_else(|_| config.clone());
+            if !normalized.starts_with(&root) {
+                return Err("path_outside_app_dirs".to_string());
+            }
+            normalized
+        }
+    };
+    let _ = app;
+    Ok(platform::open_directory(&target.to_string_lossy()))
 }
 
 /// Dismiss the last error shown on the overview.

@@ -253,6 +253,11 @@ export const api = {
   keepCurrentLayout: () => invoke<void>("keep_current_layout"),
   dismissLastError: () => invoke<void>("dismiss_last_error"),
   resetSettings: () => invoke<SettingsDto>("reset_settings"),
+  /**
+   * Reveal a directory this app owns. Omit `path` for the config directory;
+   * an explicit path is validated against that root on the backend.
+   */
+  openPath: (path?: string) => invoke<boolean>("open_path", { path: path ?? null }),
   /** Declare or end a remote session by hand; returns the new active state. */
   toggleRemoteSession: () => invoke<boolean>("toggle_remote_session"),
 };

@@ -139,3 +139,22 @@ pub fn running_applications() -> Vec<String> {
     names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     names
 }
+
+/// Open a directory in the user's file manager.
+///
+/// Uses `ShellExecuteW` with `explorer`: the documented way to ask the shell to
+/// reveal a path, and it honours the user's per-folder settings. Returns false when
+/// the call is rejected (path missing, no shell) rather than pretending it worked.
+pub fn open_directory(path: &std::path::Path) -> bool {
+    use windows::core::HSTRING;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let operation = HSTRING::from("open");
+    let target = HSTRING::from(path.as_os_str().to_string_lossy().to_string());
+    // SAFETY: all strings live for the duration of the call; no buffers are
+    // retained by the shell.
+    let result = unsafe { ShellExecuteW(None, &operation, &target, None, None, SW_SHOWNORMAL) };
+    // ShellExecuteW returns a value > 32 on success (an HINSTANCE cast to isize).
+    result.0 as isize > 32
+}

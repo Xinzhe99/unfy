@@ -44,6 +44,12 @@ pub struct AppState {
     /// marker that survived a restart would claim a remote session that ended
     /// with the previous process.
     pub manual_remote: Arc<std::sync::atomic::AtomicBool>,
+    /// When the storage probe last ran, as seconds since the process started.
+    ///
+    /// The probe writes and deletes a file; `health_check` is polled every four
+    /// seconds while the window is open, so running it each time meant constant
+    /// disk churn for a fact that changes roughly never.
+    pub storage_probe: Arc<std::sync::Mutex<Option<(std::time::Instant, bool)>>>,
     /// Owns the cancellable pre-restore wait. A new gather or restore cancels a
     /// pending one, so a stale timer cannot undo a fresh layout.
     pub schedule: Arc<std::sync::Mutex<schedule::Schedule>>,
@@ -133,6 +139,7 @@ impl AppState {
             last_remote: Arc::new(std::sync::Mutex::new(None)),
             last_observation: Arc::new(std::sync::Mutex::new(None)),
             manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            storage_probe: Arc::new(std::sync::Mutex::new(None)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
             last_error: Arc::new(std::sync::Mutex::new(None)),
             deferred_restore: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -279,6 +286,7 @@ pub fn run() {
             commands::health_check,
             commands::keep_current_layout,
             commands::dismiss_last_error,
+            commands::open_path,
             commands::reset_settings,
             commands::toggle_remote_session,
         ])

@@ -749,6 +749,17 @@ export default function App() {
                     }),
                   )
                 }
+                onOpenConfigDir={() =>
+                  void run(
+                    () => api.openPath(),  // the config directory
+                    (opened) => ({
+                      tone: opened ? "neutral" : "warning",
+                      text: opened
+                        ? "已在文件管理器中打开配置目录。"
+                        : "无法打开配置目录。",
+                    }),
+                  )
+                }
                 onOpenDisplays={() => setPage("displays")}
                 onToggleRemote={() =>
                   void run(

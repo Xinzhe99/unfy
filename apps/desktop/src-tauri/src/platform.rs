@@ -96,6 +96,21 @@ pub fn permission_name() -> &'static str {
     }
 }
 
+/// Reveal a directory in the OS file manager.
+///
+/// Unsupported platforms return false; the UI must not claim it opened anything.
+pub fn open_directory(path: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        conflux_platform_win::open_directory(std::path::Path::new(path))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 /// Show a numbered badge on every display for a few seconds.
 ///
 /// This answers the question the product cannot answer by inspection: which
