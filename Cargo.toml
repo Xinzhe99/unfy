@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/domain",
+    "crates/platform",
+    "crates/platform/win",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+conflux-domain = { path = "crates/domain" }
+conflux-platform = { path = "crates/platform" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

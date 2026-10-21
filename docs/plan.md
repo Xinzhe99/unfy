@@ -23,63 +23,88 @@
 
 ---
 
-## 2. 建议的 v1 范围（相对规格的收缩）
+## 2. 已确认的 v1 范围（决策已拍板）
 
-规格的 M3 是"三平台 + 商业化 + 规则热更新 + License"。建议把第一版定义为 **M0.5 可自用产品**，先把闭环跑通，再谈商业化。
+规格的 M3 是"三平台 + 商业化 + 规则热更新 + License"。v1 收缩为 **M0.5 可自用产品**，先把闭环跑通，再谈商业化。
 
-| 项 | 规格（M3） | 建议 v1 | 理由 |
+**已确认的四项决策**：
+
+| 决策 | 结论 | 直接影响 |
+|---|---|---|
+| D1 平台 | **Windows + macOS** | 需要 Windows 与 macOS 两套平台适配；Linux 推迟；架构上仍预留 `crates/platform/x11` 但不实现 |
+| D2 触发 | **纯手动**（全局热键 + 托盘） | 不实现规则包、日志 tail、进程/TCP 探测、置信度融合；检测子系统整块推迟 |
+| D3 恢复 | **冲突感知**（默认尊重用户改动） | 必须实现 journal、写后回读、外部改动检测、可见性夹取；不实现"强制还原全部" |
+| D4 商业化 | **暂不做**，免费内测 | 不实现 License 服务、MoR、试用、设备额度；Tauri updater 保留（内测需要） |
+
+| 项 | 规格（M3） | v1 实际范围 | 理由 |
 |---|---|---|---|
-| 平台 | Windows + macOS + Linux | **Windows 单平台** | 多显示器 + 单屏远程的主场景在企业 Windows 上最集中；Windows 窗口 API 最可控；先证明价值 |
-| 触发 | 自动检测 + 规则包 | **全局热键 + 托盘一键**，加 1 个已验证工具的可选自动触发（RustDesk 或 TeamViewer） | 检测是最大的不确定项，不该成为第一版的阻塞 |
+| 平台 | Win + macOS + Linux | **Windows + macOS** | macOS 需 TCC 授权向导 + Developer ID 签名；Linux X11 推迟 |
+| 触发 | 自动检测 + 规则包 | **纯手动** | 核查证明无可靠通用信号；误报代价高 |
 | 布局 | 网格/主次/相对顺序/自定义模板 | **网格 + 相对顺序** | 主次分区需要用户调参，先不做 |
-| 恢复 | journal + 冲突感知 + 崩溃恢复 | **journal + 冲突感知**（崩溃恢复必须有） | 崩溃恢复是安全底线，不能省 |
-| 更新 | Tauri updater + 灰度 + 回滚 | **Tauri updater**（签名），不做灰度 | 灰度需要服务端，单人维护成本高 |
-| 授权 | License + MoR + 试用 | **无**（免费自用/内测） | 没有用户前不做收费 |
+| 恢复 | journal + 冲突感知 + 崩溃恢复 | **journal + 冲突感知 + 崩溃恢复** | 全部保留，安全底线 |
+| 更新 | Tauri updater + 灰度 + 回滚 | **Tauri updater**（签名），不做灰度 | 灰度需要服务端 |
+| 授权 | License + MoR + 试用 | **无** | 免费内测 |
 | 虚拟屏 | M4 | **不做** | 与核心价值无关 |
 | helper | M4 | **不做**（跳过提权窗口） | 提权窗口是长尾 |
-| 设置 UI | 10 个页面 | **3 个页面**：概览/目标屏与布局/通用 | 先能用 |
+| 设置 UI | 10 个页面 | **3 个页面**：概览 / 目标屏与布局 / 通用 | 先能用 |
 
-预估：这个范围的工作量是规格 M3 的 15–20%，但仍包含全部安全关键路径（journal、回读、恢复）。
+因为不做自动检测，规格里的这些模块在 v1 **不需要实现**：`crates/detection`、`rules/`、规则包 JSON Schema、8 条工具种子规则、签名规则热更新、kill switch、`V-DETECT`/`V-RULE` 验证项。它们保留在规格里作为 v2 的设计资产。
+
+工作量对比：v1 ≈ 规格 M3 的 12–18%，但**安全关键路径一条不少**（journal、回读、恢复、退出屏障）。macOS 的 AX 实现与 TCC 向导是本范围里最大的单块新增成本。
 
 ---
 
-## 3. 必须现在拍板的决策
+## 3. 决策记录
 
-### D1. 平台顺序
+### D1. 平台顺序 → **Windows + macOS**
 
-| 选项 | 代价 | 收益 |
+后果：
+
+- 需要两套平台适配器：`crates/platform/win`（windows-rs）、`crates/platform/mac`（objc2 + AX/CG FFI）。
+- macOS 必须先解决三件事，否则功能不可用：Accessibility 授权向导、Developer ID 签名（ad-hoc 签名会让授权每次更新后失效，见 [verify/macos.md §9](verify/macos.md)）、原生全屏窗口跳过。
+- Linux 不实现，但目录与 trait 边界预留；Wayland 无论何时都不承诺。
+- 发布形态：Windows NSIS（每用户）+ macOS DMG（Universal，需 Intel 与 Apple Silicon 各实测）。
+
+### D2. 触发方式 → **纯手动**
+
+后果：
+
+- 交互只有三个入口：全局热键、托盘菜单、设置窗口按钮。
+- 不实现：进程扫描、TCP 表、日志 tail、规则 DSL、置信度融合、干跑模式、规则包签名与热更新、kill switch。
+- 热键默认不预占系统组合键；注册失败必须显式提示并保留托盘入口（规格 P0-09-B 的验收仍适用）。
+- 产品文案不得出现"自动检测远程连接"。可以说"一键把窗口收拢到你指定的屏幕"。
+
+### D3. 恢复策略 → **冲突感知**
+
+后果（全部来自规格 ADR-011，保留不变）：
+
+- 第一次移动窗口前必须把 preimage 持久化并拿到 durable ack，失败则零变更。
+- 每个窗口操作后回读；偏差 >2px 有界重试（最多 2–3 次），不无限争抢。
+- 迁移后与 `last_applied` 偏差超过 4 逻辑单位且持续 500ms → 标记 `external modification`，恢复时保留用户位置。
+- 原显示器缺失时夹到当前可见工作区，标注"原屏不可用"，不报告精确恢复。
+- 最大化窗口：restore → move → maximize，或改 `rcNormalPosition` 保持 `SW_SHOWMAXIMIZED`。
+- 崩溃后：不认领身份不明的窗口，只提供候选预览 + 通用越界救援。
+
+### D4. 商业化 → **暂不做**
+
+后果：
+
+- 不实现 License 服务、MoR 接入、试用、设备额度、离线凭证、退款流程。
+- 设置界面无"账户与 Pro"页面；所有功能免费。
+- Tauri updater 保留（内测需要自动更新），但只有 stable 单通道，无灰度、无 kill switch。
+- 规格 [roadmap.md](spec/roadmap.md) 的商业化章节保留为未来参考，不进入当前排期。
+
+### 仍待决定：目标屏选择（D5）
+
+核查证明无法知道远程端在看哪块屏，所以必须用产品手段确定：
+
+| 选项 | 用户体验 | 实现成本 |
 |---|---|---|
-| A. Windows 先行 | 放弃 macOS/Linux 早期用户 | 最快看到可用产品；API 最可控；企业市场最大 |
-| B. Windows + macOS | 双倍适配成本；macOS 需 TCC 授权流程 + 签名证书 | 覆盖"设计师/开发者"人群 |
-| C. 三平台并行 | 至少 3 倍适配；Linux Wayland 用户无法使用 | 只有团队 ≥3 人时合理 |
+| A. 默认主屏 | 零配置，但远程端可能看的是副屏 | 最低 |
+| B. 向导中指定 + 远程端确认标记 | 一次性配置，之后稳定 | 需要在目标屏画临时标记（文字/色块，非截图） |
+| C. 热键循环切换目标屏 | 随时纠正 | 需要托盘显示当前目标与序号 |
 
-**建议 A**。macOS 的 AX 实现可以在 Windows 版稳定后增量加入，架构上预留 `crates/platform/{win,mac,x11}` 即可。
-
-### D2. 触发方式的产品定位
-
-| 选项 | 说明 | 风险 |
-|---|---|---|
-| A. 纯手动（热键/托盘） | 用户按一下就搬，零误报 | 不算"无感"，卖点弱 |
-| B. 手动为主 + 单工具自动 | 对 RustDesk/TeamViewer 做规则，其余手动 | 需要为每个工具维护规则；工具升级会失效 |
-| C. 追求通用自动检测 | 进程 + 端口 + 日志启发式 | 误报代价极高（用户在本地工作时窗口被搬走），核查已证明没有可靠信号 |
-
-**建议 B**，且自动触发默认**关闭**，由用户在向导里显式开启，并提供"干跑"模式先观察。这与规格的保守策略一致，但把它从"可选"提升为"默认"。
-
-### D3. 目标屏选择
-
-核查证明无法知道远程端在看哪块屏。三种产品处理：
-
-| 选项 | 用户体验 | 实现 |
-|---|---|---|
-| A. 默认主屏 | 零配置，但远程端可能看的是副屏 | 最简单 |
-| B. 用户在向导里指定 + 远程端确认标记 | 一次性配置，之后稳定 | 需要在目标屏画一个临时标记让用户远程确认 |
-| C. 热键循环切换 | 随时纠正 | 需要托盘反馈 |
-
-**建议 B + C 都做，A 作为默认值**。B 是"确认契约"，C 是"纠错通道"。这是规格里已经写对的少数设计之一。
-
-### D4. 商业化时点
-
-**建议：v1 完全免费，不做 License 服务。** 在积累 100+ 真实用户、拿到误报率和恢复成功率数据之前，任何定价都是猜测。规格里的 US$29/年 可以保留为假设，但不进入第一版实现。
+**建议 A 作为默认值 + B 作为首次向导 + C 作为纠错通道**。三者互补而非互斥，B 是"确认契约"，C 是"远程中切屏后的唯一补救手段"。
 
 ---
 
@@ -95,8 +120,7 @@ Conflux/
     window-engine/         # 枚举、过滤、布局、迁移、恢复
     platform/
       win/                 # Win32 FFI（windows-rs）
-      mac/                 # AX + CG（后续）
-      x11/                 # xcb/x11rb（后续）
+      mac/                 # objc2 + AX/CG FFI
       fake/                # 测试替身
     storage/               # journal、配置
   tests/
@@ -116,24 +140,24 @@ Conflux/
 
 ## 5. 立刻可做的三件事（M0 验证，1–2 天）
 
-不需要写完产品就能验证风险：
+不需要写完产品就能验证风险。因为 D2 已定为纯手动，原"检测信号采样"不再是阻塞项，替换为 macOS 权限探针。
 
-1. **窗口搬迁可行性探针**：一个 Rust 二进制，枚举窗口、打印 `DWMWA_EXTENDED_FRAME_BOUNDS` 与 DPI、把一个记事本窗口从副屏移到主屏并回读。验证 §4 的第 2、3、4 条。
-2. **检测信号采样**：用 RustDesk/TeamViewer 真实连一次，记录 `SM_REMOTESESSION`、`WTSClientProtocolType`、进程列表、TCP 表、目标工具日志尾部。验证"到底能拿到什么信号"。
-3. **journal 断电测试**：写入后立刻 `TerminateProcess`，重启读回。验证原子写假设。
+1. **Windows 窗口搬迁探针**（Rust）：枚举顶层窗口，打印 `DWMWA_EXTENDED_FRAME_BOUNDS`、`GetWindowRect`、`GetDpiForMonitor`，把一个窗口从 150% 屏移到 100% 屏再移回，回读偏差。验证 §4 的第 2、3、4、6 条。
+2. **macOS AX 探针**：一个最小 .app，申请 Accessibility 授权，枚举 `kAXWindowsAttribute`，读写 `kAXPositionAttribute`/`kAXSizeAttribute`，记录哪些应用返回 `kAXErrorAttributeUnsupported`，并验证 size→position→size 的两次设置是否必要。
+3. **journal 断电测试**：写入后立刻 `TerminateProcess`，重启读回。验证原子写与 durable ack 假设。
 
-这三件事的结论会直接决定 D2 的选择。
+产出：一份三平台能力矩阵（能/不能/需确认），直接决定 `crates/platform/{win,mac}` 的 trait 边界。Windows 侧已在 [verify/windows.md](verify/windows.md) 有文档级结论，探针用于确认应用级行为。
 
 ---
 
 ## 6. 与规格文档的关系
 
 - [docs/spec](spec/) 保留为**完整设计参考**：数据模型、状态机、验收用例、风险登记都可以直接复用。
-- 但其中 M3 的范围、6.5 FTE 假设、商业化章节不适用于当前阶段。
-- 我已经把核查结论回写进 `spec/technical-design.md`（DPI 算法、显示器身份、UIPI、自我纠正、三平台 API 表、工具端口表、Wayland 边界、禁屏 flags）。规格里标 `[待验证]` 的项与 `verify/` 里的 `不确定` 是一一对应的。
+- 与已确认范围冲突的部分：M3 的三平台范围、6.5 FTE 假设、商业化章节、检测与规则子系统、Linux/Wayland 适配 —— 不进入 v1 实现，保留为 v2 设计资产。
+- 已把核查结论回写进 `spec/technical-design.md`（DPI 算法、显示器身份、UIPI、应用自我纠正、三平台 API 表、工具端口表、Wayland 边界、禁屏 flags、IDD 签名路径）。规格里标 `[待验证]` 的项与 `verify/` 里的 `不确定` 一一对应。
 - 规格中没有、但必须补的：`docs/verify/README.md` 的三条结论（无通用检测、虚拟屏不可行、恢复比迁移难）。
 
 ## 7. 事实说明
 
 - 原始要求用 `gpt-6-astra-max`；该模型在当前 Codex 账号下返回 `model is not supported when using Codex with a ChatGPT account`，实际使用配置默认的 `gpt-6-astra`（reasoning effort: ultra）生成规格。
-- 本机当前**没有 Rust 工具链**（`rustc`/`cargo`/`rustup` 均不存在），有 Node 24.12、npm 11.6、MSVC 14.44 + Windows SDK 10.0.26100、WebView2 运行时 155。开工前需安装 Rust。
+- 本机初始没有 Rust 工具链；已安装 stable MSVC toolchain。可用环境：Node 24.12、npm 11.6、MSVC 14.44 + Windows SDK 10.0.26100、WebView2 运行时 155。
