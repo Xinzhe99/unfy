@@ -848,3 +848,62 @@ fn no_progress_hook_installed_is_not_an_error() {
     let report = engine.migrate(&target_key()).expect("migrate");
     assert_eq!(report.applied_count(), 3);
 }
+
+/// The focused window must reach the planner.
+///
+/// `EligibleWindow.focused` was hardcoded to `false` while the layout algorithm
+/// uses it to give the focused window the large pane in `PrimarySide`. The layout
+/// had its own unit test with `focused = true` set by hand, so the broken wiring
+/// between the platform snapshot and the planner was invisible.
+#[test]
+fn primary_side_puts_the_focused_window_in_the_main_pane() {
+    let mut backend = scenario();
+    backend.focus(2);
+
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            layout: conflux_layout::LayoutConfig {
+                mode: conflux_layout::LayoutMode::PrimarySide,
+                ..Default::default()
+            },
+            ..config("focus")
+        },
+    );
+
+    let preview = engine.preview(&target_key()).expect("preview");
+    let work = engine
+        .backend()
+        .topology()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.key == target_key())
+        .unwrap()
+        .work_area;
+
+    // The focused window must own the largest rectangle in the plan, and it must
+    // be wider than the others rather than merely first.
+    let focused = preview
+        .plan
+        .placements
+        .iter()
+        .find(|p| p.id.native_id == 2)
+        .expect("the focused window is in the plan");
+    let widest = preview
+        .plan
+        .placements
+        .iter()
+        .map(|p| p.rect.width())
+        .max()
+        .unwrap();
+    assert_eq!(
+        focused.rect.width(),
+        widest,
+        "the focused window should take the main pane, placements: {:?}",
+        preview.plan.placements
+    );
+    assert!(
+        focused.rect.reachable_in(&work, 64, 32),
+        "the main pane must be inside the work area"
+    );
+}

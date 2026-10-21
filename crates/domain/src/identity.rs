@@ -126,6 +126,12 @@ pub struct WindowSnapshot {
     /// the display topology it was captured on.
     pub native_placement: Option<Vec<u8>>,
     pub topmost: bool,
+    /// Whether this window had keyboard focus when it was enumerated.
+    ///
+    /// The `PrimarySide` layout gives the focused window the large pane, which is
+    /// the arrangement a user expects when they gather while working in one
+    /// window. Without it that layout degenerates into a plain grid.
+    pub focused: bool,
 }
 
 impl WindowSnapshot {
@@ -167,6 +173,7 @@ mod tests {
             mode,
             native_placement: None,
             topmost: false,
+            focused: false,
         }
     }
 

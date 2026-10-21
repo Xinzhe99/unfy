@@ -96,6 +96,17 @@ impl FakeBackend {
     }
 
     /// Add a window. `rect` is its visible rectangle in physical pixels.
+    /// Mark a window as focused, as the real backend does for the foreground one.
+    ///
+    /// Tests that exercise `PrimarySide` need this: without a focused candidate
+    /// that layout silently degenerates into a grid, which is exactly the bug this
+    /// setter exists to make testable.
+    pub fn focus(&mut self, id: u64) {
+        for window in self.windows.borrow_mut().values_mut() {
+            window.snapshot.focused = window.snapshot.id.native_id == id;
+        }
+    }
+
     pub fn add_window(
         &mut self,
         id: u64,
@@ -120,6 +131,9 @@ impl FakeBackend {
             mode,
             native_placement: None,
             topmost: false,
+            // The fake backend has no concept of focus; a test that needs one
+            // sets it explicitly.
+            focused: false,
         };
         self.home.insert(id, rect);
         self.windows.borrow_mut().insert(

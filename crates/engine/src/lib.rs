@@ -533,10 +533,10 @@ impl<B: Backend> Engine<B> {
         for window in windows {
             match self.classify(&window, &displays) {
                 Ok(Some((display, min_size))) => eligible.push(EligibleWindow {
+                    focused: window.focused,
                     snapshot: window,
                     display,
                     min_size,
-                    focused: false,
                 }),
                 Ok(None) => {}
                 Err(reason) => skipped.push(SkippedWindow {

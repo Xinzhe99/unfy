@@ -21,11 +21,18 @@ use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IsIconic,
-    IsWindowVisible, IsZoomed, SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GW_OWNER,
-    SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE,
-    WINDOWPLACEMENT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
+    GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, SetWindowPlacement, SetWindowPos,
+    ShowWindow, GWL_EXSTYLE, GW_OWNER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE, WINDOWPLACEMENT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
+
+/// Foreground window handle for the enumeration currently in progress.
+///
+/// `EnumWindows` takes a plain C callback with no user-data slot, so the value the
+/// callback needs is passed through a process-global instead of a parameter. It is
+/// written once before each enumeration and only read while that enumeration runs.
+static FOREGROUND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 use crate::displays::{hwnd_from_id, process_identity};
 use crate::dpi::PerMonitorV2;
@@ -76,6 +83,11 @@ impl WinWindows {
     /// window was skipped instead of silently dropping it.
     pub fn enumerate_raw(&self) -> Result<Vec<RawWindow>> {
         let _guard = PerMonitorV2::enter();
+        // Captured once per enumeration: `GetForegroundWindow` is a global query,
+        // and calling it from inside the `EnumWindows` callback for every window
+        // would both be wasteful and risk seeing a changed foreground mid-scan.
+        let foreground = unsafe { GetForegroundWindow() };
+        FOREGROUND.store(foreground.0 as usize, std::sync::atomic::Ordering::Relaxed);
         let mut out: Vec<RawWindow> = Vec::new();
         unsafe {
             EnumWindows(
@@ -146,6 +158,7 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
                 mode,
                 native_placement: None,
                 topmost: ex_style & WS_EX_TOPMOST.0 != 0,
+                focused: FOREGROUND.load(std::sync::atomic::Ordering::Relaxed) == hwnd.0 as usize,
             },
             owner: owner.map(|h| h.0 as isize),
             style_flags: flags,
