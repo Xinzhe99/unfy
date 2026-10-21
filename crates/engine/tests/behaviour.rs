@@ -754,6 +754,42 @@ fn retarget_keeps_the_original_preimages() {
     }
 }
 
+/// After "keep current layout", the current positions become home.
+///
+/// The user accepted the arrangement, so a later restore must return to *that*,
+/// not to the layout from before the gather they rejected. Getting this wrong
+/// would silently move windows to a place the user had already said no to.
+#[test]
+fn keeping_the_layout_makes_it_the_new_baseline() {
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("keep-baseline"));
+
+    engine.migrate(&target_key()).expect("first gather");
+    let accepted: HashMap<u64, Rect> = engine
+        .backend()
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .map(|w| (w.id.native_id, w.visible_rect))
+        .collect();
+
+    engine.keep_current_layout().expect("keep");
+    assert_eq!(engine.captured_window_count(), 0);
+
+    // Gather again, then restore: the target is the kept layout.
+    engine.migrate(&target_key()).expect("second gather");
+    let restored = engine.restore().expect("restore");
+    assert!(restored.is_complete());
+
+    for window in engine.backend().enumerate().unwrap() {
+        assert_eq!(
+            window.visible_rect, accepted[&window.id.native_id],
+            "restore after keep must return to the accepted layout for {:?}",
+            window.id
+        );
+    }
+}
+
 #[test]
 fn retarget_on_idle_engine_is_a_plain_gather() {
     let backend = scenario();

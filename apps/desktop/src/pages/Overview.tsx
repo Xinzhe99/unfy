@@ -363,7 +363,8 @@ export function OverviewPage({
         </div>
         <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-[var(--color-muted)]">
           <IconInfo className="mt-px size-3 shrink-0" />
-          「救援」把停留在不存在坐标上的窗口移回可见区域。诊断包只含版本、显示器数量与设置项名称。
+          「救援」把停留在不存在坐标上的窗口移回可见区域。诊断包只含版本、显示器分辨率与设置项，
+          不含窗口标题、文件路径或屏幕画面。
         </p>
       </Card>
     </>

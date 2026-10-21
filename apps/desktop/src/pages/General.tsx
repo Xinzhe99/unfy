@@ -288,7 +288,7 @@ export function GeneralPage({
       <Card title="隐私">
         <SettingRow
           label="使用统计"
-          hint="仅发送功能使用次数与错误类型，不包含窗口标题、应用名与屏幕内容"
+          hint="当前版本没有任何上传代码，这个开关只记录你的选择。将来若实现，只发送功能使用次数与错误类型，不含窗口标题与屏幕内容"
         >
           <Switch
             checked={settings.telemetry}
