@@ -9,9 +9,13 @@ import type { DisplayDto, TargetDto } from "../api";
  * `identify_displays` flashes, so the user can look at the remote window, read a
  * number, and pick the matching card.
  *
+ * The cards are laid out where the displays actually are. A plain grid says
+ * nothing about whether the second screen is to the right or above, and that is
+ * exactly the mental model the user is confirming when they choose a target.
+ *
  * If capture is unavailable (locked session, unsupported platform) the component
- * falls back to a neutral placeholder with the same number, so the card layout
- * and selection behaviour never change.
+ * falls back to a neutral placeholder with the same number, so the layout and
+ * selection behaviour never change.
  */
 export function DisplayCards({
   displays,
@@ -34,73 +38,149 @@ export function DisplayCards({
     );
   }
 
+  // Order by physical position, left to right then top to bottom, so the numbers
+  // match reading order. The platform enumerates displays in its own order (on
+  // Windows, adapter order), which for a monitor placed to the left of the
+  // primary produces "2" on the left card and "1" on the right - and the badge
+  // flashed on the screen uses this same number, so a mismatch means the user
+  // reads the wrong digit off the remote window.
+  const ordered = [...displays].sort(
+    (a, b) => a.origin_x - b.origin_x || a.origin_y - b.origin_y,
+  );
+  const layout = relativeLayout(ordered);
+
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-      {displays.map((display, index) => {
+    <div
+      className="relative w-full"
+      style={{
+        // Fixed height rather than an aspect ratio: the cards must stay tall
+        // enough to read the screenshot, and an aspect ratio derived from the
+        // arrangement collapses to a thin strip for a wide side-by-side pair
+        // (two 1920-wide monitors in a 2:1 box is 40 px tall in this column).
+        //
+        // A single row of tall displays would otherwise leave the top half of a
+        // 14 rem box empty, so the height follows the tallest card actually
+        // drawn: cell height is a fraction of the container, so the container has
+        // to be tall enough for the tallest fraction to read as a screenshot.
+        // Sized for the tallest card actually drawn: cell heights are fractions
+        // of this box, so a side-by-side pair (cells at 50 %) needs half the
+        // height of a stacked pair (cells at 100 %). The lower clamp keeps a
+        // 3-wide arrangement readable; the upper one stops a vertical pair from
+        // pushing the rest of the page below the fold.
+        height: `${Math.min(16, Math.max(8, 8 / Math.max(...layout.cells.map((c) => c.height))))}rem`,
+      }}
+    >
+      {ordered.map((display, index) => {
         const selected = target?.native_id === display.native_id;
         const shot = thumbnails[display.native_id];
+        const cell = layout.cells[index]!;
 
         return (
-          <button
+          <div
             key={display.native_id}
-            type="button"
-            onClick={() => onSelect(display.native_id)}
-            disabled={disabled}
-            aria-pressed={selected}
-            aria-label={`显示器 ${index + 1}${display.primary ? "，主显示器" : ""}，${display.width}×${display.height}`}
-            className={`group overflow-hidden rounded-[var(--radius-control)] border text-left transition-colors disabled:cursor-not-allowed ${
-              selected
-                ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"
-                : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]"
-            }`}
+            className="absolute p-1"
+            style={{
+              left: `${cell.left * 100}%`,
+              top: `${cell.top * 100}%`,
+              width: `${cell.width * 100}%`,
+              height: `${cell.height * 100}%`,
+            }}
           >
-            <div className="relative aspect-video w-full bg-[var(--color-surface-sunken)]">
-              {shot ? (
-                <img
-                  src={shot}
-                  alt=""
-                  className="size-full object-cover"
-                  draggable={false}
-                />
-              ) : (
-                <div className="flex size-full items-center justify-center text-[11px] text-[var(--color-muted)]">
-                  无法截取画面
-                </div>
-              )}
-              {/* The number matches the badge flashed on the physical screen.
-                  Its colour is fixed rather than themed: it sits on a screenshot,
-                  whose brightness has nothing to do with the app theme. */}
-              <span
-                className={`absolute left-1.5 top-1.5 flex size-5 items-center justify-center rounded-full text-[11px] font-semibold ${
-                  selected
-                    ? "bg-[var(--color-accent)] text-[var(--color-accent-fg)]"
-                    : "bg-[var(--color-overlay)] text-[var(--color-overlay-fg)]"
-                }`}
-              >
-                {index + 1}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2 px-2.5 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-medium">
-                  {display.primary ? "主显示器" : `显示器 ${index + 1}`}
-                </p>
-                <p className="truncate text-[11px] tabular-nums text-[var(--color-muted)]">
-                  {display.width}×{display.height}
-                  {display.scale !== 1
-                    ? ` · ${Math.round(display.scale * 100)}%`
-                    : ""}
-                </p>
-              </div>
-              {selected ? (
-                <span className="shrink-0 text-[11px] font-medium text-[var(--color-fg-soft)]">
-                  使用中
+            <button
+              type="button"
+              onClick={() => onSelect(display.native_id)}
+              disabled={disabled}
+              aria-pressed={selected}
+              aria-label={`显示器 ${index + 1}${display.primary ? "，主显示器" : ""}，${display.width}×${display.height}`}
+              className={`flex size-full flex-col overflow-hidden rounded-[var(--radius-control)] border text-left transition-colors disabled:cursor-not-allowed ${
+                selected
+                  ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"
+                  : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]"
+              }`}
+            >
+              <div className="relative min-h-0 flex-1 bg-[var(--color-surface-sunken)]">
+                {shot ? (
+                  <img
+                    src={shot}
+                    alt=""
+                    className="size-full object-cover"
+                    draggable={false}
+                  />
+                ) : (
+                  <div className="flex size-full items-center justify-center text-[11px] text-[var(--color-muted)]">
+                    无法截取画面
+                  </div>
+                )}
+                {/* The number matches the badge flashed on the physical screen.
+                    Its colour is fixed rather than themed: it sits on a
+                    screenshot, whose brightness has nothing to do with the app
+                    theme. */}
+                <span
+                  className={`absolute left-1.5 top-1.5 flex size-5 items-center justify-center rounded-full text-[11px] font-semibold ${
+                    selected
+                      ? "bg-[var(--color-accent)] text-[var(--color-accent-fg)]"
+                      : "bg-[var(--color-overlay)] text-[var(--color-overlay-fg)]"
+                  }`}
+                >
+                  {index + 1}
                 </span>
-              ) : null}
-            </div>
-          </button>
+              </div>
+              <div className="flex shrink-0 items-center justify-between gap-2 px-2.5 py-1.5">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium">
+                    {display.primary ? "主显示器" : `显示器 ${index + 1}`}
+                  </p>
+                  <p className="truncate text-[11px] tabular-nums text-[var(--color-muted)]">
+                    {display.width}×{display.height}
+                    {display.scale !== 1
+                      ? ` · ${Math.round(display.scale * 100)}%`
+                      : ""}
+                  </p>
+                </div>
+                {selected ? (
+                  <span className="shrink-0 text-[11px] font-medium text-[var(--color-fg-soft)]">
+                    使用中
+                  </span>
+                ) : null}
+              </div>
+            </button>
+          </div>
         );
       })}
     </div>
   );
+}
+
+/**
+ * Map real display coordinates onto container fractions.
+ *
+ * Each cell keeps its display's proportions and relative position, shrunk to fit
+ * one box. Coordinates are physical pixels and may be negative (a display to the
+ * left of the primary has a negative x), so the origin is translated to the
+ * top-left of the bounding box first.
+ */
+function relativeLayout(displays: DisplayDto[]) {
+  const minX = Math.min(...displays.map((d) => d.origin_x));
+  const minY = Math.min(...displays.map((d) => d.origin_y));
+  const maxX = Math.max(...displays.map((d) => d.origin_x + d.width));
+  const maxY = Math.max(...displays.map((d) => d.origin_y + d.height));
+
+  // One denominator for both axes keeps the aspect ratio honest: dividing each
+  // axis by its own extent would stretch a stacked pair into a wide box.
+  const extent = Math.max(1, maxX - minX, maxY - minY);
+
+  // Vertical span measured in "rows" of the tallest display, so the caller can
+  // size the container for a single row of cards or a stacked pair.
+  const tallest = Math.max(...displays.map((d) => d.height));
+  const rows = Math.max(1, Math.ceil((maxY - minY) / Math.max(1, tallest)));
+
+  return {
+    rows,
+    cells: displays.map((d) => ({
+      left: (d.origin_x - minX) / extent,
+      top: (d.origin_y - minY) / extent,
+      width: d.width / extent,
+      height: d.height / extent,
+    })),
+  };
 }

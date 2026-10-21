@@ -63,6 +63,18 @@ impl DisplaySnapshot {
     pub fn is_usable(&self) -> bool {
         !self.work_area.is_empty() && self.scale.is_valid()
     }
+
+    /// Number displays the way the UI and the on-screen badges do.
+    ///
+    /// Left to right, then top to bottom. Both the picker and `identify_displays`
+    /// must use this ordering: the badge exists so the user can read a digit off
+    /// the remote window and pick the matching card, and a monitor placed left of
+    /// the primary is enumerated second by the platform on Windows.
+    pub fn ordered_by_position(displays: &[DisplaySnapshot]) -> Vec<&DisplaySnapshot> {
+        let mut ordered: Vec<&DisplaySnapshot> = displays.iter().collect();
+        ordered.sort_by_key(|d| (d.bounds.left, d.bounds.top));
+        ordered
+    }
 }
 
 /// How a window is currently presented. Only `Normal` and `Maximized` are
@@ -177,5 +189,43 @@ mod tests {
         assert!(!IdentityQuality::Weak.is_restorable());
         assert!(IdentityQuality::Medium.is_restorable());
         assert!(IdentityQuality::Strong.is_restorable());
+    }
+
+    fn display(key: &str, x: i32, y: i32) -> DisplaySnapshot {
+        DisplaySnapshot {
+            key: DisplayKey {
+                native_id: key.to_string(),
+                quality: IdentityQuality::Strong,
+            },
+            bounds: Rect::new(x, y, x + 1920, y + 1080),
+            work_area: Rect::new(x, y, x + 1920, y + 1040),
+            scale: Scale { x: 1.0, y: 1.0 },
+            physical_size_mm: None,
+            primary: false,
+            label: key.to_string(),
+        }
+    }
+
+    #[test]
+    fn ordering_puts_a_negative_x_display_first() {
+        // The configuration this was written for: DISPLAY2 at x = -1920, which
+        // the platform reports second because enumeration follows adapter order.
+        let displays = vec![display("primary", 0, 0), display("left", -1920, 0)];
+        let ordered = DisplaySnapshot::ordered_by_position(&displays);
+        assert_eq!(ordered[0].label, "left");
+        assert_eq!(ordered[1].label, "primary");
+    }
+
+    #[test]
+    fn ordering_puts_the_upper_display_first_when_stacked() {
+        let displays = vec![display("bottom", 0, 1080), display("top", 0, 0)];
+        let ordered = DisplaySnapshot::ordered_by_position(&displays);
+        assert_eq!(ordered[0].label, "top");
+    }
+
+    #[test]
+    fn ordering_is_stable_for_a_single_display() {
+        let displays = vec![display("only", 0, 0)];
+        assert_eq!(DisplaySnapshot::ordered_by_position(&displays).len(), 1);
     }
 }

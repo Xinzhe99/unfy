@@ -64,7 +64,12 @@ pub fn flash(seconds: u64) -> bool {
     let seconds = seconds.clamp(1, 30);
     let active = Arc::new(AtomicBool::new(true));
 
-    for (index, display) in displays.iter().enumerate() {
+    // Number by physical position, left to right then top to bottom. The display
+    // picker uses the same rule, and the two must agree: the whole point of the
+    // badge is that the digit on the screen matches the digit on the card.
+    let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+
+    for (index, display) in ordered.iter().enumerate() {
         let bounds = display.bounds;
         let number = index + 1;
         let active = Arc::clone(&active);
