@@ -12,9 +12,10 @@ import { Button } from "../components/ui";
  * tell it. Without this, a new user sees "尚未选择目标显示器" and has no idea
  * whether the app is broken or waiting for input.
  *
- * Three steps, each with one decision. The guide ends by writing
- * `onboarding_done`, so it will not reappear even if the chosen target equals the
- * default.
+ * Each step has one decision: what the tool does, which display the remote shows,
+ * whether automation runs, what happens when an application refuses to move, and
+ * how to correct a wrong choice. The guide ends by writing `onboarding_done`, so it
+ * does not reappear even if the chosen target equals the default.
  */
 export function Onboarding({
   displays,

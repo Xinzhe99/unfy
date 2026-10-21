@@ -307,10 +307,13 @@ export function OverviewPage({
           title="布局预览"
           description="预览不会移动任何窗口。这是点击预览那一刻的快照；离开本页后会重新计算。"
           aside={
-            <Status tone="neutral">
-              <IconLayout className="size-3" />
+            // A plain count, not a `Status`: the dot in that component means "state
+            // of the engine", and a grey dot next to a window count reads as
+            // "nothing is happening" rather than "this is how many there are".
+            <span className="inline-flex items-center gap-1.5 text-xs tabular-nums text-[var(--color-muted)]">
+              <IconLayout className="size-3.5" />
               {preview.placements.length} 个窗口
-            </Status>
+            </span>
           }
         >
           <PlanPreview preview={preview} />
