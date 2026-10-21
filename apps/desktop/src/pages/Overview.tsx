@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { stateLabels } from "../api";
+import { renderMessage, renderNotice, stateLabels } from "../api";
 import type {
   ActivityEntryDto,
   DisplayDto,
@@ -131,7 +131,7 @@ export function OverviewPage({
             // `busy` covers the window between the click and the engine's first
             // state change, which on a busy desktop can be a second of silence.
             <Status tone="live">
-              {stateLabels[state === "idle" ? "migrating" : state]}
+              {t(stateLabels[state === "idle" ? "migrating" : state])}
             </Status>
           ) : hasWork ? (
             <Status tone="live">{t("布局已启用")}</Status>
@@ -162,7 +162,9 @@ export function OverviewPage({
             label={t("远程检测")}
             value={
               settings?.remote_active
-                ? (settings.remote_evidence ?? t("已检测到"))
+                ? settings.remote_evidence
+                  ? renderMessage(settings.remote_evidence)
+                  : t("已检测到")
                 : detectStatusLabel(settings)
             }
             muted={!settings?.remote_active}
@@ -203,7 +205,7 @@ export function OverviewPage({
         {status?.last_error ? (
           <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-danger)] px-3 py-2">
             <p className="min-w-0 flex-1 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-              上次操作失败：{humanError(status.last_error)}
+              上次操作失败：{renderNotice(status.last_error)}
             </p>
             <button
               type="button"
@@ -310,7 +312,7 @@ export function OverviewPage({
             // "nothing is happening" rather than "this is how many there are".
             <span className="inline-flex items-center gap-1.5 text-xs tabular-nums text-[var(--color-muted)]">
               <IconLayout className="size-3.5" />
-              {preview.placements.length} 个窗口
+              {t("{count} 个窗口", { count: preview.placements.length })}
             </span>
           }
         >
@@ -377,12 +379,12 @@ export function OverviewPage({
                   <span className="text-[13px]">{activityLabel(entry)}</span>
                   {entry.unsettled > 0 ? (
                     <span className="ml-1.5 text-[11px] text-[var(--color-warning)]">
-                      {entry.unsettled} 个未处理
+                      {t("{count} 个未处理", { count: entry.unsettled })}
                     </span>
                   ) : null}
                   {entry.note ? (
                     <span className="ml-1.5 text-[11px] text-[var(--color-muted)]">
-                      {renderNote(entry.note)}
+                      {renderMessage(entry.note)}
                     </span>
                   ) : null}
                 </div>
@@ -452,38 +454,6 @@ export function targetDisplayName(
   });
 }
 
-/**
- * Translate a command error into something a user can act on.
- *
- * The raw values are internal codes (`already_active`, `no_displays`); showing
- * them verbatim is the difference between "the app told me what to do" and "the
- * app printed a developer string".
- */
-function humanError(raw: string): string {
-  const incomplete = raw.match(/restore_incomplete:(\d+)/);
-  if (incomplete) return `还有 ${incomplete[1]} 个窗口没能恢复原位`;
-  // Journal failures are the one path that leaves the engine unable to act at
-  // all, and the raw text is an English OS error. Say what it means and what the
-  // user can do; the exact reason is in the diagnostics bundle.
-  if (raw.includes("journal write failed") || raw.includes("journal is corrupt")) {
-    return t("无法写入恢复记录，为避免窗口位置丢失，整理已停止。请确认磁盘空间与目录权限，然后重启应用。");
-  }
-  switch (raw) {
-    case "already_active":
-      return t("还有未完成的整理，请先恢复");
-    case "paused":
-      return t("自动整理已暂停");
-    case "no_displays":
-      return t("没有可用的显示器");
-    case "restore_cancelled":
-      return t("恢复已被新的整理请求取消");
-    case "no_displays_found":
-      return t("没有检测到显示器");
-    default:
-      return raw;
-  }
-}
-
 /** One line per history entry: what happened and how many windows it touched. */
 function activityLabel(entry: ActivityEntryDto): string {
   const name = t(
@@ -516,23 +486,6 @@ function activityLabel(entry: ActivityEntryDto): string {
  * happened yesterday is worse: the user cannot tell whether a restore happened
  * before or after they last touched the machine.
  */
-/**
- * Render a structured note in the current language.
- *
- * The backend records counts (`restored_first=2`) rather than prose, so the
- * sentence can be translated. A Chinese sentence written on the Rust side appeared
- * verbatim in the English interface.
- */
-function renderNote(note: string): string {
-  if (!note) return "";
-  const match = note.match(/^restored_first=(\d+)$/);
-  if (match) {
-    return t("先恢复了 {count} 个窗口", { count: Number(match[1]) });
-  }
-  // Anything else is a note from an older build; show it rather than drop it.
-  return note;
-}
-
 function relativeTime(at: number): string {
   const then = new Date(at * 1000);
   const now = new Date();

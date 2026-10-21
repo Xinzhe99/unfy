@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+use crate::message::Message;
 use crate::AppState;
 
 /// Register the shortcuts from settings.
@@ -48,12 +49,18 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
                 });
                 if let Err(e) = registered {
                     tracing::warn!(%accelerator, error = %e, "gather hotkey unavailable");
-                    status.gather_error = Some(format!("{e}"));
+                    // The operating system's own text for a taken combination. It is
+                    // already in the system language, so it is shown as written.
+                    status.gather_error = Some(Message::new(e.to_string()));
                 }
             }
             Err(e) => {
                 tracing::warn!(%accelerator, error = %e, "gather hotkey is invalid");
-                status.gather_error = Some(format!("无效的组合键：{e}"));
+                status.gather_error = Some(crate::message::Message::one(
+                    "无效的组合键：{error}",
+                    "error",
+                    e.to_string(),
+                ));
             }
         }
     }
@@ -69,12 +76,17 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
                 });
                 if let Err(e) = registered {
                     tracing::warn!(%accelerator, error = %e, "restore hotkey unavailable");
-                    status.restore_error = Some(format!("{e}"));
+                    // The operating system's own text, as above.
+                    status.restore_error = Some(Message::new(e.to_string()));
                 }
             }
             Err(e) => {
                 tracing::warn!(%accelerator, error = %e, "restore hotkey is invalid");
-                status.restore_error = Some(format!("无效的组合键：{e}"));
+                status.restore_error = Some(crate::message::Message::one(
+                    "无效的组合键：{error}",
+                    "error",
+                    e.to_string(),
+                ));
             }
         }
     }

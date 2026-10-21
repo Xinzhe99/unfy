@@ -9,6 +9,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { t } from "./i18n";
+
 export type EngineStateName =
   | "idle"
   | "planning"
@@ -32,11 +34,13 @@ export interface StatusDto {
   supported: boolean;
   /** False on macOS before Accessibility permission is granted. */
   has_permission: boolean;
+  /** A catalogued sentence naming the permission, translated by the caller. */
   permission_name: string;
   display_count: number;
   target: TargetDto | null;
   pending_windows: number;
-  last_error: string | null;
+  /** The most recent failure, as a sentence or an engine sentinel. */
+  last_error: MessageDto | null;
   paused: boolean;
   captured_windows: number;
 }
@@ -144,7 +148,7 @@ export interface SettingsDto {
   target: TargetDto | null;
   /** Live detector verdict. Not persisted. */
   remote_active: boolean;
-  remote_evidence: string | null;
+  remote_evidence: MessageDto | null;
 }
 
 export interface PendingWorkDto {
@@ -168,9 +172,9 @@ export interface PauseDto {
 
 export interface HotkeyStatusDto {
   gather: string | null;
-  gather_error: string | null;
+  gather_error: MessageDto | null;
   restore: string | null;
-  restore_error: string | null;
+  restore_error: MessageDto | null;
 }
 
 export interface UpdateStatusDto {
@@ -190,11 +194,24 @@ export interface UpdateCheckDto {
   detail: string;
 }
 
+/**
+ * A sentence the backend chose, worded here.
+ *
+ * The backend cannot format these: it does not know the interface language, and a
+ * sentence assembled there reached an English window in Chinese. `key` is the
+ * Chinese source sentence and also the catalogue key.
+ */
+export interface MessageDto {
+  key: string;
+  /** Values for `{name}` placeholders. Empty when the sentence has none. */
+  params: Record<string, string>;
+}
+
 export interface HealthItemDto {
   id: string;
-  label: string;
+  label: MessageDto;
   status: "ok" | "attention" | "problem";
-  detail: string;
+  detail: MessageDto;
 }
 
 export interface ActivityEntryDto {
@@ -209,7 +226,8 @@ export interface ActivityEntryDto {
     | "keep_layout";
   affected: number;
   unsettled: number;
-  note: string;
+  /** What counts alone cannot say, or `null`. */
+  note: MessageDto | null;
   trigger: string;
 }
 
@@ -262,6 +280,13 @@ export const api = {
    * an explicit path is validated against that root on the backend.
    */
   openPath: (path?: string) => invoke<boolean>("open_path", { path: path ?? null }),
+  /**
+   * Tell the backend which language the interface is rendering in.
+   *
+   * The tray and its tooltip are built in Rust and cannot read the catalogue here,
+   * so they are told the resolved locale instead of resolving it a second way.
+   */
+  setUiLocale: (locale: string) => invoke<void>("set_ui_locale", { locale }),
   /** Move the target to the next display and re-gather onto it. */
   cycleTarget: () => invoke<TargetDto>("cycle_target"),
   /** Exactly what an export would contain, without writing it. */
@@ -270,7 +295,14 @@ export const api = {
   toggleRemoteSession: () => invoke<boolean>("toggle_remote_session"),
 };
 
-/** Human-readable Chinese labels for the engine states shown in the UI. */
+/**
+ * Engine state labels, as catalogue keys.
+ *
+ * The values are the Chinese source strings the catalogue is keyed by, not the
+ * text to display: callers pass them through `t()`. Keeping the map here rather
+ * than duplicating it in each component means a new state has one place to be
+ * translated.
+ */
 export const stateLabels: Record<EngineStateName, string> = {
   idle: "就绪",
   planning: "正在计划",
@@ -281,18 +313,7 @@ export const stateLabels: Record<EngineStateName, string> = {
   error: "需要处理",
 };
 
-/** One-sentence explanation of what the state means for the user right now. */
-export const stateHints: Record<EngineStateName, string> = {
-  idle: "窗口保持原位。按快捷键或点「整理到目标屏」开始。",
-  planning: "正在计算布局，还没有移动任何窗口。",
-  migrating: "正在把窗口移到目标屏。",
-  active: "窗口已收拢到目标屏。结束后点「恢复本次布局」。",
-  restoring: "正在把窗口放回原来的位置。",
-  degraded: "部分窗口没能处理，详情见下方结果。",
-  error: "出现了无法自动处理的问题，请查看提示。",
-};
-
-/** Chinese labels for skip reasons returned by the engine. */
+/** Skip reasons, as catalogue keys. `skipLabel` translates them. */
 export const skipLabels: Record<string, string> = {
   own_window: "本应用的窗口",
   invisible: "不可见",
@@ -308,7 +329,71 @@ export const skipLabels: Record<string, string> = {
 };
 
 export function skipLabel(reason: string): string {
-  return skipLabels[reason] ?? reason;
+  // An unknown reason is a sentinel the engine added and the catalogue has not
+  // caught up with; show it rather than an empty label.
+  return t(skipLabels[reason] ?? reason);
+}
+
+/**
+ * Word a sentence the backend chose, in the current language.
+ *
+ * Parameters are translated as well as the sentence: some of them are themselves
+ * catalogued phrases (`辅助功能` arrives as the name of a permission), while most
+ * are values - a count, a path, an operating-system error - that `t()` returns
+ * unchanged because they are not keys.
+ */
+/**
+ * Word the failure the engine is currently reporting, for the overview.
+ *
+ * Two mappers live here because the two situations want different copy.
+ * `errorMessage` answers "the button you just pressed failed"; this one answers
+ * "something went wrong earlier and is still true", where the user is not looking
+ * at the action that caused it. Both take the same kind of raw value: an internal
+ * code (`already_active`) or an operating-system error.
+ */
+export function humanError(raw: string): string {
+  const incomplete = raw.match(/restore_incomplete:(\d+)/);
+  if (incomplete) return t("还有 {count} 个窗口没能恢复原位", { count: incomplete[1]! });
+  // Journal failures are the one path that leaves the engine unable to act at
+  // all, and the raw text is an English OS error. Say what it means and what the
+  // user can do; the exact reason is in the diagnostics bundle.
+  if (raw.includes("journal write failed") || raw.includes("journal is corrupt")) {
+    return t("无法写入恢复记录，为避免窗口位置丢失，整理已停止。请确认磁盘空间与目录权限，然后重启应用。");
+  }
+  switch (raw) {
+    case "already_active":
+      return t("还有未完成的整理，请先恢复");
+    case "paused":
+      return t("自动整理已暂停");
+    case "no_displays":
+      return t("没有可用的显示器");
+    case "restore_cancelled":
+      return t("恢复已被新的整理请求取消");
+    case "no_displays_found":
+      return t("没有检测到显示器");
+    default:
+      return raw;
+  }
+}
+
+export function renderMessage(message: MessageDto): string {
+  const params: Record<string, string | number> = {};
+  for (const [name, value] of Object.entries(message.params)) {
+    params[name] = t(value);
+  }
+  return t(message.key, params);
+}
+
+/**
+ * Word a backend note that may be a sentinel rather than a sentence.
+ *
+ * Engine failures arrive as sentinels (`restore_incomplete:4`) that need a specific
+ * next step, so they go through `humanError`; anything with parameters is a
+ * sentence the backend wrote.
+ */
+export function renderNotice(note: MessageDto): string {
+  if (Object.keys(note.params).length > 0) return renderMessage(note);
+  return humanError(note.key);
 }
 
 /**
@@ -325,22 +410,25 @@ export function errorMessage(error: unknown): string {
   // out, and trying again is the fix.
   const incomplete = raw.match(/restore_incomplete:(\d+)/);
   if (incomplete) {
-    return `还有 ${incomplete[1]} 个窗口没能恢复原位，已停止重新整理。请再点一次「恢复本次布局」，或先关闭这些窗口。`;
+    return t(
+      "还有 {count} 个窗口没能恢复原位，已停止重新整理。请再点一次「恢复本次布局」，或先关闭这些窗口。",
+      { count: incomplete[1]! },
+    );
   }
   if (raw.includes("already_active")) {
-    return "窗口仍处于整理状态。请先点「恢复本次布局」，再重新整理到新的目标屏。";
+    return t("窗口仍处于整理状态。请先点「恢复本次布局」，再重新整理到新的目标屏。");
   }
   if (raw.includes("restore_cancelled")) {
-    return "已取消这次恢复，因为期间开始了新的整理。";
+    return t("已取消这次恢复，因为期间开始了新的整理。");
   }
   if (raw.includes("paused")) {
-    return "自动整理已暂停。在托盘菜单或概览页取消暂停后重试。";
+    return t("自动整理已暂停。在托盘菜单或概览页取消暂停后重试。");
   }
   if (raw.includes("TargetDisplayMissing") || raw.includes("no_displays")) {
-    return "目标显示器当前不可用，请在「显示器与布局」里重新选择。";
+    return t("目标显示器当前不可用，请在「显示器与布局」里重新选择。");
   }
   if (raw.includes("PermissionDenied") || raw.includes("permission")) {
-    return "系统拒绝了窗口操作权限，请检查授权后重试。";
+    return t("系统拒绝了窗口操作权限，请检查授权后重试。");
   }
   return raw;
 }

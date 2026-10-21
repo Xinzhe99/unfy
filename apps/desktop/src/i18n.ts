@@ -486,6 +486,37 @@ const EN: Record<string, string> = {
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
   "用户": "User",
+  "需要「{name}」权限才能移动窗口":
+    "Moving windows requires the {name} permission",
+  "辅助功能": "Accessibility",
+  "窗口控制": "Window control",
+  "无法写入恢复记录，为避免窗口位置丢失，整理已停止。请确认磁盘空间与目录权限，然后重启应用。":
+    "The restore record could not be written, so gathering stopped rather than risk losing window positions. Check free disk space and folder permissions, then restart the app.",
+  "目标显示器当前不可用，请在「显示器与布局」里重新选择。":
+    "The target display is unavailable. Choose one on the Displays page.",
+  "没有可用的显示器": "No display available",
+  "没有检测到显示器": "No displays detected",
+  "自动整理已暂停": "Automatic gathering is paused",
+  "还有未完成的整理，请先恢复":
+    "A previous gather has not been restored yet",
+  "恢复已被新的整理请求取消": "The restore was cancelled by a new gather",
+  "本应用的窗口": "Conflux's own windows",
+  "不可见": "Not visible",
+  "尺寸为零": "Zero size",
+  "工具窗口": "Tool window",
+  "系统外壳": "Shell window",
+  "附属于主窗口": "Owned by a main window",
+  "全屏": "Full screen",
+  "其他虚拟桌面": "On another virtual desktop",
+  "权限不足": "Permission denied",
+  "已最小化": "Minimised",
+  "已排除此应用": "Excluded app",
+  "还有 {count} 个窗口没能恢复原位":
+    "{count} windows could not be put back, so re-gathering was stopped.",
+  "、": ", ",
+  "{list} 等": "{list} and more",
+  "{reason} · {count} 个窗口": "{reason} · {count} windows",
+  "（{apps}）": "({apps})",
   "关闭自动检测，只用快捷键、托盘和界面按钮。":
     "Turns detection off; gather from a shortcut, the tray or this window.",
   "检测到远程会话": "Remote session detected",

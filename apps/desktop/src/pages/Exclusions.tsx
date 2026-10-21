@@ -51,7 +51,7 @@ export function ExclusionsPage({
       <Card
         title={t("排除的应用")}
         description={t("这些应用的窗口不会在整理时被移动，也不会在恢复时被处理。")}
-        aside={<span className="text-[11px] tabular-nums text-[var(--color-muted)]">{rules.length} 条规则</span>}
+        aside={<span className="text-[11px] tabular-nums text-[var(--color-muted)]">{t("{count} 条规则", { count: rules.length })}</span>}
       >
         {rules.length === 0 ? (
           <p className="py-1 text-xs text-[var(--color-muted)]">{t("还没有排除任何应用。")}</p>

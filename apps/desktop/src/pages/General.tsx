@@ -9,6 +9,7 @@ import type {
 import { Button, Card, Segmented, SettingRow, Status, Switch } from "../components/ui";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import { t } from "../i18n";
+import { renderMessage } from "../api";
 import { IconDownload } from "../components/icons";
 
 /**
@@ -89,7 +90,9 @@ export function GeneralPage({
         aside={
           settings.remote_active ? (
             <Status tone="accent">
-              {settings.remote_evidence ?? t("检测到远程会话")}
+              {settings.remote_evidence
+                ? renderMessage(settings.remote_evidence)
+                : t("检测到远程会话")}
             </Status>
           ) : null
         }
@@ -221,8 +224,10 @@ export function GeneralPage({
           label={t("整理窗口")}
           hint={
             hotkeys?.gather_error
-              ? `未生效：${hotkeys.gather_error}`
-              : "在其他应用中按下也能触发"
+              ? t("未生效：{reason}", {
+                  reason: renderMessage(hotkeys.gather_error),
+                })
+              : t("在其他应用中按下也能触发")
           }
         >
           <HotkeyRecorder
@@ -239,8 +244,10 @@ export function GeneralPage({
           label={t("恢复布局")}
           hint={
             hotkeys?.restore_error
-              ? `未生效：${hotkeys.restore_error}`
-              : "把窗口放回整理前的位置"
+              ? t("未生效：{reason}", {
+                  reason: renderMessage(hotkeys.restore_error),
+                })
+              : t("把窗口放回整理前的位置")
           }
         >
           <HotkeyRecorder
@@ -301,7 +308,7 @@ export function GeneralPage({
               {updateStatus?.configured
                 ? updateStatus.last_version
                   ? `最近一次结果：${outcomeLabel(updateStatus.last_outcome)}（${updateStatus.last_version}）`
-                  : "尚未检查过更新。"
+                  : t("尚未检查过更新。")
                 : "此构建没有签名公钥与更新地址，检查更新不会成功。发布版才会启用。"}
             </p>
             {updateStatus?.configured &&
@@ -347,9 +354,9 @@ export function GeneralPage({
                   }`}
                 />
                 <div className="min-w-0">
-                  <p className="text-[13px] leading-5">{item.label}</p>
+                  <p className="text-[13px] leading-5">{renderMessage(item.label)}</p>
                   <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">
-                    {item.detail}
+                    {renderMessage(item.detail)}
                   </p>
                 </div>
               </li>
@@ -363,7 +370,9 @@ export function GeneralPage({
         description={t("恢复除目标显示器以外的所有设置为出厂默认。")}
       >
         <div className="flex items-center justify-between gap-4">
-          <p className="text-xs leading-relaxed text-[var(--color-muted)]">会清除排除规则、快捷键、自启、检测设置与恢复延迟。目标显示器保留，因为那是你对着屏幕确认过的结果。</p>
+          <p className="text-xs leading-relaxed text-[var(--color-muted)]">
+            {t("会清除排除规则、快捷键、自启、检测设置与恢复延迟。目标显示器保留，因为那是你对着屏幕确认过的结果。")}
+          </p>
           {/* Two-step confirmation in the page, not `window.confirm`: the native
               dialog does not render reliably inside a Tauri webview (it produced a
               stray window in verification), and a destructive action must not

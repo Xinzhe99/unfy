@@ -176,16 +176,13 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
     match transition {
         Transition::None => {}
         Transition::Activated(evidence) => {
-            if let Ok(mut last) = state.last_remote.lock() {
-                *last = Some(evidence.label());
-            }
             // Publish the verdict even when automation is disabled, so the
             // overview can show "检测到远程会话" and let the user act on it.
             let _ = app.emit(
                 "conflux://remote",
                 serde_json::json!({
                     "active": true,
-                    "evidence": evidence.label(),
+                    "evidence": crate::message::evidence_message(&evidence),
                     "acted": false,
                 }),
             );
@@ -212,7 +209,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                     "conflux://remote",
                     serde_json::json!({
                         "active": true,
-                        "evidence": evidence.label(),
+                        "evidence": crate::message::evidence_message(&evidence),
                         "acted": false,
                         "suppressed": "all_screens",
                     }),
@@ -237,7 +234,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                         "conflux://remote",
                         serde_json::json!({
                             "active": true,
-                            "evidence": evidence.label(),
+                            "evidence": crate::message::evidence_message(&evidence),
                             "acted": false,
                             "suppressed": "cooldown",
                         }),
@@ -256,7 +253,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                         "conflux://remote",
                         serde_json::json!({
                             "active": true,
-                            "evidence": evidence.label(),
+                            "evidence": crate::message::evidence_message(&evidence),
                             "acted": true,
                             "applied": applied,
                         }),
@@ -268,7 +265,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                         "conflux://remote",
                         serde_json::json!({
                             "active": true,
-                            "evidence": evidence.label(),
+                            "evidence": crate::message::evidence_message(&evidence),
                             "acted": false,
                             "error": message,
                         }),
@@ -277,9 +274,6 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
             }
         }
         Transition::Deactivated => {
-            if let Ok(mut last) = state.last_remote.lock() {
-                *last = None;
-            }
             let _ = app.emit(
                 "conflux://remote",
                 serde_json::json!({
@@ -387,7 +381,9 @@ fn gather<R: Runtime>(app: &AppHandle<R>, evidence: &Evidence) -> Result<usize, 
                 .as_ref()
                 .map(|t| t.native_id.as_str()),
         )
-        .ok_or_else(|| "没有可用的显示器".to_string())?;
+        // A sentinel, not a sentence: the frontend maps it to a translated message
+        // (`humanError`). A Chinese sentence here reached the user verbatim.
+        .ok_or_else(|| "no_displays".to_string())?;
 
     // `retarget` handles the case where a layout is already active: restoring
     // first keeps the original preimages, so an auto-gather triggered by a second

@@ -71,7 +71,7 @@ pub struct Entry {
     pub unsettled: usize,
     /// Why, when something went wrong. Empty on success.
     #[serde(default)]
-    pub note: String,
+    pub note: Option<crate::message::Message>,
     /// Which trigger caused it: "hotkey", "tray", "window", "auto".
     #[serde(default)]
     pub trigger: String,
@@ -197,7 +197,7 @@ mod tests {
             kind: Kind::Gather,
             affected,
             unsettled: 0,
-            note: String::new(),
+            note: None,
             trigger: "window".into(),
         }
     }
@@ -286,7 +286,7 @@ mod diagnostics_privacy_tests {
             kind: Kind::Gather,
             affected: 3,
             unsettled: 1,
-            note: String::new(),
+            note: None,
             trigger: "window".into(),
         };
         let json = serde_json::to_string(&entry).unwrap();

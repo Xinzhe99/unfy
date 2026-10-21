@@ -164,6 +164,26 @@ fn state_icon<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::image::Image<'sta
     tauri::image::Image::new_owned(tinted, width, height).into()
 }
 
+/// The tray sentences for the language the interface is using.
+///
+/// Falls back to the source language while the locale is unresolved, which is the
+/// window before the webview reports it; guessing an English-speaking user from
+/// the operating system here would risk a Chinese window with an English tray.
+fn locale_text<R: Runtime>(app: &AppHandle<R>) -> &'static crate::ui_text::TrayText {
+    let locale = app
+        .state::<AppState>()
+        .ui_locale
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+        .unwrap_or(crate::ui_text::Locale::Zh);
+    crate::ui_text::tray(locale)
+}
+
+fn locale_remote_prefix<R: Runtime>(app: &AppHandle<R>) -> &'static str {
+    locale_text(app).remote_prefix
+}
+
 fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
     let state = app.state::<AppState>();
     // Clone the Arcs so the locks are not held across the whole function: the
@@ -177,18 +197,19 @@ fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
         Err(_) => return "Conflux".into(),
     };
 
+    let text = locale_text(app);
     let base = match engine_state {
-        conflux_domain::EngineState::Idle => "Conflux · 就绪",
-        conflux_domain::EngineState::Planning => "Conflux · 正在计划",
-        conflux_domain::EngineState::Migrating => "Conflux · 正在整理窗口",
-        conflux_domain::EngineState::Active => "Conflux · 布局已启用",
-        conflux_domain::EngineState::Restoring => "Conflux · 正在恢复",
-        conflux_domain::EngineState::Degraded => "Conflux · 部分受限",
-        conflux_domain::EngineState::Error => "Conflux · 需要处理",
+        conflux_domain::EngineState::Idle => text.state_idle,
+        conflux_domain::EngineState::Planning => text.state_planning,
+        conflux_domain::EngineState::Migrating => text.state_migrating,
+        conflux_domain::EngineState::Active => text.state_active,
+        conflux_domain::EngineState::Restoring => text.state_restoring,
+        conflux_domain::EngineState::Degraded => text.state_degraded,
+        conflux_domain::EngineState::Error => text.state_error,
     };
 
     let mut tooltip = if paused {
-        format!("{base}（已暂停）")
+        format!("{base}{}", text.paused_suffix)
     } else {
         base.to_string()
     };
@@ -199,7 +220,10 @@ fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
     // state alone cannot.
     if let Ok(tracker) = detector.lock() {
         if let Some(evidence) = tracker.evidence() {
-            tooltip.push_str(&format!("\n远程会话：{evidence}"));
+            let sentence = crate::ui_text::evidence(text, evidence.key(), evidence.param());
+            tooltip.push('\n');
+            tooltip.push_str(locale_remote_prefix(app));
+            tooltip.push_str(&sentence);
         }
     }
     tooltip
@@ -240,7 +264,13 @@ pub fn toggle_remote<R: Runtime>(app: &AppHandle<R>) {
         "conflux://remote",
         serde_json::json!({
             "active": now_active,
-            "evidence": if now_active { "手动标记" } else { "" },
+            "evidence": if now_active {
+                serde_json::json!(crate::message::evidence_message(
+                    &conflux_detect::Evidence::ManualMarker
+                ))
+            } else {
+                serde_json::json!(null)
+            },
             // The marker only changes the verdict; whether windows move is decided
             // by the automation settings, exactly as for detected evidence.
             "acted": false,
@@ -273,48 +303,37 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .map(|tracker| tracker.is_active())
         .unwrap_or(false);
 
+    let text = locale_text(app);
     let gather_label = if has_layout {
-        "重新整理到目标屏"
+        text.re_gather
     } else {
-        "整理到目标屏"
+        text.gather
     };
 
     let gather = MenuItem::with_id(app, ID_GATHER, gather_label, !paused, None::<&str>)?;
-    let restore = MenuItem::with_id(app, ID_RESTORE, "恢复本次布局", has_layout, None::<&str>)?;
-    let rescue = MenuItem::with_id(app, ID_RESCUE, "救援越界窗口", true, None::<&str>)?;
-    let pause = CheckMenuItem::with_id(
-        app,
-        ID_PAUSE,
-        "暂停自动整理",
-        has_layout,
-        paused,
-        None::<&str>,
-    )?;
-    let identify = MenuItem::with_id(app, ID_IDENTIFY, "识别屏幕编号", true, None::<&str>)?;
+    let restore = MenuItem::with_id(app, ID_RESTORE, text.restore, has_layout, None::<&str>)?;
+    let rescue = MenuItem::with_id(app, ID_RESCUE, text.rescue, true, None::<&str>)?;
+    let pause =
+        CheckMenuItem::with_id(app, ID_PAUSE, text.pause, has_layout, paused, None::<&str>)?;
+    let identify = MenuItem::with_id(app, ID_IDENTIFY, text.identify, true, None::<&str>)?;
     // Only meaningful with more than one display; disabled otherwise rather than
     // hidden, so the item does not appear and disappear between setups.
-    let cycle = MenuItem::with_id(
-        app,
-        ID_CYCLE,
-        "切换到下一块屏",
-        display_count > 1,
-        None::<&str>,
-    )?;
+    let cycle = MenuItem::with_id(app, ID_CYCLE, text.cycle, display_count > 1, None::<&str>)?;
     let remote = MenuItem::with_id(
         app,
         ID_REMOTE,
         if remote_active {
-            "结束远程会话并恢复"
+            text.remote_end
         } else {
-            "标记为远程会话"
+            text.remote_mark
         },
         true,
         None::<&str>,
     )?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let settings = MenuItem::with_id(app, ID_SETTINGS, "设置…", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, ID_SETTINGS, text.settings, true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit_item = MenuItem::with_id(app, ID_QUIT, "退出", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, ID_QUIT, text.quit, true, None::<&str>)?;
 
     Menu::with_items(
         app,
@@ -406,7 +425,7 @@ pub fn record<R: Runtime>(
             kind,
             affected,
             unsettled,
-            note: String::new(),
+            note: None,
             trigger: trigger.to_string(),
         });
     };
@@ -424,7 +443,8 @@ fn run_gather<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             .map(|t| t.native_id.as_str()),
     ) else {
         show_settings(app);
-        return Err("没有可用显示器".into());
+        // A sentinel: the frontend maps it to a translated message.
+        return Err("no_displays".into());
     };
 
     // Same semantics as the main button: "gather to the target display" while a

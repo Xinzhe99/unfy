@@ -9,11 +9,13 @@ use tauri::Manager;
 
 mod activity;
 pub mod commands;
+mod message;
 mod monitor;
 pub mod platform;
 mod schedule;
 pub mod session;
 pub mod tray;
+pub mod ui_text;
 pub mod update;
 
 use std::sync::Arc;
@@ -35,8 +37,6 @@ pub struct AppState {
     /// Remote-session detector state. One tracker per process, because the
     /// activation streak must survive across polls.
     pub detector: Arc<std::sync::Mutex<conflux_detect::Tracker>>,
-    /// The evidence string for the session that is currently active, if any.
-    pub last_remote: Arc<std::sync::Mutex<Option<String>>>,
     /// Last logged evidence summary, so the monitor logs transitions rather than
     /// every poll.
     pub last_observation: Arc<std::sync::Mutex<Option<String>>>,
@@ -71,6 +71,13 @@ pub struct AppState {
     /// windows stay where the gather put them until the user notices. Resuming
     /// consumes this flag and restores.
     pub deferred_restore: Arc<std::sync::atomic::AtomicBool>,
+    /// The interface language the tray renders in.
+    ///
+    /// The webview owns the rule that resolves `system` (it reads
+    /// `navigator.language`), and reports the result through `set_ui_locale`. Two
+    /// independent resolutions could disagree, which would show a Chinese tray
+    /// beside an English window.
+    pub ui_locale: Arc<std::sync::Mutex<Option<ui_text::Locale>>>,
     /// The most recent operational failure, cleared on the next success.
     ///
     /// Kept here rather than in the engine because not every failure originates
@@ -78,7 +85,7 @@ pub struct AppState {
     /// a restore that leaves windows behind all matter to the user and none of
     /// them is an `EngineError`. The overview shows this so a problem does not
     /// live only in the log.
-    pub last_error: Arc<std::sync::Mutex<Option<String>>>,
+    pub last_error: Arc<std::sync::Mutex<Option<crate::message::Message>>>,
 }
 
 impl Default for AppState {
@@ -135,6 +142,9 @@ impl AppState {
             Err(e) => tracing::error!(error = %e, "could not read previous journal"),
         }
 
+        // Read before `settings` is moved into the state below.
+        let ui_locale = ui_text::Locale::from_setting(&settings.language);
+
         Self {
             engine: Arc::new(std::sync::Mutex::new(engine)),
             settings: Arc::new(std::sync::Mutex::new(settings)),
@@ -144,12 +154,12 @@ impl AppState {
             detector: Arc::new(std::sync::Mutex::new(conflux_detect::Tracker::new(
                 conflux_detect::Sensitivity::Off,
             ))),
-            last_remote: Arc::new(std::sync::Mutex::new(None)),
             last_observation: Arc::new(std::sync::Mutex::new(None)),
             manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_auto_gather: Arc::new(std::sync::Mutex::new(None)),
             storage_probe: Arc::new(std::sync::Mutex::new(None)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
+            ui_locale: Arc::new(std::sync::Mutex::new(ui_locale)),
             last_error: Arc::new(std::sync::Mutex::new(None)),
             deferred_restore: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             activity: Arc::new(std::sync::Mutex::new(activity::Activity::load(
@@ -278,6 +288,7 @@ pub fn run() {
             commands::rescue_offscreen,
             commands::get_settings,
             commands::save_settings,
+            commands::set_ui_locale,
             commands::set_target_display,
             commands::pending_work,
             commands::dismiss_pending_work,

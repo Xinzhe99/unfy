@@ -13,6 +13,7 @@ use conflux_settings::{Settings, TargetDisplay};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
+use crate::message::Message;
 use crate::{platform, AppState};
 
 #[derive(Debug, Serialize)]
@@ -26,7 +27,7 @@ pub struct StatusDto {
     pub display_count: usize,
     pub target: Option<TargetDto>,
     pub pending_windows: usize,
-    pub last_error: Option<String>,
+    pub last_error: Option<Message>,
     /// Automation paused; the current layout is retained.
     pub paused: bool,
     /// How many windows the open transaction holds.
@@ -175,7 +176,7 @@ fn sync_tray(handle: &tauri::AppHandle) {
 ///
 /// `None` clears: a success means the previous failure is no longer the current
 /// state of the app, and leaving it visible would cry wolf.
-fn note_result(app: &State<'_, AppState>, error: Option<String>) {
+fn note_result(app: &State<'_, AppState>, error: Option<Message>) {
     if let Ok(mut slot) = app.last_error.lock() {
         *slot = error;
     }
@@ -475,7 +476,7 @@ pub async fn migrate(
         "conflux://progress",
         serde_json::json!({ "phase": "done" }),
     );
-    note_result(&app, result.as_ref().err().cloned());
+    note_result(&app, result.as_ref().err().cloned().map(Message::new));
     sync_tray(&handle);
     result
 }
@@ -534,14 +535,14 @@ fn migrate_blocking(
             kind: crate::activity::Kind::Gather,
             affected: report.applied_count(),
             unsettled: report.failed_count() + report.unplaced.len(),
-            // A count, not prose: the UI renders the sentence in the user's
-            // language. A Chinese string written here would appear verbatim in an
-            // English interface, which is exactly the mixed-language bug this
-            // replaced.
             note: if restored_first > 0 {
-                format!("restored_first={restored_first}")
+                Some(Message::one(
+                    "先恢复了 {count} 个窗口",
+                    "count",
+                    restored_first.to_string(),
+                ))
             } else {
-                String::new()
+                None
             },
             trigger: "window".into(),
         });
@@ -655,7 +656,7 @@ pub async fn restore_after_delay<R: tauri::Runtime>(
     })
     .await
     .map_err(|e| format!("restore task failed: {e}"))?;
-    note_result(app, result.as_ref().err().cloned());
+    note_result(app, result.as_ref().err().cloned().map(Message::new));
     crate::tray::refresh(handle);
     result
 }
@@ -708,7 +709,7 @@ fn restore_blocking(
             affected: report.count(conflux_domain::WindowOutcome::Restored)
                 + report.count(conflux_domain::WindowOutcome::FallbackVisible),
             unsettled: report.pending.len(),
-            note: String::new(),
+            note: None,
             trigger: "window".into(),
         });
     }
@@ -739,7 +740,7 @@ pub fn rescue_offscreen(app: State<'_, AppState>) -> Result<usize, String> {
                 kind: crate::activity::Kind::Rescue,
                 affected: rescued.len(),
                 unsettled: 0,
-                note: String::new(),
+                note: None,
                 trigger: "window".into(),
             });
         }
@@ -771,7 +772,7 @@ fn settings_dto(
     let _ = handle;
     if let Ok(tracker) = app.detector.lock() {
         dto.remote_active = tracker.is_active();
-        dto.remote_evidence = tracker.evidence().map(|e| e.label());
+        dto.remote_evidence = tracker.evidence().map(crate::message::evidence_message);
     }
     // `From<&Settings>` cannot see the topology, so the target's presence and live
     // number are resolved here. Without this the settings payload claimed the
@@ -830,7 +831,7 @@ pub struct SettingsDto {
     /// What the detector currently believes, and why. Independent of whether
     /// automation is enabled: the overview shows the evidence either way.
     pub remote_active: bool,
-    pub remote_evidence: Option<String>,
+    pub remote_evidence: Option<Message>,
 }
 
 impl From<&Settings> for SettingsDto {
@@ -1048,7 +1049,9 @@ pub fn save_settings(
             tracing::warn!(error = %e, "settings saved but not applied to the live engine");
             note_result(
                 &app,
-                Some("设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。".into()),
+                Some(Message::new(
+                    "设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。",
+                )),
             );
         }
     }
@@ -1069,9 +1072,10 @@ pub fn save_settings(
                 tracing::warn!(error = %e, "automation disabled but the restore failed");
                 note_result(
                     &app,
-                    Some(format!(
-                        "已关闭自动整理，但恢复没有完成：{}。可以在概览页重试。",
-                        e
+                    Some(Message::one(
+                        "已关闭自动整理，但恢复没有完成：{error}。可以在概览页重试。",
+                        "error",
+                        e.to_string(),
                     )),
                 );
             }
@@ -1235,14 +1239,17 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
     let permitted = platform::has_window_permission();
     items.push(HealthItemDto {
         id: "permission".into(),
-        label: "窗口控制权限".into(),
+        label: Message::new("窗口控制权限"),
         status: if permitted { "ok" } else { "problem" }.into(),
         detail: if permitted {
-            "可以移动其他应用的窗口。".into()
+            Message::new("可以移动其他应用的窗口。")
         } else {
-            format!(
-                "缺少「{}」授权，整理不会生效。",
-                platform::permission_name()
+            // The permission name is itself a catalogued sentence, so it travels as
+            // a parameter and the interface translates it on substitution.
+            Message::one(
+                "缺少「{name}」授权，整理不会生效。",
+                "name",
+                platform::permission_name(),
             )
         },
     });
@@ -1257,7 +1264,7 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
         .unwrap_or_default();
     items.push(HealthItemDto {
         id: "displays".into(),
-        label: "显示器".into(),
+        label: Message::new("显示器"),
         status: match displays.len() {
             0 => "problem",
             1 => "attention",
@@ -1265,16 +1272,16 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
         }
         .into(),
         detail: match displays.len() {
-            0 => "没有检测到显示器。".into(),
-            1 => "只有一块显示器，整理没有可移动的目标。".into(),
-            count => format!("检测到 {count} 块显示器。"),
+            0 => Message::new("没有检测到显示器。"),
+            1 => Message::new("只有一块显示器，整理没有可移动的目标。"),
+            count => Message::one("检测到 {count} 块显示器。", "count", count.to_string()),
         },
     });
 
     // 3. Hotkeys. A combination that failed to register is invisible until the
     //    user presses it and nothing happens.
     if let Ok(status) = app.hotkey_status.lock() {
-        let failures: Vec<String> = [&status.gather_error, &status.restore_error]
+        let failures: Vec<Message> = [&status.gather_error, &status.restore_error]
             .into_iter()
             .flatten()
             .cloned()
@@ -1282,14 +1289,16 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
         let configured = status.gather.is_some() || status.restore.is_some();
         items.push(HealthItemDto {
             id: "hotkeys".into(),
-            label: "全局快捷键".into(),
+            label: Message::new("全局快捷键"),
             status: if failures.is_empty() { "ok" } else { "problem" }.into(),
-            detail: if !failures.is_empty() {
-                failures.join("；")
+            detail: if let Some(first) = failures.first() {
+                // One line, so the first failure only. The settings page lists every
+                // registered combination, which is where the rest belong.
+                first.clone()
             } else if configured {
-                "已注册，在其他应用中也生效。".into()
+                Message::new("已注册，在其他应用中也生效。")
             } else {
-                "未设置。可通过托盘或本窗口触发。".into()
+                Message::new("未设置。可通过托盘或本窗口触发。")
             },
         });
     }
@@ -1331,12 +1340,16 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
     };
     items.push(HealthItemDto {
         id: "storage".into(),
-        label: "配置目录".into(),
+        label: Message::new("配置目录"),
         status: if writable { "ok" } else { "problem" }.into(),
         detail: if writable {
-            format!("可写入 {}", dir.display())
+            Message::one("可写入 {path}", "path", dir.display().to_string())
         } else {
-            format!("无法写入 {}：设置和日志都不会保存。", dir.display())
+            Message::one(
+                "无法写入 {path}：设置和日志都不会保存。",
+                "path",
+                dir.display().to_string(),
+            )
         },
     });
 
@@ -1346,11 +1359,12 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
         if engine.state().has_pending_work() {
             items.push(HealthItemDto {
                 id: "pending".into(),
-                label: "未完成的整理".into(),
+                label: Message::new("未完成的整理"),
                 status: "attention".into(),
-                detail: format!(
-                    "有 {} 个窗口的快照等待恢复。",
-                    engine.captured_window_count()
+                detail: Message::one(
+                    "有 {count} 个窗口的快照等待恢复。",
+                    "count",
+                    engine.captured_window_count().to_string(),
                 ),
             });
         }
@@ -1362,10 +1376,12 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
 #[derive(Debug, Serialize)]
 pub struct HealthItemDto {
     pub id: String,
-    pub label: String,
+    /// The row's title, as a sentence for the interface to word.
+    pub label: Message,
     /// `ok`, `attention`, or `problem`.
     pub status: String,
-    pub detail: String,
+    /// One line explaining the status, in the same form.
+    pub detail: Message,
 }
 
 #[tauri::command]
@@ -1443,7 +1459,7 @@ fn diagnostics_report(app: &State<'_, AppState>) -> Result<serde_json::Value, St
                 "detection".into(),
                 serde_json::json!({
                     "active": tracker.is_active(),
-                    "evidence": tracker.evidence().map(|e| e.label()),
+                    "evidence": tracker.evidence().map(crate::message::evidence_message),
                     "last_observation": app.last_observation.lock().ok().and_then(|v| v.clone()),
                 }),
             );
@@ -1583,7 +1599,9 @@ pub struct ActivityEntryDto {
     pub kind: String,
     pub affected: usize,
     pub unsettled: usize,
-    pub note: String,
+    /// What the entry could not say in counts alone. Already in the user's
+    /// language when it reaches here.
+    pub note: Option<Message>,
     pub trigger: String,
 }
 
@@ -1776,6 +1794,42 @@ pub fn dismiss_last_error(app: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Tell the backend which language the interface is rendering in.
+///
+/// The webview owns the rule that resolves `system`, because it reads
+/// `navigator.language`; the tray, which is built in Rust, needs the result. Sent
+/// on every locale change, including the first render, so the two views cannot end
+/// up in different languages.
+#[tauri::command]
+pub fn set_ui_locale(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+    locale: String,
+) -> Result<(), String> {
+    let parsed = crate::ui_text::Locale::from_tag(&locale).ok_or_else(|| {
+        // An unsupported tag is a bug in the caller rather than a user error; the
+        // tray keeps the language it had rather than switching to a guess.
+        format!("unsupported locale: {locale}")
+    })?;
+    let changed = match app.ui_locale.lock() {
+        Ok(mut slot) => {
+            let changed = *slot != Some(parsed);
+            *slot = Some(parsed);
+            changed
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    if changed {
+        // Worth one line: a user reporting a half-translated interface is asking
+        // exactly this, and the tray language is otherwise invisible in the log.
+        tracing::info!(?parsed, "interface language reported by the window");
+        // Rebuild so the menu is in the new language immediately rather than at the
+        // next state change.
+        crate::tray::refresh(&handle);
+    }
+    Ok(())
+}
+
 /// Declare, or end, a remote session by hand.
 ///
 /// The tray item is the primary entry, but a tray icon can be hidden by the
@@ -1884,7 +1938,7 @@ pub fn keep_current_layout(app: State<'_, AppState>) -> Result<(), String> {
             kind: crate::activity::Kind::KeepLayout,
             affected: before,
             unsettled: 0,
-            note: "接受了当前布局，不再恢复".into(),
+            note: Some(Message::new("接受了当前布局，不再恢复")),
             trigger: "window".into(),
         });
     }
@@ -1899,9 +1953,11 @@ pub fn keep_current_layout(app: State<'_, AppState>) -> Result<(), String> {
 #[derive(Debug, Serialize, Default, Clone)]
 pub struct HotkeyStatusDto {
     pub gather: Option<String>,
-    pub gather_error: Option<String>,
+    /// Why the combination could not be registered, as a sentence for the
+    /// interface to word. `None` when it registered.
+    pub gather_error: Option<Message>,
     pub restore: Option<String>,
-    pub restore_error: Option<String>,
+    pub restore_error: Option<Message>,
 }
 
 #[tauri::command]

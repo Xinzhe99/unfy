@@ -47,7 +47,11 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
             maxHeight: 300,
           }}
           role="img"
-          aria-label={`布局预览：${placed} 个窗口排入 ${work.width}×${work.height} 的区域`}
+          aria-label={t("布局预览：{placed} 个窗口排入 {width}×{height} 的区域", {
+            placed,
+            width: work.width,
+            height: work.height,
+          })}
           preserveAspectRatio="xMidYMid meet"
         >
           {/* Work-area boundary, so the user can see the margin is respected. */}
@@ -178,12 +182,14 @@ function SkippedList({ skipped }: { skipped: PreviewDto["skipped"] }) {
       <ul className="mt-1 space-y-1 pl-4">
         {entries.map(([reason, apps]) => (
           <li key={reason}>
-            {skipLabel(reason)} · {countOf(apps)} 个
+            {t("{reason} · {count} 个窗口", {
+              reason: skipLabel(reason),
+              count: countOf(apps),
+            })}
             {apps.size > 0 ? (
               <span className="text-[var(--color-muted)]/70">
                 {" "}
-                （{[...apps.keys()].slice(0, 4).join("、")}
-                {apps.size > 4 ? " 等" : ""}）
+                {t("（{apps}）", { apps: appNames(apps) })}
               </span>
             ) : null}
           </li>
@@ -191,6 +197,18 @@ function SkippedList({ skipped }: { skipped: PreviewDto["skipped"] }) {
       </ul>
     </details>
   );
+}
+
+/**
+ * The application names beside a skip reason.
+ *
+ * Both the separator and the "and more" marker are locale-specific, so neither is
+ * written inline: English needs ", " where Chinese needs "、".
+ */
+function appNames(apps: Map<string, number>): string {
+  const shown = [...apps.keys()].slice(0, 4);
+  const list = shown.join(t("、"));
+  return apps.size > shown.length ? t("{list} 等", { list }) : list;
 }
 
 function countOf(apps: Map<string, number>): number {

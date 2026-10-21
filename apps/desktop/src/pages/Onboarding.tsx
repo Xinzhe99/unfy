@@ -56,7 +56,7 @@ export function Onboarding({
 
   const steps = [
     {
-      title: "这个工具做什么",
+      title: t("这个工具做什么"),
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
           <p>{t("当你在只有一块屏的设备上远程回这台电脑时，其他屏幕上的窗口是看不见的。")}</p>
@@ -66,7 +66,7 @@ export function Onboarding({
       ),
     },
     {
-      title: "指定远程端能看到的那块屏",
+      title: t("指定远程端能看到的那块屏"),
       body: (
         <div className="space-y-3">
           <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">{t("下面的画面就是每块屏现在的真实内容。如果分不清是哪一块，先在屏幕上显示编号，再对照远程画面。")}</p>
@@ -95,7 +95,7 @@ export function Onboarding({
       ),
     },
     {
-      title: "让它自动开始和结束",
+      title: t("让它自动开始和结束"),
       body: (
         <div className="space-y-3">
           <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">Conflux 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。</p>
@@ -120,7 +120,7 @@ export function Onboarding({
       ),
     },
     {
-      title: "随时可以纠正",
+      title: t("随时可以纠正"),
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
           <p>{t("整理之后，如果发现远程端看到的不是那块屏，用这两个入口立即纠正：")}</p>
@@ -135,10 +135,10 @@ export function Onboarding({
       ),
     },
     {
-      title: "有些窗口不会被移动",
+      title: t("有些窗口不会被移动"),
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>少数应用会自己纠正窗口位置，整理时它们留在原处。这不是失败：Conflux会把它们的名字列出来，并给一个「排除」按钮。</p>
+          <p>{t("少数应用会自己纠正窗口位置，整理时它们留在原处。这不是失败：Conflux 会把它们的名字列出来，并给一个「排除」按钮。")}</p>
           <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。")}</p>
           <p className="text-xs text-[var(--color-muted)]">{t("全屏应用、最小化的窗口和系统外壳本来就会跳过。")}</p>
         </div>
@@ -175,7 +175,10 @@ export function Onboarding({
       <div className="flex flex-1 flex-col justify-center overflow-y-auto px-8 py-6">
         <div className="mx-auto w-full max-w-lg">
           <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--color-muted)]">
-            第 {step + 1} 步，共 {steps.length} 步
+            {t("第 {step} 步，共 {total} 步", {
+              step: step + 1,
+              total: steps.length,
+            })}
           </p>
           <h1 className="mt-1 text-lg font-semibold tracking-tight">
             {current.title}
@@ -193,7 +196,7 @@ export function Onboarding({
               onClick={() => void next()}
               disabled={!canAdvance || busy}
             >
-              {isLast ? "开始使用" : "下一步"}
+              {t(isLast ? "开始使用" : "下一步")}
             </Button>
           </div>
           {step === 1 && chosen === null ? (
@@ -203,9 +206,11 @@ export function Onboarding({
       </div>
 
       <div className="flex justify-center gap-1.5 pb-6">
-        {steps.map((s, index) => (
+        {steps.map((_, index) => (
           <span
-            key={s.title}
+            // Index, not the title: a translated title would change the key when
+            // the language changes and remount the dots.
+            key={index}
             className={`size-1.5 rounded-full ${
               index === step
                 ? "bg-[var(--color-accent)]"

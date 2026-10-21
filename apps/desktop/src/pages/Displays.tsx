@@ -93,7 +93,7 @@ export function DisplaysPage({
             value={settings.margin}
             min={0}
             max={200}
-            suffix="像素"
+            suffix={t("像素")}
             disabled={busy}
             onCommit={(margin) => onSave({ margin })}
           />
@@ -106,7 +106,7 @@ export function DisplaysPage({
             value={settings.gap}
             min={0}
             max={200}
-            suffix="像素"
+            suffix={t("像素")}
             disabled={busy}
             onCommit={(gap) => onSave({ gap })}
           />

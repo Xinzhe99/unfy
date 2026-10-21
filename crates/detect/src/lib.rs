@@ -151,13 +151,40 @@ impl Evidence {
         matches!(self, Evidence::RdpSession | Evidence::ManualMarker)
     }
 
-    pub fn label(&self) -> String {
+    /// The sentence describing this evidence, as a catalogue key.
+    ///
+    /// The window renders it from the frontend catalogue and the tray from its own
+    /// table, so what crosses the boundary is the key plus the value, never a
+    /// formatted sentence: a sentence formatted here would be Chinese in an
+    /// English interface.
+    pub fn key(&self) -> &'static str {
         match self {
-            Evidence::RdpSession => "远程桌面会话".to_string(),
-            Evidence::VirtualDisplay(name) => format!("虚拟显示器 {name}"),
-            Evidence::ToolConnected(name) => format!("{name} 已连接"),
-            Evidence::ToolRunning(name) => format!("{name} 正在运行"),
-            Evidence::ManualMarker => "手动标记".to_string(),
+            Evidence::RdpSession => "远程桌面会话",
+            Evidence::VirtualDisplay(_) => "虚拟显示器 {name}",
+            Evidence::ToolConnected(_) => "{name} 已连接",
+            Evidence::ToolRunning(_) => "{name} 正在运行",
+            Evidence::ManualMarker => "手动标记",
+        }
+    }
+
+    /// The value for the `{name}` placeholder in [`Evidence::key`], if it has one.
+    pub fn param(&self) -> Option<&str> {
+        match self {
+            Evidence::VirtualDisplay(name)
+            | Evidence::ToolConnected(name)
+            | Evidence::ToolRunning(name) => Some(name),
+            Evidence::RdpSession | Evidence::ManualMarker => None,
+        }
+    }
+
+    /// The sentence with its value filled in, in the source language.
+    ///
+    /// For logs and diagnostics only. Anything the user reads goes through
+    /// `key`/`param` so it can be translated.
+    pub fn label(&self) -> String {
+        match self.param() {
+            Some(name) => self.key().replace("{name}", name),
+            None => self.key().to_string(),
         }
     }
 }

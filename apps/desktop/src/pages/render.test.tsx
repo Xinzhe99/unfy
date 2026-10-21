@@ -23,6 +23,9 @@ import { DisplaysPage } from "../pages/Displays";
 import { ExclusionsPage } from "../pages/Exclusions";
 import { GeneralPage } from "../pages/General";
 import { Onboarding } from "../pages/Onboarding";
+import { applyLocale, currentLocale, t } from "../i18n";
+import { errorMessage, humanError, skipLabels, stateLabels } from "../api";
+import { navigation } from "../App";
 import { DisplaysPage } from "../pages/Displays";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import { PlanPreview } from "../components/PlanPreview";
@@ -138,7 +141,7 @@ const activity: ActivityEntryDto[] = [
     kind: "gather",
     affected: 3,
     unsettled: 1,
-    note: "",
+    note: null,
     trigger: "window",
   },
   {
@@ -146,7 +149,7 @@ const activity: ActivityEntryDto[] = [
     kind: "auto_restore",
     affected: 3,
     unsettled: 0,
-    note: "",
+    note: null,
     trigger: "auto",
   },
 ];
@@ -158,11 +161,42 @@ const hotkeys: HotkeyStatusDto = {
   restore_error: null,
 };
 
+/** A sentence as the backend sends it: the key, plus any placeholder values. */
+function message(key: string, params: Record<string, string> = {}) {
+  return { key, params };
+}
+
+const apps: AppDto[] = [
+  { name: "msedge.exe", excluded: true },
+  { name: "notepad.exe", excluded: false },
+];
+
 const health: HealthItemDto[] = [
-  { id: "permission", label: "窗口控制权限", status: "ok", detail: "可以移动其他应用的窗口。" },
-  { id: "displays", label: "显示器", status: "ok", detail: "检测到 2 块显示器。" },
-  { id: "hotkeys", label: "全局快捷键", status: "problem", detail: "Ctrl+Alt+G 已被占用" },
-  { id: "storage", label: "配置目录", status: "ok", detail: "可写入" },
+  {
+    id: "permission",
+    label: message("窗口控制权限"),
+    status: "ok",
+    detail: message("可以移动其他应用的窗口。"),
+  },
+  {
+    id: "displays",
+    label: message("显示器"),
+    status: "ok",
+    detail: message("检测到 {count} 块显示器。", { count: "2" }),
+  },
+  {
+    id: "hotkeys",
+    label: message("全局快捷键"),
+    status: "problem",
+    // Raw text from the operating system, which is already in its own language.
+    detail: message("Ctrl+Alt+G is already in use"),
+  },
+  {
+    id: "storage",
+    label: message("配置目录"),
+    status: "ok",
+    detail: message("可写入 {path}", { path: "C:\\Users\\dell\\AppData\\Roaming\\Conflux" }),
+  },
 ];
 
 function noop() {}
@@ -209,7 +243,7 @@ describe("pages render", () => {
           captured_windows: 4,
           target: { native_id: "GONE", label: "DISPLAY9", present: false },
         }}
-        settings={{ ...settings, remote_active: true, remote_evidence: "AnyDesk 已连接" }}
+        settings={{ ...settings, remote_active: true, remote_evidence: message("{name} 已连接", { name: "AnyDesk" }) }}
         preview={preview}
         displays={displays}
         activity={activity}
@@ -440,7 +474,7 @@ describe("pages render", () => {
   test("overview translates a raw command error into an instruction", () => {
     const html = renderToStaticMarkup(
       <OverviewPage
-        status={{ ...status, last_error: "already_active" }}
+        status={{ ...status, last_error: message("already_active") }}
         settings={settings}
         preview={null}
         displays={displays}
@@ -471,7 +505,7 @@ describe("pages render", () => {
     // raw OS error in English is not an explanation a user can act on.
     const journalFailure = renderToStaticMarkup(
       <OverviewPage
-        status={{ ...status, state: "error", last_error: "journal write failed: io error: os error 183" }}
+        status={{ ...status, state: "error", last_error: message("journal write failed: io error: os error 183") }}
         settings={settings}
         preview={null}
         displays={displays}
@@ -617,7 +651,7 @@ describe("pages render", () => {
     const active = renderToStaticMarkup(
       <OverviewPage
         status={status}
-        settings={{ ...settings, remote_active: true, remote_evidence: "手动标记" }}
+        settings={{ ...settings, remote_active: true, remote_evidence: message("手动标记") }}
         preview={null}
         displays={displays}
         activity={[]}
@@ -766,10 +800,6 @@ describe("pages render", () => {
   });
 
   test("exclusions page with running apps", () => {
-    const apps: AppDto[] = [
-      { name: "msedge.exe", excluded: true },
-      { name: "notepad.exe", excluded: false },
-    ];
     const html = renderToStaticMarkup(
       <ExclusionsPage
         settings={{ ...settings, excluded_apps: ["msedge.exe"] }}
@@ -804,7 +834,7 @@ describe("pages render", () => {
     );
     expect(configured).toContain("已配置更新源");
     // A failed hotkey must be visible without pressing it and wondering.
-    expect(configured).toContain("Ctrl+Alt+G 已被占用");
+    expect(configured).toContain("Ctrl+Alt+G is already in use");
     expect(configured).toContain("检测到 2 块显示器");
     expect(configured).toContain("invalid updater binary format");
 
@@ -934,5 +964,243 @@ describe("pages render", () => {
       />,
     );
     expect(html).toContain("没有可整理的窗口");
+  });
+});
+
+/**
+ * English mode.
+ *
+ * A page that renders Chinese while the interface is English is invisible to a
+ * source scan: `title: "这个工具做什么"` is a valid catalogue key *and* raw copy, so
+ * asking "is this string in the dictionary" answers the wrong question. The
+ * onboarding titles passed that check for months while rendering in Chinese.
+ *
+ * Rendering is the only check that asks the right one.
+ */
+describe("English mode", () => {
+  // Ideographs plus CJK punctuation: a full-width parenthesis or an enumeration
+  // comma in an English interface is as wrong as a Chinese word, and the
+  // ideograph range alone does not include them.
+  const CJK = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
+  // The language picker names each language in its own script, on purpose.
+  const intentional = ["中文"];
+  const strip = (html: string) =>
+    intentional.reduce((acc, word) => acc.split(word).join(""), html);
+
+  const original = currentLocale();
+
+  const pages: [string, () => string][] = [
+    [
+      "overview",
+      () =>
+        renderToStaticMarkup(
+          <OverviewPage
+            status={status}
+            settings={settings}
+            preview={preview}
+            displays={displays}
+            activity={activity}
+            progress={{ done: 2, total: 5 }}
+            busy={false}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
+            onIdentify={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "displays",
+      () =>
+        renderToStaticMarkup(
+          <DisplaysPage
+            displays={displays}
+            settings={settings}
+            thumbnails={{}}
+            busy={false}
+            onSelect={noop}
+            onIdentify={noop}
+            onSave={noop}
+            onRefresh={noop}
+          />,
+        ),
+    ],
+    [
+      "exclusions",
+      () =>
+        renderToStaticMarkup(
+          <ExclusionsPage
+            settings={{ ...settings, excluded_apps: ["msedge.exe"] }}
+            runningApps={apps}
+            busy={false}
+            onSave={noop}
+          />,
+        ),
+    ],
+    [
+      "settings",
+      () =>
+        renderToStaticMarkup(
+          <GeneralPage
+            settings={settings}
+            hotkeys={hotkeys}
+            health={health}
+            updateStatus={{
+              current_version: "0.1.0",
+              auto_update: true,
+              configured: true,
+              last_outcome: null,
+              last_version: null,
+              last_detail: null,
+            }}
+            busy={false}
+            onSave={noop}
+            onCheckUpdate={noop}
+            onReset={noop}
+          />,
+        ),
+    ],
+    [
+      "onboarding",
+      () =>
+        renderToStaticMarkup(
+          <Onboarding
+            displays={displays}
+            settings={{ ...settings, onboarding_done: false, onboarding_step: 0 }}
+            thumbnails={{}}
+            busy={false}
+            onSelectTarget={async () => {}}
+            onIdentify={noop}
+            onSetDetect={async () => {}}
+            onFinish={noop}
+          />,
+        ),
+    ],
+    [
+      "permission warning",
+      () =>
+        renderToStaticMarkup(
+          <OverviewPage
+            status={{
+              ...status,
+              has_permission: false,
+              permission_name: "辅助功能",
+            }}
+            settings={settings}
+            preview={null}
+            displays={displays}
+            activity={[]}
+            progress={null}
+            busy={false}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
+            onIdentify={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "plan preview",
+      () => renderToStaticMarkup(<PlanPreview preview={preview} />),
+    ],
+  ];
+
+  for (const [name, render] of pages) {
+    test(`${name} renders no Chinese`, () => {
+      applyLocale("en");
+      try {
+        const html = strip(render());
+        const offenders = [...html.matchAll(/>([^<]*[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef][^<]*)</g)].map(
+          (m) => m[1]!.trim(),
+        );
+        expect(offenders).toEqual([]);
+      } finally {
+        applyLocale(original);
+      }
+    });
+  }
+
+  // `api.ts` holds the label tables and the sentinel mapper, none of which a page
+  // render covers: they are consumed by whichever component needs them.
+  test("every table entry and error sentinel is translated", () => {
+    applyLocale("en");
+    try {
+      for (const value of [
+        ...Object.values(stateLabels),
+        ...Object.values(skipLabels),
+      ]) {
+        expect([value, t(value)]).toEqual([value, expect.not.stringMatching(CJK)]);
+      }
+      // Sentinels the Rust side returns instead of a sentence. Both mappers are
+      // checked: which one a caller uses depends on whether the failure is the
+      // result of the button just pressed or a condition already in effect.
+      for (const sentinel of [
+        "already_active",
+        "paused",
+        "no_displays",
+        "no_displays_found",
+        "restore_cancelled",
+        "restore_incomplete:3",
+        "TargetDisplayMissing",
+        "PermissionDenied",
+        "journal write failed: io error",
+      ]) {
+        for (const [name, rendered] of [
+          ["errorMessage", errorMessage(sentinel)],
+          ["humanError", humanError(sentinel)],
+        ] as const) {
+          expect([name, sentinel, rendered]).toEqual([
+            name,
+            sentinel,
+            expect.not.stringMatching(CJK),
+          ]);
+        }
+      }
+    } finally {
+      applyLocale(original);
+    }
+  });
+
+  // The sidebar is the one surface the page renders above cannot reach: its labels
+  // live in a module-scope array and are translated at render time, because a
+  // module-scope `t()` would be evaluated once at import and never follow a
+  // language change. So the entries are checked one by one instead.
+  test("every sidebar label, group and state has an English entry", () => {
+    const labels = [
+      ...navigation.map((item) => item.label),
+      ...navigation.map((item) => item.group),
+      ...Object.values(stateLabels),
+    ];
+    applyLocale("en");
+    try {
+      for (const label of labels) {
+        // A missing entry falls back to the Chinese source, which is the bug.
+        expect([label, t(label)]).toEqual([label, expect.not.stringMatching(CJK)]);
+      }
+    } finally {
+      applyLocale(original);
+    }
   });
 });

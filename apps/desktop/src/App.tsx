@@ -17,6 +17,7 @@ import {
   type StatusDto,
   type UpdateStatusDto,
 } from "./api";
+import { stateLabels } from "./api";
 import { applyLocale, rememberLocale, resolveLocale, t } from "./i18n";
 import { ExclusionsPage } from "./pages/Exclusions";
 import { GeneralPage } from "./pages/General";
@@ -34,7 +35,11 @@ import { Status, type StatusTone } from "./components/ui";
 
 export type Page = "overview" | "displays" | "exclusions" | "general";
 
-const navigation: {
+/**
+ * Exported for the translation test: these labels are translated at render time
+ * (see the sidebar), so nothing else can prove they have English entries.
+ */
+export const navigation: {
   id: Page;
   label: string;
   icon: (props: { className?: string }) => ReactElement;
@@ -65,15 +70,6 @@ const stateTone: Record<EngineStateName, StatusTone> = {
   error: "danger",
 };
 
-const stateLabel: Record<EngineStateName, string> = {
-  idle: "就绪",
-  planning: "正在计划",
-  migrating: "正在整理",
-  active: "布局已启用",
-  restoring: "正在恢复",
-  degraded: "部分受限",
-  error: "需要处理",
-};
 
 export interface Notice {
   tone: "neutral" | "success" | "warning" | "danger";
@@ -149,7 +145,12 @@ export default function App() {
   const locale = settings ? resolveLocale(settings.language) : null;
   if (locale) applyLocale(locale);
   useEffect(() => {
-    if (locale) rememberLocale(locale);
+    if (!locale) return;
+    rememberLocale(locale);
+    // The tray is built in Rust and cannot read the catalogue, so it is told which
+    // language this render used. Failure is not worth a notice: the tray keeps its
+    // previous language and the window is already correct.
+    void api.setUiLocale(locale).catch(() => undefined);
   }, [locale]);
 
   useEffect(() => {
@@ -605,7 +606,7 @@ export default function App() {
 
         <div className="border-t border-[var(--color-border)] px-3 py-2.5">
           <Status tone={stateTone[state]}>
-            {t(stateLabel[state])}
+            {t(stateLabels[state])}
             {status?.paused ? t(" · 已暂停") : ""}
           </Status>
           {!supported ? (
@@ -950,7 +951,10 @@ function PermissionPrompt({
   return (
     <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] bg-[var(--color-surface)] px-3.5 py-2.5">
       <p className="text-[13px] font-medium">
-        需要「{status.permission_name}」权限才能移动窗口
+        {t("需要「{name}」权限才能移动窗口", {
+          // The permission name is itself a catalogued sentence.
+          name: t(status.permission_name),
+        })}
       </p>
       <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">{t("预览、查看显示器与导出诊断仍可使用，只是不会移动窗口。")}</p>
       <div className="mt-2.5 flex gap-1.5">
