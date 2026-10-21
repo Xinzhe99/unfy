@@ -1171,6 +1171,26 @@ UIA 读不到内容）。改成 `async fn` 后 sleep 落在运行时线程，窗
 停在 x=2500 的窗口被移回 x=1425，界面显示的两块屏分辨率也与系统一致。显示器已还原为
 1920×1080。
 
+### macOS 后端根本无法编译（本轮）
+
+在 Windows 上 `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` 时发现：
+macOS 后端**编译失败**——`WindowSnapshot` 缺 `focused` / `min_size`，`Capabilities` 缺 `min_size`
+（域类型后来加了这些字段，而该 crate 在 Windows/Linux 上编译为空库，所以本地永远看不到）。
+
+这意味着 macOS 支持不只是「未验证」，而是**坏的**。已修：
+
+- `AXMinSize` → `WindowSnapshot.min_size` 与 `Capabilities.min_size`（缺失时为 `None`，表示未知而非无下限）
+- `AXFocused`（回退 `AXMain`）→ `WindowSnapshot.focused`，`PrimarySide` 布局据此决定哪个窗口占主区域
+- 清理一处多余的 `unsafe`
+
+现在 `cargo check` 与 `cargo clippy` 对该目标均通过。桌面应用引用的四个 mac 符号
+（`MacPlatform`、`has_accessibility_permission`、`request_accessibility_permission`、
+`open_accessibility_settings`）也与 crate 导出一致。
+
+**为什么一直没被发现**：仓库没有配置远端，CI（虽有 macOS 任务）从未运行过。已在 workflow 的
+Windows 任务中加入该跨目标检查——检查不需要 Apple 工具链，因此能在这里跑；这是本地唯一能看见
+macOS 代码的方式。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

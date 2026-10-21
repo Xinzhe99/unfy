@@ -24,6 +24,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          # The macOS backend compiles to an empty library on other hosts, so a
+          # field added to a domain type breaks it without breaking this build. The
+          # extra target lets the Windows job type-check it; checking does not link,
+          # so no Apple toolchain is needed.
+          targets: ${{ runner.os == 'Windows' && 'aarch64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -44,6 +49,10 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      - name: macOS backend type-check
+        if: runner.os == 'Windows'
+        run: cargo check -p conflux-platform-mac --target aarch64-apple-darwin
 
   frontend:
     name: Frontend typecheck

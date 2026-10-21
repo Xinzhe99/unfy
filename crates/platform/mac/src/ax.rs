@@ -17,7 +17,9 @@
 
 use std::ffi::c_void;
 
-use conflux_domain::{DisplayKey, IdentityQuality, Rect, WindowId, WindowMode, WindowSnapshot};
+use conflux_domain::{
+    DisplayKey, IdentityQuality, Rect, Size, WindowId, WindowMode, WindowSnapshot,
+};
 use conflux_platform::{
     Capabilities, ObservedWindow, PlatformError, Result, WindowBackend, WindowPlan,
 };
@@ -238,6 +240,17 @@ fn read_window(element: CFTypeRef, pid: i32) -> Option<AxWindow> {
             mode,
             native_placement: None,
             topmost: false,
+            // `AXMinSize` is what the application itself enforces, the macOS
+            // equivalent of `WM_GETMINMAXINFO`. Not every application publishes it,
+            // and `None` means unknown rather than "no minimum".
+            min_size: copy_size(element, "AXMinSize")
+                .map(|size| Size::new(size.width.round() as i32, size.height.round() as i32)),
+            // `AXFocused` is on the window; `AXMain` is the fallback, because an
+            // application can move focus to a panel that reports only one of them.
+            // The `PrimarySide` layout gives this window the large pane.
+            focused: copy_bool(element, "AXFocused")
+                .or_else(|| copy_bool(element, "AXMain"))
+                .unwrap_or(false),
         },
     })
 }
@@ -259,6 +272,11 @@ impl WindowBackend for AccessibilityBackend {
             can_resize: is_settable(window.element, "AXSize"),
             can_read_state: true,
             can_restore_native: false,
+            // Read here rather than during enumeration: it costs a cross-process
+            // round trip, and the engine asks only about windows it is about to
+            // place.
+            min_size: copy_size(window.element, "AXMinSize")
+                .map(|size| Size::new(size.width.round() as i32, size.height.round() as i32)),
         }
     }
 
@@ -459,7 +477,7 @@ fn app_name_for(pid: i32) -> String {
     let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
         return String::new();
     };
-    if let Some(name) = unsafe { app.localizedName() } {
+    if let Some(name) = app.localizedName() {
         return name.to_string();
     }
     app.bundleIdentifier()
