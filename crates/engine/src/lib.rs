@@ -507,7 +507,22 @@ impl<B: Backend> Engine<B> {
         }
         self.state = EngineState::Planning;
 
-        let preview = self.build_preview(target)?;
+        // A failed plan must not leave the engine in `Planning`: that state
+        // refuses every later call with `InvalidTransition`, so one transient
+        // platform error would wedge the app until restart. The preview was a
+        // read-only attempt that moved nothing, so returning to `Idle` is the
+        // honest end state.
+        // A failed plan must not leave the engine in `Planning`: that state
+        // refuses every later call with `InvalidTransition`, so one transient
+        // platform error would wedge the app until restart. The preview moved
+        // nothing, so returning to `Idle` is the honest end state.
+        let preview = match self.build_preview(target) {
+            Ok(preview) => preview,
+            Err(e) => {
+                self.state = EngineState::Idle;
+                return Err(e);
+            }
+        };
         self.state = EngineState::Idle;
         Ok(preview)
     }
@@ -703,12 +718,17 @@ impl<B: Backend> Engine<B> {
                 Err(_) => continue,
             };
 
-            let snapshot = self
-                .backend
-                .enumerate()
-                .map_err(|e| EngineError::Platform(e.to_string()))?
-                .into_iter()
-                .find(|w| w.id == placement.id);
+            // A failing enumeration here means the platform went away mid-flight.
+            // The journal already holds preimages for earlier windows, so the
+            // transaction must stay open for recovery - but the state has to move
+            // to `Degraded`, not sit at `Migrating`, or nothing can be retried.
+            let snapshot = match self.backend.enumerate() {
+                Ok(windows) => windows.into_iter().find(|w| w.id == placement.id),
+                Err(e) => {
+                    self.state = EngineState::Degraded;
+                    return Err(EngineError::Platform(e.to_string()));
+                }
+            };
 
             let Some(snapshot) = snapshot else {
                 continue;

@@ -731,6 +731,21 @@ clean: 'title'   clean: '.exe'   clean: 'C:\'   clean: 'DISPLAY#'   clean: '\\?\
 
 一个测试固定入口字段的形状：序列化结果不得出现 `title` / `path` / `url` / `user` / `app_name`。
 
+### 只读操作失败后不能把引擎留在忙态
+
+`preview` 先把状态设为 `Planning`，再用 `?` 返回 `build_preview` 的错误。失败时状态就永久停在
+`Planning`——此后整理、恢复、重新整理、甚至再预览一次，全部被 `InvalidTransition` 拒绝，
+只能重启进程。
+
+这与上一轮修的 `EngineState::Error` 是同一种缺陷，只是发生在只读路径上：预览什么都没移动，
+失败后回到 `Idle` 才是诚实的终态。
+
+同一轮还修了 `migrate` 中途 `enumerate` 失败：那会让状态停在 `Migrating`，同样不可操作。
+现在改用 `Degraded`（journal 已有 preimage，恢复可用）。
+
+测试用"不存在的显示器"触发失败，断言状态回到 `Idle` 且后续整理仍然成功。把修复去掉后
+测试报 `left: Planning, right: Idle`。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

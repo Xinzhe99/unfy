@@ -985,3 +985,40 @@ fn a_failed_journal_write_enters_the_error_state() {
 
     let _ = std::fs::remove_file(&blocker);
 }
+
+/// A failed preview must not leave the engine unable to act.
+///
+/// `preview` set the state to `Planning`, then returned the platform error with
+/// `?`. Until this was fixed that left the engine in `Planning` forever, and every
+/// later call - gather, restore, retarget, another preview - was refused with
+/// `InvalidTransition`. A single transient topology error would wedge the app.
+#[test]
+fn a_failed_preview_returns_to_idle() {
+    use conflux_domain::DisplayKey;
+
+    let mut engine = Engine::new(scenario(), config("preview-fail"));
+
+    // A display that does not exist makes `build_preview` fail after the state has
+    // already been set to `Planning`.
+    let missing = DisplayKey {
+        native_id: "display-that-is-gone".into(),
+        quality: IdentityQuality::Strong,
+    };
+    let result = engine.preview(&missing);
+    assert!(result.is_err(), "a missing target must fail the preview");
+
+    assert_eq!(
+        engine.state(),
+        EngineState::Idle,
+        "a failed read-only preview must not leave the engine busy"
+    );
+
+    // The engine must still work.
+    let preview = engine.preview(&target_key()).expect("preview still works");
+    assert_eq!(preview.eligible.len(), 3);
+    assert_eq!(
+        engine.migrate(&target_key()).map(|r| r.applied_count()),
+        Ok(3),
+        "gathering must still be possible after a failed preview"
+    );
+}
