@@ -708,6 +708,29 @@ AFTER:  excluded_apps=[], margin=12, auto_detect=balanced, layout_mode=grid
 
 占位函数只是把编译警告挪走，问题仍在。删掉后立刻暴露了两个未使用的导入。
 
+### 诊断包包含活动历史
+
+一条"它把我的窗口弄乱了"的报告，没有"它到底做了什么、什么时候"就无法排查。诊断包此前不含历史。
+
+现在导出最近 50 条，字段与界面一致（时间、类型、影响数、未处理数、触发来源）。真实导出：
+
+```
+keys: ['activity', 'app_version', 'detection', 'display_count', 'displays',
+       'platform', 'settings', 'state', 'supported']
+activity entries: 35
+sample: {'affected': 1, 'at': 1792610603, 'kind': 'restore', 'trigger': 'window', 'unsettled': 0}
+```
+
+**隐私核对**（对导出文件做字符串扫描）：
+
+```
+clean: 'title'   clean: '.exe'   clean: 'C:\'   clean: 'DISPLAY#'   clean: '\\?\'
+```
+
+无窗口标题、无应用名、无原始设备路径、无用户目录。文件 5499 字节。
+
+一个测试固定入口字段的形状：序列化结果不得出现 `title` / `path` / `url` / `user` / `app_name`。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

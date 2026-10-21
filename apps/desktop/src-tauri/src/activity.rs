@@ -267,3 +267,39 @@ mod tests {
         assert!(!json.contains("title"));
     }
 }
+
+#[cfg(test)]
+mod diagnostics_privacy_tests {
+    //! What the history must never contain.
+    //!
+    //! The activity log ships inside the diagnostics bundle, which users are asked
+    //! to send when something goes wrong. That makes it the one place where a
+    //! stray field becomes a privacy problem, so the shape is pinned here rather
+    //! than trusted to review.
+
+    use super::*;
+
+    #[test]
+    fn an_entry_carries_counts_and_codes_but_no_content() {
+        let entry = Entry {
+            at: 1_700_000_000,
+            kind: Kind::Gather,
+            affected: 3,
+            unsettled: 1,
+            note: String::new(),
+            trigger: "window".into(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+
+        // No field for a window title exists, and the serialised form must not
+        // grow one by accident.
+        for forbidden in ["title", "path", "url", "user", "app_name"] {
+            assert!(
+                !json.contains(forbidden),
+                "activity entries must not carry {forbidden}: {json}"
+            );
+        }
+        assert!(json.contains("\"affected\":3"));
+        assert!(json.contains("\"kind\":\"gather\""));
+    }
+}

@@ -1325,6 +1325,34 @@ pub fn export_diagnostics(app: State<'_, AppState>) -> Result<DiagnosticsDto, St
         }
     }
 
+    // The recent action history. A report saying "it moved my windows" is
+    // untriageable without knowing what it actually did and when; the entries
+    // carry counts, not window titles.
+    if let Ok(log) = app.activity.lock() {
+        if let Some(object) = report.as_object_mut() {
+            object.insert(
+                "activity".into(),
+                serde_json::to_value(
+                    log.entries()
+                        .iter()
+                        .rev()
+                        .take(50)
+                        .map(|e| {
+                            serde_json::json!({
+                                "at": e.at,
+                                "kind": e.kind.code(),
+                                "affected": e.affected,
+                                "unsettled": e.unsettled,
+                                "trigger": e.trigger,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
+
     let dir = conflux_settings::config_dir().join("diagnostics");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("conflux-{}.json", uuid::Uuid::new_v4()));
