@@ -604,8 +604,10 @@ export default function App() {
         </nav>
 
         <div className="border-t border-[var(--color-border)] px-3 py-2.5">
-          <Status tone={stateTone[state]}>
-            {t(stateLabels[state])}
+          <Status tone={status ? stateTone[state] : "neutral"}>
+            {/* Before the first reply there is no state to name. Showing "ready"
+                while the app has not yet read anything is a claim it cannot make. */}
+            {status ? t(stateLabels[state]) : t("正在载入…")}
             {status?.paused ? t(" · 已暂停") : ""}
           </Status>
           {!supported ? (
@@ -675,7 +677,11 @@ export default function App() {
               />
             ) : null}
 
-            {page === "overview" ? (
+            {settings === null ? (
+              <div className="flex h-40 items-center justify-center text-xs text-[var(--color-muted)]">
+                {t("正在载入…")}
+              </div>
+            ) : page === "overview" ? (
               <OverviewPage
                 status={status}
                 settings={settings}

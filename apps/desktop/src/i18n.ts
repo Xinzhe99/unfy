@@ -486,6 +486,7 @@ const EN: Record<string, string> = {
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
   "用户": "User",
+  "正在载入…": "Loading…",
   "没有画面": "No picture",
   "需要「{name}」权限才能移动窗口":
     "Moving windows requires the {name} permission",
