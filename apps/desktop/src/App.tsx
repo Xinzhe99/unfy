@@ -92,6 +92,7 @@ export default function App() {
   const [runningApps, setRunningApps] = useState<AppDto[]>([]);
   const [activity, setActivity] = useState<ActivityEntryDto[]>([]);
   const [health, setHealth] = useState<HealthItemDto[]>([]);
+  const [diagnosticsPreview, setDiagnosticsPreview] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
@@ -750,6 +751,17 @@ export default function App() {
                       ? "已在每块屏幕上显示编号，4 秒后消失。"
                       : "无法显示编号，请检查屏幕状态。",
                   }))
+                }
+                diagnosticsPreview={diagnosticsPreview}
+                onPreviewDiagnostics={() =>
+                  void (async () => {
+                    try {
+                      const text = await api.previewDiagnostics();
+                      setDiagnosticsPreview(text);
+                    } catch (e) {
+                      flash({ tone: "danger", text: errorMessage(e) });
+                    }
+                  })()
                 }
                 onExport={() =>
                   void run(

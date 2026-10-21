@@ -36,6 +36,8 @@ export function OverviewPage({
   onRescue,
   onIdentify,
   onExport,
+  onPreviewDiagnostics,
+  diagnosticsPreview,
   onOpenConfigDir,
   onOpenDisplays,
   onExclude,
@@ -58,6 +60,10 @@ export function OverviewPage({
   onRescue: () => void;
   onIdentify: () => void;
   onExport: () => void;
+  /** Show the payload without writing a file (spec P0-15-A). */
+  onPreviewDiagnostics: () => void;
+  /** The payload, or null when not requested. */
+  diagnosticsPreview: string | null;
   /** Reveal the config directory, which also holds the logs and diagnostics. */
   onOpenConfigDir: () => void;
   onOpenDisplays: () => void;
@@ -424,6 +430,9 @@ export function OverviewPage({
           <Button size="sm" onClick={onRescue} disabled={busy || !supported}>
             救援越界窗口
           </Button>
+          <Button size="sm" variant="quiet" onClick={onPreviewDiagnostics} disabled={busy}>
+            查看诊断内容
+          </Button>
           <Button size="sm" onClick={onExport} disabled={busy}>
             导出诊断包
           </Button>
@@ -436,6 +445,17 @@ export function OverviewPage({
           「救援」把停留在不存在坐标上的窗口移回可见区域。诊断包只含版本、显示器分辨率与设置项，
           不含窗口标题、文件路径或屏幕画面。
         </p>
+
+        {diagnosticsPreview ? (
+          <details className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)]">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs text-[var(--color-fg-soft)]">
+              诊断包内容（导出时就是这个文件）
+            </summary>
+            <pre className="max-h-64 overflow-auto border-t border-[var(--color-border)] px-3 py-2 font-mono text-[11px] leading-relaxed text-[var(--color-fg-soft)]">
+              {diagnosticsPreview}
+            </pre>
+          </details>
+        ) : null}
       </Card>
     </>
   );

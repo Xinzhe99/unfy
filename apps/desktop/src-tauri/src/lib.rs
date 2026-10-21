@@ -282,6 +282,7 @@ pub fn run() {
             commands::pending_work,
             commands::dismiss_pending_work,
             commands::export_diagnostics,
+            commands::preview_diagnostics,
             commands::request_permission,
             commands::open_permission_settings,
             commands::update_status,

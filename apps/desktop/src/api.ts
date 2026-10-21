@@ -262,6 +262,8 @@ export const api = {
   openPath: (path?: string) => invoke<boolean>("open_path", { path: path ?? null }),
   /** Move the target to the next display and re-gather onto it. */
   cycleTarget: () => invoke<TargetDto>("cycle_target"),
+  /** Exactly what an export would contain, without writing it. */
+  previewDiagnostics: () => invoke<string>("preview_diagnostics"),
   /** Declare or end a remote session by hand; returns the new active state. */
   toggleRemoteSession: () => invoke<boolean>("toggle_remote_session"),
 };

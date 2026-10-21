@@ -1315,6 +1315,32 @@ pub struct HealthItemDto {
 
 #[tauri::command]
 pub fn export_diagnostics(app: State<'_, AppState>) -> Result<DiagnosticsDto, String> {
+    let report = diagnostics_report(&app)?;
+    let dir = conflux_settings::config_dir().join("diagnostics");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("conflux-{}.json", uuid::Uuid::new_v4()));
+    let text = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+    std::fs::write(&path, &text).map_err(|e| e.to_string())?;
+
+    Ok(DiagnosticsDto {
+        path: path.to_string_lossy().to_string(),
+        bytes: text.len() as u64,
+    })
+}
+
+/// Show exactly what a diagnostics bundle would contain, without writing it.
+///
+/// Spec P0-15-A: the user must be able to see the scope before exporting. A
+/// description of the contents is not the same thing - the only way to be sure no
+/// window title slipped in is to read the payload, and this renders the same
+/// function the export uses so the two cannot drift.
+#[tauri::command]
+pub fn preview_diagnostics(app: State<'_, AppState>) -> Result<String, String> {
+    let report = diagnostics_report(&app)?;
+    serde_json::to_string_pretty(&report).map_err(|e| e.to_string())
+}
+
+fn diagnostics_report(app: &State<'_, AppState>) -> Result<serde_json::Value, String> {
     let engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
@@ -1397,16 +1423,7 @@ pub fn export_diagnostics(app: State<'_, AppState>) -> Result<DiagnosticsDto, St
         }
     }
 
-    let dir = conflux_settings::config_dir().join("diagnostics");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("conflux-{}.json", uuid::Uuid::new_v4()));
-    let text = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
-    std::fs::write(&path, &text).map_err(|e| e.to_string())?;
-
-    Ok(DiagnosticsDto {
-        path: path.to_string_lossy().to_string(),
-        bytes: text.len() as u64,
-    })
+    Ok(report)
 }
 
 /// Non-reversible digest used to correlate display identity without exposing it.
