@@ -156,15 +156,21 @@ export default function App() {
     };
   }, [needsThumbnails, displays.length]);
 
+  // The list is what the user is looking at while they switch to another app and
+  // come back. Fetching only on navigation meant the newly opened app was missing
+  // until the page was left and re-entered a second time.
   useEffect(() => {
     if (page !== "exclusions") return;
     let cancelled = false;
-    void (async () => {
+    const load = async () => {
       const apps = await api.runningApplications();
       if (!cancelled) setRunningApps(apps);
-    })();
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 5000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [page, settings?.excluded_apps]);
 

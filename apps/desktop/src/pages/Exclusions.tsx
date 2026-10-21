@@ -108,7 +108,7 @@ export function ExclusionsPage({
           <Button
             size="sm"
             variant="quiet"
-            disabled={busy}
+            disabled={busy || rules.length === 0}
             onClick={() => onSave({ excluded_apps: [] })}
           >
             清空规则
@@ -116,7 +116,9 @@ export function ExclusionsPage({
         }
       >
         {runningApps.length === 0 ? (
-          <p className="py-1 text-xs text-[var(--color-muted)]">没有检测到有窗口的应用。</p>
+          <p className="py-1 text-xs text-[var(--color-muted)]">
+            没有检测到有窗口的应用。应用打开后回到这一页会自动刷新。
+          </p>
         ) : (
           <ul>
             {runningApps.map((app, index) => (
