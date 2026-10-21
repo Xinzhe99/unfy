@@ -1,5 +1,6 @@
 import type { HotkeyStatusDto, SettingsDto, UpdateStatusDto } from "../api";
 import { Button, Card, Segmented, SettingRow, Status, Switch } from "../components/ui";
+import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import { IconDownload } from "../components/icons";
 
 /**
@@ -142,11 +143,11 @@ export function GeneralPage({
               : "在其他应用中按下也能触发"
           }
         >
-          <HotkeyField
+          <HotkeyRecorder
             value={settings.hotkey_gather}
-            occupied={Boolean(hotkeys?.gather_error)}
+            invalid={Boolean(hotkeys?.gather_error)}
             disabled={busy}
-            onCommit={(hotkey_gather) => onSave({ hotkey_gather })}
+            onChange={(hotkey_gather) => onSave({ hotkey_gather })}
           />
         </SettingRow>
 
@@ -160,15 +161,15 @@ export function GeneralPage({
               : "把窗口放回整理前的位置"
           }
         >
-          <HotkeyField
+          <HotkeyRecorder
             value={settings.hotkey_restore}
-            occupied={Boolean(hotkeys?.restore_error)}
+            invalid={Boolean(hotkeys?.restore_error)}
             disabled={busy}
-            onCommit={(hotkey_restore) => onSave({ hotkey_restore })}
+            onChange={(hotkey_restore) => onSave({ hotkey_restore })}
           />
         </SettingRow>
         <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">
-          留空表示不注册。被系统或其他应用占用时，这里会显示原因。
+          点一下再按组合键即可录制，Esc 取消，Backspace 清除。被系统或其他应用占用时会在这里显示原因。
         </p>
       </Card>
 
@@ -254,39 +255,6 @@ export function GeneralPage({
         </SettingRow>
       </Card>
     </>
-  );
-}
-
-function HotkeyField({
-  value,
-  occupied,
-  disabled,
-  onCommit,
-}: {
-  value: string | null;
-  occupied: boolean;
-  disabled: boolean;
-  onCommit: (value: string | null) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <input
-        defaultValue={value ?? ""}
-        placeholder="未设置"
-        disabled={disabled}
-        spellCheck={false}
-        onBlur={(event) => {
-          const next = event.currentTarget.value.trim();
-          const normalized = next === "" ? null : next;
-          if (normalized !== value) onCommit(normalized);
-        }}
-        className={`h-7 w-40 rounded-[var(--radius-control)] border bg-[var(--color-surface)] px-2 text-right font-mono text-xs outline-none focus:border-[var(--color-accent)] ${
-          occupied
-            ? "border-[var(--color-warning)]"
-            : "border-[var(--color-border-strong)]"
-        }`}
-      />
-    </div>
   );
 }
 

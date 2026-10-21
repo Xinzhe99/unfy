@@ -65,6 +65,16 @@ jobs:
         working-directory: apps/desktop
         run: npx tsc --noEmit
 
+      # Front-end unit tests. Bun runs the TypeScript directly, so the app does
+      # not need a JS test runner in its dependency tree just for this.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Front-end unit tests
+        working-directory: apps/desktop
+        run: bun test
+
       - name: Build
         working-directory: apps/desktop
         run: npm run build
