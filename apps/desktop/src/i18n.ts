@@ -486,6 +486,11 @@ const EN: Record<string, string> = {
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
   "用户": "User",
+  "设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。":
+    "Settings saved, but a gather is still running; the new layout applies from the next gather.",
+  "已关闭自动整理，但恢复没有完成：{error}。可以在概览页重试。":
+    "Automatic gathering is off, but the restore did not finish: {error}. You can retry from the overview.",
+  "无效的组合键：{error}": "Not a valid shortcut: {error}",
   "{name} 已连接": "{name} connected",
   "虚拟显示器 {name}": "Virtual display {name}",
   "{name} 正在运行": "{name} running",

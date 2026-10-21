@@ -405,7 +405,9 @@ export function OverviewPage({
 
       <Card title={t("工具")}>
         {supported ? null : (
-          <EmptyState title="当前平台尚未实现窗口控制">界面可以浏览，但不会移动任何窗口。</EmptyState>
+          <EmptyState title={t("当前平台尚未实现窗口控制")}>
+            {t("界面可以浏览，但不会移动任何窗口。")}
+          </EmptyState>
         )}
         <div className="flex flex-wrap gap-1.5">
           <Button size="sm" onClick={onRescue} disabled={busy || !supported}>{t("救援越界窗口")}</Button>

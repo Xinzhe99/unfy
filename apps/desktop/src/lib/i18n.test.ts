@@ -65,6 +65,40 @@ describe("translation", () => {
 
 describe("coverage", () => {
   /**
+   * Every sentence the Rust side sends must exist in the catalogue too.
+   *
+   * The backend cannot word these itself, so it sends a key and the frontend looks
+   * it up. Nothing on either side of the boundary checks that the entry is there:
+   * the TypeScript scan cannot see Rust, and the Rust tests only check the shape of
+   * the message. A missing entry renders the Chinese source in an English window.
+   */
+  test("every backend message key has an English entry", () => {
+    const root = `${import.meta.dir}/..`;
+    const catalogue = readFileSync(`${root}/i18n.ts`, "utf8");
+    const known = new Set(
+      [...catalogue.matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]!),
+    );
+    const backend = `${root}/../src-tauri/src`;
+    const missing: string[] = [];
+    let found = 0;
+    for (const entry of readdirSync(backend, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".rs")) continue;
+      const source = readFileSync(`${backend}/${entry.name}`, "utf8");
+      for (const match of source.matchAll(
+        /Message::(?:new|one)\((?:\s*)"((?:[^"\\]|\\.)*)"/g,
+      )) {
+        const key = match[1]!.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        if (!/[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/.test(key)) continue;
+        found += 1;
+        if (!known.has(key)) missing.push(`${entry.name}: ${key}`);
+      }
+    }
+    // Guard against the regex silently matching nothing after a refactor.
+    expect(found).toBeGreaterThan(15);
+    expect(missing).toEqual([]);
+  });
+
+  /**
    * Every `t("…")` key must exist in the catalogue.
    *
    * A key that is not there falls back to the Chinese source, which is invisible

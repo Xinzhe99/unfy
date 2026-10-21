@@ -1339,6 +1339,82 @@ describe("English mode", () => {
         ),
     ],
     [
+      "overview on a platform without window control",
+      () =>
+        renderToStaticMarkup(
+          <OverviewPage
+            status={{ ...status, supported: false, display_count: 0 }}
+            settings={settings}
+            preview={null}
+            displays={displays}
+            activity={[]}
+            progress={null}
+            busy={false}
+            onPreview={noop}
+            onMigrate={noop}
+            onRestore={noop}
+            onPause={noop}
+            onRescue={noop}
+            onIdentify={noop}
+            onExport={noop}
+            diagnosticsPreview={null}
+            onPreviewDiagnostics={noop}
+            onOpenConfigDir={noop}
+            onOpenDisplays={noop}
+            onExclude={noop}
+            onKeepLayout={noop}
+            onDismissError={noop}
+            onToggleRemote={noop}
+          />,
+        ),
+    ],
+    [
+      "settings on a build without an update source",
+      () =>
+        renderToStaticMarkup(
+          <GeneralPage
+            settings={settings}
+            hotkeys={hotkeys}
+            health={health}
+            updateStatus={{
+              current_version: "0.1.0",
+              auto_update: false,
+              configured: false,
+              last_outcome: null,
+              last_version: null,
+              last_detail: null,
+            }}
+            busy={false}
+            onSave={noop}
+            onCheckUpdate={noop}
+            onReset={noop}
+          />,
+        ),
+    ],
+    [
+      "settings after a failed update check",
+      () =>
+        renderToStaticMarkup(
+          <GeneralPage
+            settings={settings}
+            hotkeys={hotkeys}
+            health={health}
+            updateStatus={{
+              current_version: "0.1.0",
+              auto_update: true,
+              configured: true,
+              last_outcome: "failed",
+              last_version: "0.1.1",
+              last_detail: "install failed: invalid updater binary format",
+            }}
+            busy={false}
+            onSave={noop}
+            onCheckUpdate={noop}
+            onReset={noop}
+          />,
+        ),
+    ],
+    [
       "permission prompt",
       () =>
         renderToStaticMarkup(

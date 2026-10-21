@@ -312,7 +312,9 @@ export function GeneralPage({
                     version: updateStatus.last_version,
                   })
                   : t("尚未检查过更新。")
-                : "此构建没有签名公钥与更新地址，检查更新不会成功。发布版才会启用。"}
+                : t(
+                    "此构建没有签名公钥与更新地址，检查更新不会成功。发布版才会启用。",
+                  )}
             </p>
             {updateStatus?.configured &&
             updateStatus.last_outcome === "failed" &&
