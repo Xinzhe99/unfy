@@ -638,6 +638,25 @@ muted 灰（chroma < 0.02）。
 新增测试断言"就绪"使用 `--color-success` 而非 `--color-muted`；改回 `tone="neutral"` 时
 测试立即失败。
 
+### 恢复延迟：实测
+
+设置 4 秒延迟后点「恢复本次布局」：
+
+```
+19:19:02.750  INFO restore delayed; a new gather will cancel it seconds=4
+19:19:06.751  INFO restore delay elapsed; restoring now
+19:19:06.754  INFO restore finished restored=1 pending=0 state=Idle
+```
+
+精确 4.0 秒，界面同时显示递减倒计时（观察到"2 秒后恢复布局"）。
+
+**发现并修正的设计错误**：自动恢复原先**跳过**延迟，理由是"检测器已经观察了几轮"。这恰好废掉了
+延迟存在的理由——延迟就是为"断开后很快重连"设计的，而 RDP 与手动标记是**立即**转换的，重连
+必然导致"恢复 + 再整理"两次搬移。现在自动恢复也遵守延迟，且挂起的恢复会被新的整理取消
+（`Schedule` 的世代计数），取消时静默返回而不是记成"恢复了 0 个窗口"。
+
+三个测试驱动真实的 `Schedule` 与 `wait_cancellable`，验证取消能打断等待。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

@@ -147,3 +147,43 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod restore_cancellation_tests {
+    //! A pending restore must be cancellable, because that is the whole point of
+    //! the delay: a remote session that drops and reconnects within it must not
+    //! cause two full migrations. These tests drive the real `Schedule`, not a
+    //! stand-in, so the generation counter is covered.
+
+    use super::*;
+
+    #[test]
+    fn a_gather_during_the_wait_cancels_the_restore() {
+        let mut schedule = Schedule::new();
+        let restore = schedule.claim();
+
+        // A gather arrives while the restore is waiting.
+        schedule.cancel();
+
+        assert!(
+            !wait_cancellable(Duration::from_millis(50), &restore),
+            "the waiting restore must observe the cancellation"
+        );
+    }
+
+    #[test]
+    fn an_uncancelled_wait_still_proceeds() {
+        let mut schedule = Schedule::new();
+        let restore = schedule.claim();
+        assert!(wait_cancellable(Duration::from_millis(30), &restore));
+    }
+
+    #[test]
+    fn cancelling_twice_is_harmless() {
+        let mut schedule = Schedule::new();
+        let restore = schedule.claim();
+        schedule.cancel();
+        schedule.cancel();
+        assert!(!wait_cancellable(Duration::from_millis(10), &restore));
+    }
+}

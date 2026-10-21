@@ -353,6 +353,36 @@ describe("pages render", () => {
     expect(html).toContain("5 个");
   });
 
+  test("the preview is labelled as a snapshot", () => {
+    // It stays on screen while the user may have changed the desktop underneath
+    // it, so the copy has to say what it is rather than imply a live view.
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={settings}
+        preview={preview}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+      />,
+    );
+    expect(html).toContain("快照");
+    expect(html).toContain("布局预览");
+  });
+
   test("overview translates a raw command error into an instruction", () => {
     const html = renderToStaticMarkup(
       <OverviewPage

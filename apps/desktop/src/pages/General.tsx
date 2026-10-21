@@ -182,8 +182,8 @@ export function GeneralPage({
 
       <Card title="恢复行为">
         <SettingRow
-          label="断开后延迟恢复"
-          hint="等远程画面稳定后再放回窗口，避免紧接着重连时来回移动"
+          label="恢复延迟"
+          hint="等这么多秒再放回窗口。期间如果又检测到远程会话，这次恢复会取消——避免断开重连时来回搬两次"
         >
           <div className="flex items-center gap-1.5">
             <input

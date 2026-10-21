@@ -614,6 +614,7 @@ pub async fn restore_after_delay<R: tauri::Runtime>(
 
     if delay > std::time::Duration::ZERO {
         let seconds = delay.as_secs();
+        tracing::info!(seconds, "restore delayed; a new gather will cancel it");
         let _ = tauri::Emitter::emit(
             handle,
             "conflux://progress",
@@ -626,10 +627,13 @@ pub async fn restore_after_delay<R: tauri::Runtime>(
         .await
         .unwrap_or(true);
         if cancelled {
-            // A newer request superseded this one. Report it as an error so the
-            // UI does not print "已恢复 0 个窗口" for a restore that never ran.
+            // A newer request superseded this one - the session came back. Report
+            // it as an error so the UI does not print "已恢复 0 个窗口" for a
+            // restore that never ran.
+            tracing::info!("restore cancelled during its delay by a newer request");
             return Err("restore_cancelled".to_string());
         }
+        tracing::info!("restore delay elapsed; restoring now");
     }
 
     let engine_state = app.engine.clone();

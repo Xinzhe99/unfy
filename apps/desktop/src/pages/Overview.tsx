@@ -305,7 +305,7 @@ export function OverviewPage({
       {preview ? (
         <Card
           title="布局预览"
-          description="预览不会移动任何窗口。"
+          description="预览不会移动任何窗口。这是点击预览那一刻的快照；离开本页后会重新计算。"
           aside={
             <Status tone="neutral">
               <IconLayout className="size-3" />

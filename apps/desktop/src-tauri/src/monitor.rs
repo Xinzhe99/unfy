@@ -204,7 +204,14 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
             // Only restore something this feature (or the user) actually
             // gathered. Restoring an idle engine is a no-op, so this is safe
             // either way, but it keeps the log honest.
-            match restore(app) {
+            // A cancelled restore means a new gather superseded it during the
+            // wait - the session came back. Doing nothing is the correct outcome,
+            // and it must not be recorded as a restore that moved zero windows.
+            let outcome = restore(app);
+            match &outcome {
+                Ok(report) if report.cancelled => {
+                    tracing::info!("auto-restore cancelled by a newer request");
+                }
                 Ok(report) => {
                     crate::tray::record(
                         app,
@@ -288,18 +295,44 @@ fn gather<R: Runtime>(app: &AppHandle<R>, evidence: &Evidence) -> Result<usize, 
 }
 
 fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
-    // Automatic restores ignore the configured delay: that delay exists to absorb
-    // a remote session that *drops and reconnects*, and by the time the detector
-    // has concluded the session ended, the gap has already been observed for
-    // several polls. Waiting again would double it. The delay still applies to
-    // the manual button, where a user may press it by accident.
+    // The delay applies here too, and for the reason it exists: a session that
+    // drops and reconnects must not cause two full migrations. RDP and the manual
+    // marker transition immediately, so without the wait a reconnect two seconds
+    // later would restore and re-gather every window. The engine reports the end
+    // once, so the wait has to be observed rather than skipped.
+    //
+    // A pending restore is cancelled by a new gather (see `gather`), which is
+    // exactly the reconnect case.
     let state = app.state::<AppState>();
+    let delay = state
+        .settings
+        .lock()
+        .ok()
+        .map(|settings| settings.restore_delay_secs)
+        .unwrap_or(0);
+    if delay > 0 {
+        let token = match state.schedule.lock() {
+            Ok(mut schedule) => schedule.claim(),
+            Err(_) => return Err("schedule lock".to_string()),
+        };
+        if !crate::schedule::wait_cancellable(
+            std::time::Duration::from_secs(u64::from(delay)),
+            &token,
+        ) {
+            return Ok(RestoreSummary {
+                restored: 0,
+                pending: 0,
+                cancelled: true,
+            });
+        }
+    }
     if let Ok(mut schedule) = state.schedule.lock() {
         schedule.cancel();
     }
     let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
     let report = engine.restore().map_err(|e| e.to_string())?;
     let summary = RestoreSummary {
+        cancelled: false,
         restored: report
             .outcomes
             .values()
@@ -318,6 +351,8 @@ fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
 struct RestoreSummary {
     restored: usize,
     pending: usize,
+    /// A newer request superseded this restore during its wait.
+    cancelled: bool,
 }
 
 /// Leak-free shutdown hook for the monitor thread.

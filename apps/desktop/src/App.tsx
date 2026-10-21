@@ -98,6 +98,7 @@ export default function App() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const noticeTimer = useRef<number | null>(null);
+  const countdownTimer = useRef<number | null>(null);
 
   const flash = useCallback((next: Notice) => {
     setNotice(next);
@@ -185,8 +186,20 @@ export default function App() {
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      if (countdownTimer.current !== null) {
+        window.clearInterval(countdownTimer.current);
+      }
     };
   }, [page, settings?.excluded_apps]);
+
+  // A preview describes the windows as they were when it was computed. Leaving
+  // the page means the user did something else in between - switching apps,
+  // closing windows, plugging in a monitor - so the picture is stale by the time
+  // they come back. It was previously kept forever and silently disagreed with the
+  // desktop.
+  useEffect(() => {
+    if (page !== "overview") setPreview(null);
+  }, [page]);
 
   useEffect(() => {
     void refresh();
@@ -271,11 +284,34 @@ export default function App() {
         // user can cancel it by gathering. Saying "正在恢复" during the wait
         // would be a lie, and hiding the countdown leaves the button looking dead.
         if (phase === "waiting") {
+          // Tick the countdown locally: the backend announces the wait once, and a
+          // frozen "5 秒后" for five seconds looks like the app has stalled.
           const seconds = event.payload.seconds ?? 0;
-          setNotice({
-            tone: "neutral",
-            text: `${seconds} 秒后恢复布局。现在点「整理到目标屏」可以取消。`,
-          });
+          if (countdownTimer.current !== null) {
+            window.clearInterval(countdownTimer.current);
+          }
+          let remaining = seconds;
+          const show = () => {
+            setNotice({
+              tone: "neutral",
+              text:
+                remaining > 0
+                  ? `${remaining} 秒后恢复布局。现在点「整理到目标屏」可以取消。`
+                  : "正在恢复布局…",
+            });
+          };
+          show();
+          countdownTimer.current = window.setInterval(() => {
+            remaining -= 1;
+            if (remaining < 0) {
+              if (countdownTimer.current !== null) {
+                window.clearInterval(countdownTimer.current);
+                countdownTimer.current = null;
+              }
+              return;
+            }
+            show();
+          }, 1000);
           return;
         }
         if (phase === "done") void refresh();
@@ -334,6 +370,9 @@ export default function App() {
       void unlistenTopology.then((fn) => fn());
       void unlistenUpdate.then((fn) => fn());
       window.clearInterval(timer);
+      if (countdownTimer.current !== null) {
+        window.clearInterval(countdownTimer.current);
+      }
     };
   }, [refresh, flash]);
 
