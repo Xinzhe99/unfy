@@ -942,3 +942,46 @@ fn a_large_window_minimum_is_respected() {
         "a minimum that dominates the layout must be reported as clamped"
     );
 }
+
+/// A failed journal write must move the engine to `Error`, not leave it busy.
+///
+/// Before this, `migrate` returned the write error via `?` while the state had
+/// already been set to `Migrating`. Every later call then failed with
+/// `InvalidTransition` - gather, restore, retarget - so the app was stuck until it
+/// was restarted, and the UI reported "migrating" for an operation that had
+/// already aborted.
+#[test]
+fn a_failed_journal_write_enters_the_error_state() {
+    // Occupy the journal path with a file so creating the directory fails.
+    let blocker =
+        std::env::temp_dir().join(format!("conflux-journal-blocker-{}", std::process::id()));
+    std::fs::write(&blocker, b"not a directory").expect("write blocker");
+
+    let mut engine = Engine::new(
+        scenario(),
+        EngineConfig {
+            // A path whose parent is a file cannot be created.
+            journal_dir: blocker.join("journal"),
+            ..Default::default()
+        },
+    );
+
+    let result = engine.migrate(&target_key());
+    assert!(result.is_err(), "the gather must fail without a journal");
+
+    assert_eq!(
+        engine.state(),
+        EngineState::Error,
+        "a failed durable write is not a transient condition"
+    );
+
+    // Recovery stays available: the user must be able to get out.
+    assert!(
+        engine.rescue_offscreen().is_ok(),
+        "rescue must remain usable in the error state"
+    );
+    // But new gathers must be refused rather than attempted on a broken journal.
+    assert!(engine.migrate(&target_key()).is_err());
+
+    let _ = std::fs::remove_file(&blocker);
+}

@@ -666,7 +666,14 @@ impl<B: Backend> Engine<B> {
                 preview.plan.placements.len()
             ),
         )
-        .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
+        .map_err(|e| {
+            // Leaving the state at `Migrating` after a failed journal write is the
+            // worst outcome available: every later call is refused with
+            // `InvalidTransition`, so the app is stuck until it restarts, and the
+            // status says it is busy doing something it is not doing.
+            self.state = EngineState::Error;
+            EngineError::JournalWrite(e.to_string())
+        })?;
 
         let transaction_id = journal.transaction();
 
@@ -720,18 +727,23 @@ impl<B: Backend> Engine<B> {
                 topmost: snapshot.topmost,
                 native_placement: snapshot.native_placement.clone(),
             };
-            journal
-                .write_preimage(&preimage)
-                .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
+            journal.write_preimage(&preimage).map_err(|e| {
+                self.state = EngineState::Error;
+                EngineError::JournalWrite(e.to_string())
+            })?;
             preimages.insert(placement.id.clone(), preimage);
         }
 
         let t_preimage = t1.elapsed().as_millis();
 
         // The invariant: every preimage is on disk before the first window moves.
-        journal
-            .durable()
-            .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
+        // A failure here means the durability guarantee is gone, so no window may
+        // be touched: the engine enters `Error` rather than proceeding on a
+        // journal that might not survive a crash.
+        journal.durable().map_err(|e| {
+            self.state = EngineState::Error;
+            EngineError::JournalWrite(e.to_string())
+        })?;
 
         if preimages.is_empty() {
             journal

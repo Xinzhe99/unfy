@@ -534,6 +534,31 @@ enumerate 15 ms, preview 17 ms, migrate 211 ms (6 host windows)
 一个引擎测试固定这条连线：窗口声明 900×700 最小值时必须得到不小于该值的格子，并被标记为
 `clamped_to_min`。把引擎改回传 `None` 时该测试失败。
 
+### 状态机里的死状态
+
+`EngineState::Error` 从定义起就**从未被赋值**，只在 `migrate` 里检查过。而它描述的情况是真实的：
+journal 无法写入时，durability 保证已经不成立。
+
+真正的后果不是"这个状态没用"，而是**应用会卡死**：`migrate` 先把状态设为 `Migrating`，
+随后 journal 写入失败用 `?` 提前返回——状态就永远停在 `Migrating`。之后每一次调用
+（整理、恢复、重新整理）都被 `InvalidTransition` 拒绝，界面显示"正在整理"，直到重启进程。
+
+修复后 journal 写入或 `durable()` 失败都会进入 `Error`，并且：
+- `rescue_offscreen` 与 `restore` 在 Error 下仍然可用（用户必须有出路）；
+- 新的整理被拒绝，而不是在一个可能不持久的 journal 上继续。
+
+测试用一个"父路径是文件"的目录制造真实写入失败，断言状态变为 `Error`、救援仍可用、
+再次整理被拒绝。把 Error 赋值去掉后该测试失败，报 `left: Migrating, right: Error`。
+
+### 设置保存了但没生效
+
+`save_settings` 在事务进行中调用 `engine.update_config` 会被拒绝（当前计划是用旧设置算的，
+中途替换会让 journal 与预览不符）。这本身是对的，但调用方只写了一行 `warn!`：磁盘上已是新值，
+运行中的引擎仍是旧值，用户改完布局发现下次整理没变化。
+
+现在这条路径会写入 `last_error`，概览页显示"设置已保存，但当前整理还在进行中，新的布局会在
+下次整理时生效"。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

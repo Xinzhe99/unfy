@@ -907,7 +907,16 @@ pub fn save_settings(
         config.restore_delay_secs = dto.restore_delay_secs;
         config.excluded_apps = dto.excluded_apps.clone();
         if let Err(e) = engine.update_config(config) {
-            tracing::warn!(error = %e, "could not apply settings to the engine");
+            // The file has the new values but the live engine does not, which
+            // shows up as "I changed the layout and the next gather ignored it".
+            // The engine refuses mid-transaction on purpose (the current plan was
+            // built with the old settings), so say so rather than hiding it in the
+            // log: the values apply from the next gather, not from now.
+            tracing::warn!(error = %e, "settings saved but not applied to the live engine");
+            note_result(
+                &app,
+                Some("设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。".into()),
+            );
         }
     }
 
