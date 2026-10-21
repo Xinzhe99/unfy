@@ -3,3 +3,6 @@ node_modules/
 dist/
 .DS_Store
 .verify/
+*.png
+!apps/desktop/src-tauri/icons/*.png
+!apps/desktop/app-icon.png
