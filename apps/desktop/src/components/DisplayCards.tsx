@@ -50,7 +50,10 @@ export function DisplayCards({
   // 40 px card for a side-by-side pair, because two 16:9 monitors in one box
   // leave only a quarter of the height each. A pixel budget per row cannot
   // collapse: the layout above it decides only horizontal placement.
-  const ROW_HEIGHT_REM = 9;
+  // 11 rem rather than 9: the caption under each card carries a name and a
+  // resolution line, and in English the name wraps to two lines ("Display 2
+  // (primary)"), which at 9 rem squeezed the screenshot down to a strip.
+  const ROW_HEIGHT_REM = 11;
   return (
     <div
       className="relative w-full"

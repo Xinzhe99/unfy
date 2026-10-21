@@ -75,9 +75,9 @@ export function GeneralPage({
             disabled={busy}
             onChange={(theme) => onSave({ theme })}
             options={[
-              { value: "system", label: "跟随系统" },
-              { value: "light", label: "浅色" },
-              { value: "dark", label: "深色" },
+              { value: "system", label: t("跟随系统") },
+              { value: "light", label: t("浅色") },
+              { value: "dark", label: t("深色") },
             ]}
           />
         </SettingRow>
@@ -89,7 +89,7 @@ export function GeneralPage({
         aside={
           settings.remote_active ? (
             <Status tone="accent">
-              {settings.remote_evidence ?? "检测到远程会话"}
+              {settings.remote_evidence ?? t("检测到远程会话")}
             </Status>
           ) : null
         }
@@ -98,8 +98,8 @@ export function GeneralPage({
           label={t("远程端能看到")}
           hint={
             settings.remote_screens === "all"
-              ? "既然全部屏幕都看得到，自动整理不会搬动任何窗口。"
-              : "默认。远端只有一块屏，整理才有意义。"
+              ? t("既然全部屏幕都看得到，自动整理不会搬动任何窗口。")
+              : t("默认。远端只有一块屏，整理才有意义。")
           }
         >
           <Segmented
@@ -108,8 +108,8 @@ export function GeneralPage({
             disabled={busy}
             onChange={(remote_screens) => onSave({ remote_screens })}
             options={[
-              { value: "single", label: "一块屏" },
-              { value: "all", label: "全部屏幕" },
+              { value: "single", label: t("一块屏") },
+              { value: "all", label: t("全部屏幕") },
             ]}
           />
         </SettingRow>
@@ -126,10 +126,10 @@ export function GeneralPage({
             disabled={busy}
             onChange={(auto_detect) => onSave({ auto_detect })}
             options={[
-              { value: "off", label: "关闭" },
-              { value: "conservative", label: "保守" },
-              { value: "balanced", label: "均衡" },
-              { value: "aggressive", label: "激进" },
+              { value: "off", label: t("关闭") },
+              { value: "conservative", label: t("保守") },
+              { value: "balanced", label: t("均衡") },
+              { value: "aggressive", label: t("激进") },
             ]}
           />
         </SettingRow>
@@ -140,8 +140,8 @@ export function GeneralPage({
           label={t("检测到远程时自动整理")}
           hint={
             settings.auto_gather
-              ? "关闭时会先把窗口恢复原位，再停止自动整理"
-              : "关闭时只提示，不移动窗口"
+              ? t("关闭时会先把窗口恢复原位，再停止自动整理")
+              : t("关闭时只提示，不移动窗口")
           }
           disabled={settings.auto_detect === "off"}
         >
@@ -168,7 +168,9 @@ export function GeneralPage({
           />
         </SettingRow>
 
-        <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">没有任何系统接口能查询「谁正在远程这台电脑」。检测依靠可验证的信号：远程桌面会话、虚拟显示器、已知远控工具的运行与连接状态。级别越高覆盖的软件越多，误判也越多。</p>
+        <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">
+          {t("没有任何系统接口能查询「谁正在远程这台电脑」。检测依靠可验证的信号：远程桌面会话、虚拟显示器、已知远控工具的运行与连接状态。级别越高覆盖的软件越多，误判也越多。")}
+        </p>
       </Card>
 
       <Card title={t("启动与运行")}>
@@ -415,13 +417,13 @@ export function GeneralPage({
 function detectHint(level: SettingsDto["auto_detect"]): string {
   switch (level) {
     case "conservative":
-      return "只识别 Windows 远程桌面会话。几乎不会误判。";
+      return t("只识别 Windows 远程桌面会话。几乎不会误判。");
     case "balanced":
-      return "还识别虚拟显示器（Parsec 等）。推荐。";
+      return t("还识别虚拟显示器（Parsec 等）。推荐。");
     case "aggressive":
-      return "还识别已安装的远控工具是否在运行或已连接。可能误判。";
+      return t("还识别已安装的远控工具是否在运行或已连接。可能误判。");
     default:
-      return "关闭自动检测，只用快捷键、托盘和界面按钮。";
+      return t("关闭自动检测，只用快捷键、托盘和界面按钮。");
   }
 }
 

@@ -486,6 +486,9 @@ const EN: Record<string, string> = {
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
   "用户": "User",
+  "关闭自动检测，只用快捷键、托盘和界面按钮。":
+    "Turns detection off; gather from a shortcut, the tray or this window.",
+  "检测到远程会话": "Remote session detected",
   "已选择": "Selected",
   "不可用": "Unavailable",
   "先恢复了 {count} 个窗口": "{count} windows restored first",

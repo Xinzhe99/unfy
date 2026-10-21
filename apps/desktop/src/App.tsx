@@ -310,7 +310,7 @@ export default function App() {
         // would be a lie, and hiding the countdown leaves the button looking dead.
         if (phase === "waiting") {
           // Tick the countdown locally: the backend announces the wait once, and a
-          // frozen "5 秒后" for five seconds looks like the app has stalled.
+          // frozen t("5 秒后") for five seconds looks like the app has stalled.
           const seconds = event.payload.seconds ?? 0;
           if (countdownTimer.current !== null) {
             window.clearInterval(countdownTimer.current);
@@ -322,7 +322,7 @@ export default function App() {
               text:
                 remaining > 0
                   ? t("{seconds} 秒后恢复布局。现在点「整理到目标屏」可以取消。", { seconds: remaining })
-                  : "正在恢复布局…",
+                  : t("正在恢复布局…"),
             });
           };
           show();
@@ -364,7 +364,7 @@ export default function App() {
           // longer where the plan assumed.
           flash({
             tone: "neutral",
-            text: "显示器连接发生变化。当前布局可能已不适用，建议重新点「整理到目标屏」。",
+            text: t("显示器连接发生变化。当前布局可能已不适用，建议重新点「整理到目标屏」。"),
           });
         }
       },
@@ -511,7 +511,7 @@ export default function App() {
             tone: shown ? "neutral" : "warning",
             text: shown
               ? "已在每块屏幕上显示编号。"
-              : "无法显示编号，请检查屏幕状态。",
+              : t("无法显示编号，请检查屏幕状态。"),
           }))
         }
         onSetDetect={async (level, auto) => {
@@ -606,7 +606,7 @@ export default function App() {
         <div className="border-t border-[var(--color-border)] px-3 py-2.5">
           <Status tone={stateTone[state]}>
             {t(stateLabel[state])}
-            {status?.paused ? " · 已暂停" : ""}
+            {status?.paused ? t(" · 已暂停") : ""}
           </Status>
           {!supported ? (
             <p className="mt-1 text-[11px] text-[var(--color-muted)]">{t("当前平台未实现窗口控制")}</p>
@@ -653,7 +653,7 @@ export default function App() {
                 onRequest={() =>
                   void run(() => api.requestPermission(), () => ({
                     tone: "neutral",
-                    text: "已请求授权。授权后请点「重新检查」。",
+                    text: t("已请求授权。授权后请点「重新检查」。"),
                   }))
                 }
                 onSettings={() => void api.openPermissionSettings()}
@@ -669,7 +669,7 @@ export default function App() {
                 onDismiss={() =>
                   void run(
                     () => api.dismissPendingWork(),
-                    () => ({ tone: "neutral", text: "已隐藏提示，恢复记录仍然保留。" }),
+                    () => ({ tone: "neutral", text: t("已隐藏提示，恢复记录仍然保留。") }),
                   )
                 }
               />
@@ -693,7 +693,7 @@ export default function App() {
                     },
                     (next) =>
                       next.placements.length === 0
-                        ? { tone: "neutral", text: "没有可整理的窗口。" }
+                        ? { tone: "neutral", text: t("没有可整理的窗口。") }
                         : null,
                   )
                 }
@@ -711,7 +711,7 @@ export default function App() {
                       // add. The names are executable base names only.
                       const refused =
                         result.refused_apps.length > 0
-                          ? `；${result.refused_apps.join("、")} 没有接受位置调整`
+                          ? t("；{apps} 没有接受位置调整", { apps: result.refused_apps.join(", ") })
                           : "";
                       return {
                         tone: result.rejected > 0 ? "warning" : "success",
@@ -757,8 +757,8 @@ export default function App() {
                   void run(() => api.identifyDisplays(4), (shown) => ({
                     tone: shown ? "neutral" : "warning",
                     text: shown
-                      ? "已在每块屏幕上显示编号，4 秒后消失。"
-                      : "无法显示编号，请检查屏幕状态。",
+                      ? t("已在每块屏幕上显示编号，4 秒后消失。")
+                      : t("无法显示编号，请检查屏幕状态。"),
                   }))
                 }
                 diagnosticsPreview={diagnosticsPreview}
@@ -853,7 +853,7 @@ export default function App() {
                     tone: shown ? "neutral" : "warning",
                     text: shown
                       ? "已在每块屏幕上显示编号。"
-                      : "无法显示编号，请检查屏幕状态。",
+                      : t("无法显示编号，请检查屏幕状态。"),
                   }))
                 }
                 onCycle={() =>
@@ -992,7 +992,7 @@ function PendingCard({
       <p className="text-[13px] font-medium">{t("上次整理未完成")}</p>
       <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">
         有 {pending.windows} 个窗口的快照仍待处理
-        {pending.may_have_moved ? "，其中部分可能已被移动" : ""}。
+        {pending.may_have_moved ? t("，其中部分可能已被移动") : ""}。
       </p>
       <div className="mt-2.5 flex gap-1.5">
         <button

@@ -73,10 +73,9 @@ describe("coverage", () => {
       [...catalogue.matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]!),
     );
     // Wrapped strings are keys by construction; these are the raw ones.
-    const allowed = new Set([
-      // The catalogue's own keys appear as `t("…")` arguments, which the scanner
-      // below sees; being in `known` is what matters, so nothing extra is needed.
-    ]);
+    // `中文` is a language name and is identical in both locales by design.
+    const allowed = new Set(["中文"]);
+    for (const value of allowed) known.add(value);
 
     const files = [
       "App.tsx",
@@ -103,8 +102,27 @@ describe("coverage", () => {
         const text = match[1]!.trim();
         if (text && !known.has(text)) offenders.push(`${file}: ${text}`);
       }
+      // Every Chinese string literal must either be a catalogue key or be wrapped
+      // in `t(...)`. This covers the array entries and ternary branches that the
+      // JSX scan cannot see - `{ value: "all", label: "全部屏幕" }` looked
+      // translated because the surrounding prop was, and shipped in Chinese.
+      for (const match of source.matchAll(/"([^"\\<>\n]*[\u4e00-\u9fff][^"\\<>\n]*)"/g)) {
+        const literal = match[1]!;
+        // Comments quote example copy; they are documentation, not UI text.
+        const lineStart = source.lastIndexOf("\n", match.index!) + 1;
+        const line = source.slice(lineStart, match.index!);
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+        if (literal.includes("${")) continue;
+        if (literal.trim().length <= 1) continue;
+        // The scanner runs over source text, so `>` and `/>` fragments from JSX
+        // regexes leak in; they are not copy.
+        if (/^[\s/>]*$/.test(literal)) continue;
+        if (known.has(literal)) continue;
+        const before = source.slice(Math.max(0, match.index! - 2), match.index!);
+        if (before.endsWith("t(")) continue;
+        offenders.push(`${file}: literal ${literal}`);
+      }
     }
-    for (const value of allowed) void value;
     expect(offenders).toEqual([]);
   });
 });

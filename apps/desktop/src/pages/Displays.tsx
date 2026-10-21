@@ -79,9 +79,9 @@ export function DisplaysPage({
             disabled={busy}
             onChange={(layout_mode) => onSave({ layout_mode })}
             options={[
-              { value: "grid", label: "网格" },
-              { value: "primary_side", label: "主次" },
-              { value: "preserve_order", label: "顺序" },
+              { value: "grid", label: t("网格") },
+              { value: "primary_side", label: t("主次") },
+              { value: "preserve_order", label: t("顺序") },
             ]}
           />
         </SettingRow>
@@ -119,11 +119,11 @@ export function DisplaysPage({
 function layoutDescription(mode: SettingsDto["layout_mode"]): string {
   switch (mode) {
     case "primary_side":
-      return "焦点窗口占主区域，其余在侧栏排列。";
+      return t("焦点窗口占主区域，其余在侧栏排列。");
     case "preserve_order":
-      return "按原屏幕上的位置顺序依次放入。";
+      return t("按原屏幕上的位置顺序依次放入。");
     default:
-      return "等分排列，列数按窗口数量自动选择。";
+      return t("等分排列，列数按窗口数量自动选择。");
   }
 }
 

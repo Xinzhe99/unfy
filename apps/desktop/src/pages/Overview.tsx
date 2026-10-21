@@ -162,7 +162,7 @@ export function OverviewPage({
             label={t("远程检测")}
             value={
               settings?.remote_active
-                ? (settings.remote_evidence ?? "已检测到")
+                ? (settings.remote_evidence ?? t("已检测到"))
                 : detectStatusLabel(settings)
             }
             muted={!settings?.remote_active}
@@ -251,7 +251,7 @@ export function OverviewPage({
                 disabled={busy || busyState}
                 loading={busy || busyState}
               >
-                {busy || busyState ? "正在恢复…" : "恢复本次布局"}
+                {busy || busyState ? t("正在恢复…") : "恢复本次布局"}
               </Button>
               <Button
                 onClick={() => onPause(!paused)}
@@ -466,19 +466,19 @@ function humanError(raw: string): string {
   // all, and the raw text is an English OS error. Say what it means and what the
   // user can do; the exact reason is in the diagnostics bundle.
   if (raw.includes("journal write failed") || raw.includes("journal is corrupt")) {
-    return "无法写入恢复记录，为避免窗口位置丢失，整理已停止。请确认磁盘空间与目录权限，然后重启应用。";
+    return t("无法写入恢复记录，为避免窗口位置丢失，整理已停止。请确认磁盘空间与目录权限，然后重启应用。");
   }
   switch (raw) {
     case "already_active":
-      return "还有未完成的整理，请先恢复";
+      return t("还有未完成的整理，请先恢复");
     case "paused":
-      return "自动整理已暂停";
+      return t("自动整理已暂停");
     case "no_displays":
-      return "没有可用的显示器";
+      return t("没有可用的显示器");
     case "restore_cancelled":
-      return "恢复已被新的整理请求取消";
+      return t("恢复已被新的整理请求取消");
     case "no_displays_found":
-      return "没有检测到显示器";
+      return t("没有检测到显示器");
     default:
       return raw;
   }
