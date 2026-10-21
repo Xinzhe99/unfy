@@ -43,20 +43,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id("conflux")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            ID_GATHER => run_and_notify(app, "gather"),
-            ID_RESTORE => run_and_notify(app, "restore"),
-            ID_RESCUE => run_and_notify(app, "rescue"),
-            ID_PAUSE => toggle_pause(app),
-            ID_IDENTIFY => {
-                let _ = crate::commands::identify_displays(Some(4));
-            }
-            ID_CYCLE => cycle_target(app),
-            ID_REMOTE => toggle_remote(app),
-            ID_SETTINGS => show_settings(app),
-            ID_QUIT => quit(app),
-            _ => {}
-        })
+        .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -78,11 +65,33 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Rebuild the menu and tooltip from the current engine state.
+/// Run a tray menu item.
+///
+/// Named rather than inline so the actions can be driven without a click. The menu
+/// is a primary surface - it is the entire interface when the window is hidden - and
+/// on Windows 11 the icons live in a XAML overflow flyout that cannot be opened by
+/// automation, so nothing else exercises it.
+pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    match id {
+        ID_GATHER => run_and_notify(app, "gather"),
+        ID_RESTORE => run_and_notify(app, "restore"),
+        ID_RESCUE => run_and_notify(app, "rescue"),
+        ID_PAUSE => toggle_pause(app),
+        ID_IDENTIFY => {
+            let _ = crate::commands::identify_displays(Some(4));
+        }
+        ID_CYCLE => cycle_target(app),
+        ID_REMOTE => toggle_remote(app),
+        ID_SETTINGS => show_settings(app),
+        ID_QUIT => quit(app),
+        _ => {}
+    }
+}
+
+/// Rebuild the tray icon, menu and tooltip.
 ///
 /// Called after every action, because the enabled set and the labels depend on
 /// whether windows are currently gathered.
-/// Rebuild the tray icon, menu and tooltip.
 ///
 /// # Callers must hold no state guard
 ///
