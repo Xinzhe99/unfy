@@ -88,7 +88,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
     // also a user action (clearing the flag).
     observation.manual_marker = state
         .manual_remote
-        .load(std::sync::atomic::Ordering::Relaxed);
+        .load(std::sync::atomic::Ordering::SeqCst);
 
     // Log only when the *observation* changes, not on every poll: two lines a
     // second would bury every other event within minutes. The interesting moment

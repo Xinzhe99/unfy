@@ -249,6 +249,8 @@ export const api = {
   healthCheck: () => invoke<HealthItemDto[]>("health_check"),
   keepCurrentLayout: () => invoke<void>("keep_current_layout"),
   dismissLastError: () => invoke<void>("dismiss_last_error"),
+  /** Declare or end a remote session by hand; returns the new active state. */
+  toggleRemoteSession: () => invoke<boolean>("toggle_remote_session"),
 };
 
 /** Human-readable Chinese labels for the engine states shown in the UI. */

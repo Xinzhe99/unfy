@@ -39,6 +39,7 @@ export function OverviewPage({
   onExclude,
   onKeepLayout,
   onDismissError,
+  onToggleRemote,
 }: {
   status: StatusDto | null;
   settings: SettingsDto | null;
@@ -68,6 +69,8 @@ export function OverviewPage({
   onKeepLayout: () => void;
   /** Clear the "last operation failed" line. */
   onDismissError: () => void;
+  /** Declare or end a remote session by hand. */
+  onToggleRemote: () => void;
 }) {
   const supported = status?.supported ?? false;
   const state = status?.state ?? "idle";
@@ -154,6 +157,19 @@ export function OverviewPage({
             muted={!settings?.remote_active}
           />
         </div>
+
+        {/* A tray icon can be hidden by the shell, and there is no keyboard route
+            into a tray menu. Without this, a user whose tray is hidden cannot tell
+            the app a session started. */}
+        <button
+          type="button"
+          onClick={onToggleRemote}
+          disabled={busy}
+          className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-[var(--color-fg-soft)] hover:text-[var(--color-fg)] disabled:opacity-40"
+        >
+          {settings?.remote_active ? "结束远程会话标记" : "标记为远程会话"}
+          <IconArrowRight className="size-3" />
+        </button>
 
         {target && !target.present ? (
           <div className="mt-2.5 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">

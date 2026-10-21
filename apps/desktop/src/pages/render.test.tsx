@@ -186,6 +186,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     expect(html.length).toBeGreaterThan(200);
@@ -218,6 +219,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     // A degraded state must offer restore, not a gather that can only fail.
@@ -247,6 +249,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     expect(html).toContain("只检测到一块显示器");
@@ -273,6 +276,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     // "working" alone is indistinguishable from "stuck" when one application
@@ -305,6 +309,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     // The refusing app is offered; the already-excluded one is not, because a
@@ -337,6 +342,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     // "ready" while five windows are displaced is the failure this row prevents.
@@ -365,6 +371,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     // The raw code is an implementation detail; the sentence is the product.
@@ -392,6 +399,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     expect(journalFailure).toContain("无法写入恢复记录");
@@ -399,6 +407,61 @@ describe("pages render", () => {
     // A message about a past failure must be dismissable: once read, it is noise
     // until the next success overwrites it.
     expect(html).toContain("知道了");
+  });
+
+  test("overview offers a manual remote-session marker", () => {
+    const inactive = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+      />,
+    );
+    expect(inactive).toContain("标记为远程会话");
+
+    const active = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={{ ...settings, remote_active: true, remote_evidence: "手动标记" }}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+      />,
+    );
+    // The action must flip: a marker that cannot be cleared would claim a session
+    // forever.
+    expect(active).toContain("结束远程会话标记");
+    expect(active).toContain("手动标记");
   });
 
   test("overview offers recovery, not a gather, when the engine is in error", () => {
@@ -422,6 +485,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     // The engine refuses new gathers in this state. Offering the button anyway
@@ -452,6 +516,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     // Without this the exit barrier refuses to quit, forever, and the old copy
@@ -485,6 +550,7 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
+        onToggleRemote={noop}
       />,
     );
     expect(html).toContain("全部排除");

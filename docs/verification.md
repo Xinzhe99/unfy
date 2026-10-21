@@ -578,6 +578,25 @@ journal 无法写入时，durability 保证已经不成立。
 
 验证后 journal 目录已还原。
 
+### 自动整理真的会触发（首次端到端）
+
+此前 `auto-gather` 从未在日志里出现过——代码写了，但从没被真实驱动过。
+
+手动标记原来用 `tracker.force()` 直接改状态，**绕过了 tracker 的状态转换**，monitor 永远观测
+不到 `Activated`，所以自动整理与自动恢复对手动标记完全无效：标记只改变了界面显示。
+
+改为只设置 `manual_remote` 标志并立即跑一次 poll，让正常转换路径接管。真实运行结果：
+
+```
+INFO remote-session evidence changed summary=
+INFO migration finished transaction=ae6e5ff3 applied=2 refused=0 skipped=6 state=Active
+INFO auto-gather applied evidence=手动标记 applied=2
+INFO auto-gather finished evidence=手动标记 applied=2
+```
+
+两个窗口被真实移动。同时把同一个动作暴露为 `toggle_remote_session` 命令，概览页多了一个
+「标记为远程会话 / 结束远程会话标记」按钮——托盘图标可能被系统折叠，而托盘菜单没有键盘入口。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

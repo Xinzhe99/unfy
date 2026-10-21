@@ -195,38 +195,32 @@ fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
 }
 
 /// Mark the machine as remoted in, or end that and restore.
-fn toggle_remote<R: Runtime>(app: &AppHandle<R>) {
+///
+/// Public so the command layer can offer the same action from the window: the
+/// tray alone means a user who has hidden the tray icon has no way to declare a
+/// session.
+pub fn toggle_remote<R: Runtime>(app: &AppHandle<R>) {
+    // One implementation, shared with the window button. The command also runs a
+    // poll immediately, so the transition and any automation happen now instead of
+    // up to two seconds later.
     let state = app.state::<AppState>();
-    // Flip the flag the monitor merges into every observation. Driving the
-    // tracker directly would be undone on the next poll, which reports no manual
-    // evidence from the OS.
-    let was_active = state
+    let now_active = !state
         .detector
         .lock()
         .map(|tracker| tracker.is_active())
         .unwrap_or(false);
-    let now_active = !was_active;
     state
         .manual_remote
-        .store(now_active, std::sync::atomic::Ordering::Relaxed);
-
-    // Reflect the change immediately; the next poll (within 2 s) also sees it.
-    if let Ok(mut tracker) = state.detector.lock() {
-        if now_active {
-            tracker.force(conflux_detect::Evidence::ManualMarker);
-        } else {
-            tracker.force(None);
-        }
-    }
+        .store(now_active, std::sync::atomic::Ordering::SeqCst);
+    crate::monitor::tick(app);
 
     let _ = app.emit(
         "conflux://remote",
         serde_json::json!({
             "active": now_active,
             "evidence": if now_active { "手动标记" } else { "" },
-            // The manual toggle only marks the state; the user acts on it
-            // explicitly. Doing the gather here would move windows from a menu
-            // item whose label says "mark", which is not what it says.
+            // The marker only changes the verdict; whether windows move is decided
+            // by the automation settings, exactly as for detected evidence.
             "acted": false,
         }),
     );
@@ -446,12 +440,18 @@ fn restore_now<R: Runtime>(app: &AppHandle<R>) -> Result<conflux_engine::Restore
 }
 
 fn run_rescue<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
-    engine
-        .rescue_offscreen()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let count = {
+        let state = app.state::<AppState>();
+        let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
+        engine
+            .rescue_offscreen()
+            .map(|rescued| rescued.len())
+            .map_err(|e| e.to_string())?
+    };
+    if count > 0 {
+        record(app, crate::activity::Kind::Rescue, count, 0, "tray");
+    }
+    Ok(())
 }
 
 fn show_settings<R: Runtime>(app: &AppHandle<R>) {

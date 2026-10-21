@@ -684,8 +684,24 @@ fn restore_blocking(
 
 #[tauri::command]
 pub fn rescue_offscreen(app: State<'_, AppState>) -> Result<usize, String> {
-    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
-    let rescued = engine.rescue_offscreen().map_err(|e| e.to_string())?;
+    let rescued = {
+        let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+        engine.rescue_offscreen().map_err(|e| e.to_string())?
+    };
+    // Rescue moves real windows, so it belongs in the history for the same reason
+    // gather and restore do: "why did my window jump?" must have an answer.
+    if !rescued.is_empty() {
+        if let Ok(mut log) = app.activity.lock() {
+            log.record(crate::activity::Entry {
+                at: crate::activity::now(),
+                kind: crate::activity::Kind::Rescue,
+                affected: rescued.len(),
+                unsettled: 0,
+                note: String::new(),
+                trigger: "window".into(),
+            });
+        }
+    }
     Ok(rescued.len())
 }
 
@@ -1403,6 +1419,27 @@ pub fn activity_log(app: State<'_, AppState>) -> Vec<ActivityEntryDto> {
 pub fn dismiss_last_error(app: State<'_, AppState>) -> Result<(), String> {
     note_result(&app, None);
     Ok(())
+}
+
+/// Declare, or end, a remote session by hand.
+///
+/// The tray item is the primary entry, but a tray icon can be hidden by the
+/// shell and there is no keyboard route to a menu. Exposing the same action as a
+/// command lets the overview offer a button, and gives verification a way to
+/// drive the path without clicking a tray icon it cannot address.
+#[tauri::command]
+pub fn toggle_remote_session(handle: tauri::AppHandle, app: State<'_, AppState>) -> bool {
+    let now_active = !app
+        .detector
+        .lock()
+        .map(|tracker| tracker.is_active())
+        .unwrap_or(false);
+    app.manual_remote
+        .store(now_active, std::sync::atomic::Ordering::SeqCst);
+    // Run a poll immediately so the transition (and any automation it triggers)
+    // happens now rather than up to two seconds later.
+    crate::monitor::tick(&handle);
+    now_active
 }
 
 #[derive(Debug, Serialize)]
