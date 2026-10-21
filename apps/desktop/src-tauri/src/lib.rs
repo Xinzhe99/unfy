@@ -343,6 +343,7 @@ pub fn run() {
             // registration lives outside the settings file, so the two can drift
             // if the user removes it from Task Manager.
             session::apply_saved_autostart(app.handle());
+
             session::watch_topology(&app.handle().clone());
             update::check_in_background(app.handle().clone());
             monitor::install(app.handle());
@@ -457,4 +458,115 @@ fn persist_window_geometry(app: &tauri::AppHandle) {
 /// Convenience for tests and for the headless probe.
 pub fn app_state() -> AppState {
     AppState::new()
+}
+
+#[cfg(test)]
+mod lock_order {
+    //! The two state locks have one legal order.
+    //!
+    //! `std::sync::Mutex` is not reentrant. The command paths hold the engine while
+    //! reading settings, and `get_status` runs on the main thread every four seconds,
+    //! so a path that holds the settings *guard* and then asks for the engine
+    //! deadlocks against it: the window stops answering and the other thread waits
+    //! forever. That is exactly what happened once - `monitor::gather` took the
+    //! settings first - and the window froze during an automatic gather.
+    //!
+    //! Reading the source is unusual for a test, but this rule is about the shape of
+    //! the code rather than its behaviour: no single path can show a deadlock, and a
+    //! comment asking politely is not a mechanism.
+
+    fn sources() -> Vec<(String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).expect("read src") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                out.push((name, std::fs::read_to_string(&path).expect("read file")));
+            }
+        }
+        out
+    }
+
+    fn function_name(line: &str) -> Option<String> {
+        let rest = line.split("fn ").nth(1)?;
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// The variable a `let` binds a lock to, when the lock is taken by a plain
+    /// `let name = …lock()…` rather than inside a `match`, which clones and drops
+    /// the guard within the statement.
+    fn bound_guard(line: &str) -> Option<&str> {
+        let trimmed = line.trim_start();
+        let rest = trimmed.strip_prefix("let ")?;
+        if rest.contains("match ") || rest.contains("if let ") {
+            return None;
+        }
+        let name = rest.strip_prefix("mut ").unwrap_or(rest);
+        let name = name
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()?;
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// Indentation of a line, in spaces. `cargo fmt` keeps this consistent, which is
+    /// what makes it usable as a scope check.
+    fn indent(line: &str) -> usize {
+        line.len() - line.trim_start().len()
+    }
+
+    #[test]
+    fn settings_are_never_held_while_the_engine_is_taken() {
+        let mut offenders = Vec::new();
+        let mut checked = 0usize;
+        for (name, text) in sources() {
+            let mut function = String::from("(top level)");
+            // Guards the scanner believes are alive, with the indentation they were
+            // bound at. A `}` that closes at or above that level ends their scope.
+            let mut held: Vec<(String, usize)> = Vec::new();
+            for line in text.lines() {
+                if let Some(found) = function_name(line.trim_start()) {
+                    function = found;
+                    held.clear();
+                    continue;
+                }
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                if trimmed.starts_with('}') && trimmed.len() <= 2 {
+                    let here = indent(line);
+                    held.retain(|(_, bound)| *bound <= here);
+                }
+                if trimmed.contains(".settings.lock()") {
+                    if let Some(guard) = bound_guard(line) {
+                        held.push((guard.to_string(), indent(line)));
+                    }
+                }
+                for (guard, _) in held.clone() {
+                    if line.contains(&format!("drop({guard})")) {
+                        held.retain(|(g, _)| g != &guard);
+                    }
+                }
+                if trimmed.contains(".engine.lock()") {
+                    checked += 1;
+                    if !held.is_empty() {
+                        offenders.push(format!("{name}:{function} (holds {held:?})"));
+                    }
+                }
+            }
+        }
+        // A floor, so the rule cannot quietly stop matching anything.
+        assert!(checked > 8, "the scan found only {checked} engine locks");
+        assert_eq!(
+            offenders,
+            Vec::<String>::new(),
+            "these hold the settings guard while taking the engine, which deadlocks \n\
+             against the status poll: take the engine first"
+        );
+    }
 }

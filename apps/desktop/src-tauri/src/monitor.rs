@@ -187,48 +187,42 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                 }),
             );
 
-            if !settings.auto_gather || paused {
-                tracing::info!(
-                    evidence = %evidence,
-                    auto_gather = settings.auto_gather,
-                    paused,
-                    "remote session started; not gathering"
-                );
-                return;
-            }
-
-            // The user told us the remote client already shows every screen, so
-            // there is nothing hidden to gather. Acting anyway would rearrange a
-            // desktop the user can already see in full.
-            if settings.remote_screens == conflux_settings::RemoteScreens::All {
-                tracing::info!(
-                    evidence = %evidence,
-                    "remote shows all screens; nothing to gather"
-                );
-                let _ = app.emit(
-                    "conflux://remote",
-                    serde_json::json!({
-                        "active": true,
-                        "evidence": crate::message::evidence_message(&evidence),
-                        "acted": false,
-                        "suppressed": "all_screens",
-                    }),
-                );
-                return;
-            }
-
-            // Spec: at most one automatic cycle per 30 s for the same evidence.
-            // Emergency rescues are not gated by this - they are handled by the
-            // topology watcher, which never reaches this code.
-            {
-                const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
-                let recent = state
-                    .last_auto_gather
-                    .lock()
-                    .ok()
-                    .and_then(|guard| *guard)
-                    .is_some_and(|at| at.elapsed() < COOLDOWN);
-                if recent {
+            let blocked = {
+                let last = state.last_auto_gather.lock().ok().and_then(|guard| *guard);
+                suppression(&settings, paused, last, std::time::Instant::now())
+            };
+            match blocked {
+                Some(Suppression::AutomationOff) => {
+                    tracing::info!(
+                        evidence = %evidence,
+                        auto_gather = settings.auto_gather,
+                        paused,
+                        "remote session started; not gathering"
+                    );
+                    return;
+                }
+                // The user told us the remote client already shows every screen,
+                // so there is nothing hidden to gather. Acting anyway would
+                // rearrange a desktop the user can already see in full.
+                Some(Suppression::AllScreens) => {
+                    tracing::info!(
+                        evidence = %evidence,
+                        "remote shows all screens; nothing to gather"
+                    );
+                    let _ = app.emit(
+                        "conflux://remote",
+                        serde_json::json!({
+                            "active": true,
+                            "evidence": crate::message::evidence_message(&evidence),
+                            "acted": false,
+                            "suppressed": "all_screens",
+                        }),
+                    );
+                    return;
+                }
+                // Emergency rescues are not gated by the cooldown - they are
+                // handled by the topology watcher, which never reaches this code.
+                Some(Suppression::Cooldown) => {
                     tracing::info!(evidence = %evidence, "auto-gather suppressed by cooldown");
                     let _ = app.emit(
                         "conflux://remote",
@@ -241,8 +235,13 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                     );
                     return;
                 }
-                if let Ok(mut slot) = state.last_auto_gather.lock() {
-                    *slot = Some(std::time::Instant::now());
+                None => {
+                    // Stamped before the attempt: a gather that fails still starts
+                    // the cooldown, so a desktop that refuses every move cannot be
+                    // retried in a loop.
+                    if let Ok(mut slot) = state.last_auto_gather.lock() {
+                        *slot = Some(std::time::Instant::now());
+                    }
                 }
             }
             match gather(app, &evidence) {
@@ -282,22 +281,23 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                 }),
             );
 
-            if !settings.auto_restore || paused {
-                // Remember that cleanup is owed. The detector reports `Deactivated`
-                // exactly once, so without this the session ends silently and the
-                // windows stay where the gather put them.
-                if paused && settings.auto_restore {
+            match session_end(settings.auto_restore, paused) {
+                SessionEnd::Restore => {}
+                SessionEnd::Defer => {
                     state
                         .deferred_restore
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     tracing::info!("remote session ended while paused; restore deferred");
+                    return;
                 }
-                tracing::info!(
-                    auto_restore = settings.auto_restore,
-                    paused,
-                    "remote session ended; not restoring"
-                );
-                return;
+                SessionEnd::Ignore => {
+                    tracing::info!(
+                        auto_restore = settings.auto_restore,
+                        paused,
+                        "remote session ended; not restoring"
+                    );
+                    return;
+                }
             }
             // Only restore something this feature (or the user) actually
             // gathered. Restoring an idle engine is a no-op, so this is safe
@@ -371,16 +371,26 @@ fn gather<R: Runtime>(app: &AppHandle<R>, evidence: &Evidence) -> Result<usize, 
     if let Ok(mut schedule) = state.schedule.lock() {
         schedule.cancel();
     }
-    let settings = state.settings.lock().map_err(|e| e.to_string())?;
+
+    // The engine first, and the settings only long enough to read the target id.
+    //
+    // `tray::refresh` below takes the engine lock again to build the menu, and a
+    // `Mutex` is not reentrant, so holding either guard across it deadlocks this
+    // thread against itself. The symptom is not a slow refresh: the settings guard
+    // stays held, the window's next status poll waits for it on the main thread, and
+    // the whole app stops answering. This is exactly how an automatic gather froze
+    // the window.
     let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
+    let target_id = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        settings
+            .target_display
+            .as_ref()
+            .map(|target| target.native_id.clone())
+    };
 
     let target = engine
-        .resolve_target(
-            settings
-                .target_display
-                .as_ref()
-                .map(|t| t.native_id.as_str()),
-        )
+        .resolve_target(target_id.as_deref())
         // A sentinel, not a sentence: the frontend maps it to a translated message
         // (`humanError`). A Chinese sentence here reached the user verbatim.
         .ok_or_else(|| "no_displays".to_string())?;
@@ -398,6 +408,27 @@ fn gather<R: Runtime>(app: &AppHandle<R>, evidence: &Evidence) -> Result<usize, 
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// How long after an automatic gather the next one is refused.
+///
+/// A session that flaps - connect, drop, connect - produces a sequence of
+/// activations. The detector's streak filter removes a single flaky sample; this is
+/// the second layer, and the spec fixes it at one cycle per 30 seconds.
+const AUTO_GATHER_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What the end of a session owes the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionEnd {
+    /// Automatic restore is off: the layout stays until the user restores it.
+    Ignore,
+    /// Automation is paused, so the cleanup is remembered and run on resume.
+    ///
+    /// The detector reports the end of a session exactly once, so forgetting this
+    /// would leave the windows gathered with nothing left to remind anyone.
+    Defer,
+    /// Put the windows back now.
+    Restore,
 }
 
 fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
@@ -461,7 +492,175 @@ struct RestoreSummary {
     cancelled: bool,
 }
 
+/// Decide what the end of a session should do.
+fn session_end(auto_restore: bool, paused: bool) -> SessionEnd {
+    if !auto_restore {
+        return SessionEnd::Ignore;
+    }
+    if paused {
+        return SessionEnd::Defer;
+    }
+    SessionEnd::Restore
+}
+
+/// Why automatic gathering is not running for this activation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Suppression {
+    /// Automatic gathering is off, or the engine is paused.
+    AutomationOff,
+    /// The remote client already shows every screen, so nothing is hidden.
+    AllScreens,
+    /// A gather for a recent session is still inside the cooldown.
+    Cooldown,
+}
+
+/// Decide whether an activation should gather, and if not, why.
+///
+/// Pure so the rules can be tested without a desktop: they are the product's
+/// promise ("gather when a session starts, unless..."), and every branch means a
+/// different thing to the user - a switch they set, a screen they can already see,
+/// or a wait.
+fn suppression(
+    settings: &conflux_settings::Settings,
+    paused: bool,
+    last_auto_gather: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> Option<Suppression> {
+    if !settings.auto_gather || paused {
+        return Some(Suppression::AutomationOff);
+    }
+    if settings.remote_screens == conflux_settings::RemoteScreens::All {
+        return Some(Suppression::AllScreens);
+    }
+    if last_auto_gather.is_some_and(|at| now.duration_since(at) < AUTO_GATHER_COOLDOWN) {
+        return Some(Suppression::Cooldown);
+    }
+    None
+}
+
 /// Leak-free shutdown hook for the monitor thread.
 pub fn stop() {
     STOP.store(true, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conflux_settings::{RemoteScreens, Settings};
+    use std::time::{Duration, Instant};
+
+    fn settings(auto_gather: bool, remote_screens: RemoteScreens) -> Settings {
+        Settings {
+            auto_gather,
+            remote_screens,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn an_activation_gathers_when_nothing_forbids_it() {
+        let now = Instant::now();
+        assert_eq!(
+            suppression(&settings(true, RemoteScreens::Single), false, None, now),
+            None
+        );
+    }
+
+    #[test]
+    fn the_switch_and_the_pause_both_stop_it() {
+        let now = Instant::now();
+        // Off is off, whether or not the engine is also paused.
+        assert_eq!(
+            suppression(&settings(false, RemoteScreens::Single), false, None, now),
+            Some(Suppression::AutomationOff)
+        );
+        assert_eq!(
+            suppression(&settings(true, RemoteScreens::Single), true, None, now),
+            Some(Suppression::AutomationOff)
+        );
+    }
+
+    #[test]
+    fn a_remote_that_sees_every_screen_has_nothing_to_gather() {
+        let now = Instant::now();
+        assert_eq!(
+            suppression(&settings(true, RemoteScreens::All), false, None, now),
+            Some(Suppression::AllScreens)
+        );
+    }
+
+    #[test]
+    fn the_cooldown_lasts_thirty_seconds() {
+        let now = Instant::now();
+        let recent = now - Duration::from_secs(29);
+        let stale = now - Duration::from_secs(31);
+        assert_eq!(
+            suppression(
+                &settings(true, RemoteScreens::Single),
+                false,
+                Some(recent),
+                now
+            ),
+            Some(Suppression::Cooldown)
+        );
+        assert_eq!(
+            suppression(
+                &settings(true, RemoteScreens::Single),
+                false,
+                Some(stale),
+                now
+            ),
+            None,
+            "a session that drops and reconnects after the cooldown gathers again"
+        );
+    }
+
+    #[test]
+    fn the_switches_are_reported_before_the_cooldown() {
+        // The reason decides what the user is told. "You turned it off" is true and
+        // actionable; "wait 30 seconds" would be misleading, and a user who then
+        // turns the switch on would still be waiting for a timer they cannot see.
+        let now = Instant::now();
+        let recent = now - Duration::from_secs(1);
+        assert_eq!(
+            suppression(
+                &settings(false, RemoteScreens::All),
+                false,
+                Some(recent),
+                now
+            ),
+            Some(Suppression::AutomationOff)
+        );
+        assert_eq!(
+            suppression(
+                &settings(true, RemoteScreens::All),
+                false,
+                Some(recent),
+                now
+            ),
+            Some(Suppression::AllScreens)
+        );
+    }
+
+    #[test]
+    fn the_end_of_a_session_restores_only_when_asked() {
+        assert_eq!(session_end(true, false), SessionEnd::Restore);
+        // Off means the layout stays; the user restores it by hand.
+        assert_eq!(session_end(false, false), SessionEnd::Ignore);
+        // Paused is not off: the cleanup is owed and must be remembered.
+        assert_eq!(session_end(true, true), SessionEnd::Defer);
+        // A paused engine with automatic restore off owes nothing, so nothing is
+        // remembered.
+        assert_eq!(session_end(false, true), SessionEnd::Ignore);
+    }
+
+    #[test]
+    fn a_paused_engine_outranks_every_other_rule() {
+        let now = Instant::now();
+        let recent = now - Duration::from_secs(1);
+        assert_eq!(
+            suppression(&settings(true, RemoteScreens::All), true, Some(recent), now),
+            Some(Suppression::AutomationOff)
+        );
+    }
 }

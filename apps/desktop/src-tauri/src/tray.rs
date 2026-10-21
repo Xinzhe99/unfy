@@ -82,6 +82,15 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 ///
 /// Called after every action, because the enabled set and the labels depend on
 /// whether windows are currently gathered.
+/// Rebuild the tray icon, menu and tooltip.
+///
+/// # Callers must hold no state guard
+///
+/// `build_menu` takes the engine and detector locks, and a `Mutex` is not
+/// reentrant: calling this while holding the engine or the settings guard deadlocks
+/// the calling thread against itself. The visible result is not a stale menu - the
+/// window stops answering, because the next status poll waits for a lock that will
+/// never be released.
 pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     let Some(tray) = app.tray_by_id("conflux") else {
         return;
