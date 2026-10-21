@@ -346,6 +346,10 @@ pub fn restore(
     if complete {
         if let Ok(mut settings) = app.settings.lock() {
             clear_recovery_dismissal(&mut settings);
+            // Restoring ends the cycle, so a paused engine has nothing left to
+            // pause. Leaving the flag set would make the next launch start
+            // paused with no transaction, which looks like automation is broken.
+            settings.paused = false;
             let _ = settings.save(&app.settings_path);
         }
     }

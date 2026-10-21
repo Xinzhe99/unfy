@@ -155,11 +155,14 @@ pub fn run() {
 
             // A manual launch opens the window; an autostart launch stays in the
             // tray. Users who double-click the app expect to see something.
+            // The window is created visible so Windows gives it its configured
+            // geometry; an autostart launch hides it again immediately, before
+            // the first frame is presented. Creating it hidden instead left it
+            // as a 160x28 stub on Windows.
             let launched_at_login = std::env::args().any(|arg| arg == "--tray");
-            if !launched_at_login {
+            if launched_at_login {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    let _ = window.hide();
                 }
             }
             // Apply the persisted autostart preference on every launch: the
