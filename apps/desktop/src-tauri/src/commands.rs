@@ -635,6 +635,8 @@ pub struct SettingsDto {
     pub auto_detect: String,
     pub auto_gather: bool,
     pub auto_restore: bool,
+    /// Applications that refused the last gather, for the "exclude" shortcut.
+    pub last_refused_apps: Vec<String>,
     pub target: Option<TargetDto>,
     /// What the detector currently believes, and why. Independent of whether
     /// automation is enabled: the overview shows the evidence either way.
@@ -669,6 +671,7 @@ impl From<&Settings> for SettingsDto {
             auto_detect: s.auto_detect.clone(),
             auto_gather: s.auto_gather,
             auto_restore: s.auto_restore,
+            last_refused_apps: s.last_refused_apps.clone(),
             // Filled in by `settings_dto`, which has access to the detector.
             remote_active: false,
             remote_evidence: None,
@@ -1078,7 +1081,7 @@ pub fn export_diagnostics(app: State<'_, AppState>) -> Result<DiagnosticsDto, St
 
     let displays = engine.backend().topology().map_err(|e| e.to_string())?;
 
-    let report = serde_json::json!({
+    let mut report = serde_json::json!({
         "app_version": env!("CARGO_PKG_VERSION"),
         "platform": platform::name(),
         "supported": platform::is_supported(),
@@ -1103,8 +1106,29 @@ pub fn export_diagnostics(app: State<'_, AppState>) -> Result<DiagnosticsDto, St
             "has_target": settings.target_display.is_some(),
             "has_gather_hotkey": settings.hotkey_gather.is_some(),
             "has_restore_hotkey": settings.hotkey_restore.is_some(),
+            // Detection settings decide whether the app acts on its own; a bug
+            // report without them cannot be reasoned about.
+            "auto_detect": settings.auto_detect,
+            "auto_gather": settings.auto_gather,
+            "auto_restore": settings.auto_restore,
         },
     });
+
+    // Which evidence the detector can see right now, and which it concluded.
+    // Tool *names* are product names, not user data; they are already visible in
+    // the process list, and without them "detection did not fire" is untriageable.
+    if let Ok(tracker) = app.detector.lock() {
+        if let Some(object) = report.as_object_mut() {
+            object.insert(
+                "detection".into(),
+                serde_json::json!({
+                    "active": tracker.is_active(),
+                    "evidence": tracker.evidence().map(|e| e.label()),
+                    "last_observation": app.last_observation.lock().ok().and_then(|v| v.clone()),
+                }),
+            );
+        }
+    }
 
     let dir = conflux_settings::config_dir().join("diagnostics");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

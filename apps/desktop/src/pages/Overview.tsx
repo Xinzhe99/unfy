@@ -35,6 +35,7 @@ export function OverviewPage({
   onIdentify,
   onExport,
   onOpenDisplays,
+  onExclude,
 }: {
   status: StatusDto | null;
   settings: SettingsDto | null;
@@ -50,6 +51,8 @@ export function OverviewPage({
   onIdentify: () => void;
   onExport: () => void;
   onOpenDisplays: () => void;
+  /** Add an application to the exclusion rules, from a report row. */
+  onExclude: (appName: string) => void;
 }) {
   const supported = status?.supported ?? false;
   const state = status?.state ?? "idle";
@@ -68,6 +71,12 @@ export function OverviewPage({
   // With one display there is nowhere to gather to. Saying nothing leaves the
   // user pressing a button that reports "moved 0 windows", which reads as broken.
   const singleDisplay = (status?.display_count ?? 0) < 2;
+  // Applications that refused the last gather, minus those already excluded.
+  // Showing an application whose rule already exists would offer an action that
+  // does nothing.
+  const lastRefused = (settings?.last_refused_apps ?? []).filter(
+    (app) => !settings?.excluded_apps.some((rule) => rule.toLowerCase() === app.toLowerCase()),
+  );
 
   return (
     <>
@@ -209,6 +218,34 @@ export function OverviewPage({
           }
         >
           <PlanPreview preview={preview} />
+        </Card>
+      ) : null}
+
+      {lastRefused.length > 0 ? (
+        <Card
+          title="没有接受位置调整的应用"
+          description="这些应用会自己纠正窗口位置。排除它们可以避免每次都重试。"
+        >
+          <ul className="space-y-1">
+            {lastRefused.map((app) => (
+              <li
+                key={app}
+                className="flex items-center justify-between gap-3 py-1"
+              >
+                <span className="min-w-0 truncate font-mono text-xs">
+                  {app}
+                </span>
+                <Button
+                  size="sm"
+                  variant="quiet"
+                  disabled={busy}
+                  onClick={() => onExclude(app)}
+                >
+                  排除
+                </Button>
+              </li>
+            ))}
+          </ul>
         </Card>
       ) : null}
 

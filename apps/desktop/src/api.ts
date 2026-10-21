@@ -131,6 +131,8 @@ export interface SettingsDto {
   auto_detect: "off" | "conservative" | "balanced" | "aggressive";
   auto_gather: boolean;
   auto_restore: boolean;
+  /** Applications that refused the last gather. */
+  last_refused_apps: string[];
   target: TargetDto | null;
   /** Live detector verdict. Not persisted. */
   remote_active: boolean;

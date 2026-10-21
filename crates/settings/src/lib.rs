@@ -103,6 +103,12 @@ pub struct Settings {
     /// Separate from `auto_gather`: some users want the cleanup but prefer to
     /// start the layout themselves, and some want the opposite.
     pub auto_restore: bool,
+    /// Applications that refused the most recent gather.
+    ///
+    /// Persisted so the overview can offer "exclude this app" after a restart.
+    /// Purely informational: nothing in the engine reads it, and it is replaced
+    /// on every gather. Executable base names only.
+    pub last_refused_apps: Vec<String>,
     /// Explicit consent for anonymous usage counters. Default off.
     ///
     /// No uploader exists in this build: the flag records the user's choice so a
@@ -172,6 +178,7 @@ impl Default for Settings {
             // the trade-off in one line; the manual controls work regardless.
             auto_gather: false,
             auto_restore: false,
+            last_refused_apps: Vec::new(),
             auto_update: true,
             telemetry: false,
         }

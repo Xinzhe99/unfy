@@ -84,6 +84,7 @@ const settings: SettingsDto = {
   auto_detect: "balanced",
   auto_gather: false,
   auto_restore: false,
+  last_refused_apps: [],
   target: { native_id: "DISPLAY1", label: "DISPLAY1", present: true },
   remote_active: false,
   remote_evidence: null,
@@ -181,6 +182,7 @@ describe("pages render", () => {
         onIdentify={noop}
         onExport={noop}
         onOpenDisplays={noop}
+        onExclude={noop}
       />,
     );
     expect(html.length).toBeGreaterThan(200);
@@ -209,6 +211,7 @@ describe("pages render", () => {
         onIdentify={noop}
         onExport={noop}
         onOpenDisplays={noop}
+        onExclude={noop}
       />,
     );
     // A degraded state must offer restore, not a gather that can only fail.
@@ -234,9 +237,41 @@ describe("pages render", () => {
         onIdentify={noop}
         onExport={noop}
         onOpenDisplays={noop}
+        onExclude={noop}
       />,
     );
     expect(html).toContain("只检测到一块显示器");
+  });
+
+  test("overview offers to exclude an application that refused to move", () => {
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={{
+          ...settings,
+          last_refused_apps: ["msedge.exe", "notepad.exe"],
+          excluded_apps: ["notepad.exe"],
+        }}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+      />,
+    );
+    // The refusing app is offered; the already-excluded one is not, because a
+    // rule that exists cannot be added again.
+    expect(html).toContain("msedge.exe");
+    expect(html).not.toContain(">notepad.exe<");
+    expect(html).toContain("没有接受位置调整");
   });
 
   test("displays page", () => {

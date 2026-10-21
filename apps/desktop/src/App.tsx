@@ -571,17 +571,24 @@ export default function App() {
                       setPreview(null);
                       return result;
                     },
-                    (result) => ({
-                      tone: result.rejected > 0 ? "warning" : "success",
-                      text:
-                        `已整理 ${result.applied} 个窗口` +
-                        (result.rejected > 0
-                          ? `，${result.rejected} 个应用未接受`
-                          : "") +
-                        (result.gone > 0 ? `，${result.gone} 个已关闭` : "") +
-                        (result.skipped > 0 ? `，跳过 ${result.skipped} 个` : "") +
-                        "。",
-                    }),
+                    (result) => {
+                      // Naming the applications is what makes the next step
+                      // possible: a count of refusals cannot be acted on, but
+                      // "msedge.exe did not accept" tells the user which rule to
+                      // add. The names are executable base names only.
+                      const refused =
+                        result.refused_apps.length > 0
+                          ? `；${result.refused_apps.join("、")} 没有接受位置调整`
+                          : "";
+                      return {
+                        tone: result.rejected > 0 ? "warning" : "success",
+                        text:
+                          `已整理 ${result.applied} 个窗口` +
+                          (result.gone > 0 ? `，${result.gone} 个已关闭` : "") +
+                          (result.skipped > 0 ? `，跳过 ${result.skipped} 个` : "") +
+                          `${refused}。`,
+                      };
+                    },
                   )
                 }
                 onRestore={() => void onRestore()}
@@ -626,6 +633,16 @@ export default function App() {
                   )
                 }
                 onOpenDisplays={() => setPage("displays")}
+                onExclude={(appName) => {
+                  const current = settings?.excluded_apps ?? [];
+                  void saveSettings({
+                    excluded_apps: current.some(
+                      (rule) => rule.toLowerCase() === appName.toLowerCase(),
+                    )
+                      ? current
+                      : [...current, appName],
+                  });
+                }}
               />
             ) : null}
 
