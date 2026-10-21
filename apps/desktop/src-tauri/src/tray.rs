@@ -24,6 +24,13 @@ pub const ID_RESTORE: &str = "restore";
 pub const ID_RESCUE: &str = "rescue";
 pub const ID_PAUSE: &str = "pause";
 pub const ID_IDENTIFY: &str = "identify";
+/// Manual remote-mode toggle.
+///
+/// Detection cannot cover every remote tool, and the verification work found
+/// that "just ask the user" is the only universally reliable signal. This item is
+/// that escape hatch: one click marks the machine as remoted in, and one click
+/// ends it and restores.
+pub const ID_REMOTE: &str = "remote";
 pub const ID_SETTINGS: &str = "settings";
 pub const ID_QUIT: &str = "quit";
 
@@ -42,6 +49,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             ID_IDENTIFY => {
                 let _ = crate::commands::identify_displays(Some(4));
             }
+            ID_REMOTE => toggle_remote(app),
             ID_SETTINGS => show_settings(app),
             ID_QUIT => quit(app),
             _ => {}
@@ -147,10 +155,18 @@ fn state_icon<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::image::Image<'sta
 
 fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
     let state = app.state::<AppState>();
-    let Ok(engine) = state.engine.lock() else {
-        return "Conflux".into();
+    // Clone the Arcs so the locks are not held across the whole function: the
+    // detector lock is taken below, and nesting the two invites a future
+    // deadlock the moment either path writes history.
+    let engine = state.engine.clone();
+    let detector = state.detector.clone();
+
+    let (engine_state, paused) = match engine.lock() {
+        Ok(engine) => (engine.state(), engine.is_paused()),
+        Err(_) => return "Conflux".into(),
     };
-    let base = match engine.state() {
+
+    let base = match engine_state {
         conflux_domain::EngineState::Idle => "Conflux · 就绪",
         conflux_domain::EngineState::Planning => "Conflux · 正在计划",
         conflux_domain::EngineState::Migrating => "Conflux · 正在整理窗口",
@@ -159,11 +175,62 @@ fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
         conflux_domain::EngineState::Degraded => "Conflux · 部分受限",
         conflux_domain::EngineState::Error => "Conflux · 需要处理",
     };
-    if engine.is_paused() {
+
+    let mut tooltip = if paused {
         format!("{base}（已暂停）")
     } else {
         base.to_string()
+    };
+
+    // A tray icon is a dot at the edge of the screen: the state has to be legible
+    // on hover without opening anything. The remote line answers the question
+    // this app exists for - "is anyone remoting in right now?" - which the engine
+    // state alone cannot.
+    if let Ok(tracker) = detector.lock() {
+        if let Some(evidence) = tracker.evidence() {
+            tooltip.push_str(&format!("\n远程会话：{evidence}"));
+        }
     }
+    tooltip
+}
+
+/// Mark the machine as remoted in, or end that and restore.
+fn toggle_remote<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AppState>();
+    // Flip the flag the monitor merges into every observation. Driving the
+    // tracker directly would be undone on the next poll, which reports no manual
+    // evidence from the OS.
+    let was_active = state
+        .detector
+        .lock()
+        .map(|tracker| tracker.is_active())
+        .unwrap_or(false);
+    let now_active = !was_active;
+    state
+        .manual_remote
+        .store(now_active, std::sync::atomic::Ordering::Relaxed);
+
+    // Reflect the change immediately; the next poll (within 2 s) also sees it.
+    if let Ok(mut tracker) = state.detector.lock() {
+        if now_active {
+            tracker.force(conflux_detect::Evidence::ManualMarker);
+        } else {
+            tracker.force(None);
+        }
+    }
+
+    let _ = app.emit(
+        "conflux://remote",
+        serde_json::json!({
+            "active": now_active,
+            "evidence": if now_active { "手动标记" } else { "" },
+            // The manual toggle only marks the state; the user acts on it
+            // explicitly. Doing the gather here would move windows from a menu
+            // item whose label says "mark", which is not what it says.
+            "acted": false,
+        }),
+    );
+    refresh(app);
 }
 
 fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
@@ -178,6 +245,11 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     };
 
     let has_layout = engine_state.has_pending_work() || pending > 0;
+    let remote_active = state
+        .detector
+        .lock()
+        .map(|tracker| tracker.is_active())
+        .unwrap_or(false);
 
     let gather_label = if has_layout {
         "重新整理到目标屏"
@@ -197,6 +269,17 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         None::<&str>,
     )?;
     let identify = MenuItem::with_id(app, ID_IDENTIFY, "识别屏幕编号", true, None::<&str>)?;
+    let remote = MenuItem::with_id(
+        app,
+        ID_REMOTE,
+        if remote_active {
+            "结束远程会话并恢复"
+        } else {
+            "标记为远程会话"
+        },
+        true,
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let settings = MenuItem::with_id(app, ID_SETTINGS, "设置…", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
@@ -210,6 +293,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &rescue,
             &pause,
             &identify,
+            &remote,
             &separator,
             &settings,
             &separator2,

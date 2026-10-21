@@ -40,6 +40,10 @@ pub struct AppState {
     /// Last logged evidence summary, so the monitor logs transitions rather than
     /// every poll.
     pub last_observation: Arc<std::sync::Mutex<Option<String>>>,
+    /// Set while the user has marked the session by hand. In memory only: a
+    /// marker that survived a restart would claim a remote session that ended
+    /// with the previous process.
+    pub manual_remote: Arc<std::sync::atomic::AtomicBool>,
     /// Owns the cancellable pre-restore wait. A new gather or restore cancels a
     /// pending one, so a stale timer cannot undo a fresh layout.
     pub schedule: Arc<std::sync::Mutex<schedule::Schedule>>,
@@ -112,6 +116,7 @@ impl AppState {
             ))),
             last_remote: Arc::new(std::sync::Mutex::new(None)),
             last_observation: Arc::new(std::sync::Mutex::new(None)),
+            manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
             activity: Arc::new(std::sync::Mutex::new(activity::Activity::load(
                 conflux_settings::config_dir().join("activity.jsonl"),

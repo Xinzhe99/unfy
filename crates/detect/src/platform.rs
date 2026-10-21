@@ -232,6 +232,9 @@ pub fn observe(displays: &[DisplaySnapshot]) -> Observation {
         virtual_displays: virtual_displays(displays),
         tools_running: remote_tools_running(),
         tools_connected: remote_tools_connected(),
+        // The OS cannot report a manual marker; the desktop layer owns that flag
+        // and overwrites this field before feeding the tracker.
+        manual_marker: false,
     }
 }
 

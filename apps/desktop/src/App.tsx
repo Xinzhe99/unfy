@@ -354,6 +354,14 @@ export default function App() {
               : "无法显示编号，请检查屏幕状态。",
           }))
         }
+        onSetDetect={async (level, auto) => {
+          const next = await api.saveSettings({
+            auto_detect: level,
+            auto_gather: auto,
+            auto_restore: auto,
+          });
+          setSettings(next);
+        }}
         onFinish={() =>
           void run(
             async () => {

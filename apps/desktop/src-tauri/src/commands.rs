@@ -742,7 +742,7 @@ pub fn save_settings(
         settings.onboarding_done = onboarding_done;
     }
     if let Some(onboarding_step) = request.onboarding_step {
-        settings.onboarding_step = onboarding_step.min(2);
+        settings.onboarding_step = onboarding_step.min(3);
     }
 
     settings.validate().map_err(|e| e.to_string())?;

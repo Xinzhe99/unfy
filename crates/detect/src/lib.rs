@@ -109,11 +109,14 @@ pub struct Observation {
     /// Known remote-control programs that hold an established TCP connection on
     /// their own port. Stronger than mere process presence.
     pub tools_connected: Vec<String>,
+    /// The user marked this session by hand.
+    pub manual_marker: bool,
 }
 
 impl Observation {
     pub fn is_empty(&self) -> bool {
         !self.rdp_active
+            && !self.manual_marker
             && self.virtual_displays.is_empty()
             && self.tools_running.is_empty()
             && self.tools_connected.is_empty()
@@ -131,6 +134,12 @@ pub enum Evidence {
     ToolConnected(String),
     /// A known tool is running, with no stronger evidence.
     ToolRunning(String),
+    /// The user marked the session by hand.
+    ///
+    /// The only universally reliable signal: verification found that no API
+    /// answers "is someone remoting in" for third-party tools, so the honest
+    /// design is to let the user say so and to act on that immediately.
+    ManualMarker,
 }
 
 impl Evidence {
@@ -139,7 +148,7 @@ impl Evidence {
     /// Session-type evidence is instantaneous by nature; process evidence is not,
     /// because services restart, updaters spawn, and tray helpers linger.
     pub fn is_immediate(&self) -> bool {
-        matches!(self, Evidence::RdpSession)
+        matches!(self, Evidence::RdpSession | Evidence::ManualMarker)
     }
 
     pub fn label(&self) -> String {
@@ -148,6 +157,7 @@ impl Evidence {
             Evidence::VirtualDisplay(name) => format!("虚拟显示器 {name}"),
             Evidence::ToolConnected(name) => format!("{name} 已连接"),
             Evidence::ToolRunning(name) => format!("{name} 正在运行"),
+            Evidence::ManualMarker => "手动标记".to_string(),
         }
     }
 }
@@ -160,6 +170,11 @@ impl fmt::Display for Evidence {
 
 /// Whether the evidence is allowed at this sensitivity.
 fn admitted(evidence: &Evidence, sensitivity: Sensitivity) -> bool {
+    // The user speaking directly overrides every level, including `Off`. `Off`
+    // exists to stop guesswork, not to ignore an explicit instruction.
+    if matches!(evidence, Evidence::ManualMarker) {
+        return true;
+    }
     match (sensitivity, evidence) {
         (Sensitivity::Off, _) => false,
         (Sensitivity::Conservative, Evidence::RdpSession) => true,
@@ -173,6 +188,9 @@ fn admitted(evidence: &Evidence, sensitivity: Sensitivity) -> bool {
 
 /// The strongest evidence in an observation that this sensitivity admits.
 fn strongest(observation: &Observation, sensitivity: Sensitivity) -> Option<Evidence> {
+    if observation.manual_marker {
+        return Some(Evidence::ManualMarker);
+    }
     let mut candidates: Vec<Evidence> = Vec::new();
     if observation.rdp_active {
         candidates.push(Evidence::RdpSession);
@@ -389,6 +407,7 @@ mod tests {
             virtual_displays: virtuals.iter().map(|s| s.to_string()).collect(),
             tools_running: tools.iter().map(|s| s.to_string()).collect(),
             tools_connected: connected.iter().map(|s| s.to_string()).collect(),
+            manual_marker: false,
         }
     }
 
@@ -501,6 +520,28 @@ mod tests {
         // With the evidence still present but no longer admitted, it ends.
         assert_eq!(
             tracker.observe(&obs(false, &["Parsec VDD"], &[], &[])),
+            Transition::Deactivated
+        );
+    }
+
+    #[test]
+    fn the_manual_marker_activates_even_when_detection_is_off() {
+        // Turning detection off means "do not guess". It does not mean "ignore my
+        // explicit instruction", so the marker still works.
+        let mut tracker = Tracker::new(Sensitivity::Off);
+        let observation = Observation {
+            manual_marker: true,
+            ..Observation::default()
+        };
+        assert_eq!(
+            tracker.observe(&observation),
+            Transition::Activated(Evidence::ManualMarker)
+        );
+        assert!(tracker.is_active());
+
+        // And clearing it ends the session, even at `Off`.
+        assert_eq!(
+            tracker.observe(&Observation::default()),
             Transition::Deactivated
         );
     }

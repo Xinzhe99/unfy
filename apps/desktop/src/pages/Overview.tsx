@@ -65,6 +65,9 @@ export function OverviewPage({
     state === "active" || state === "degraded" || state === "restoring";
   const busyState = state === "migrating" || state === "restoring";
   const needsAttention = state === "degraded" || state === "error";
+  // With one display there is nowhere to gather to. Saying nothing leaves the
+  // user pressing a button that reports "moved 0 windows", which reads as broken.
+  const singleDisplay = (status?.display_count ?? 0) < 2;
 
   return (
     <>
@@ -77,8 +80,12 @@ export function OverviewPage({
             <Status tone="danger">需要处理</Status>
           ) : state === "degraded" ? (
             <Status tone="warning">部分待恢复</Status>
-          ) : busyState ? (
-            <Status tone="accent">{stateLabels[state]}</Status>
+          ) : busyState || busy ? (
+            // `busy` covers the window between the click and the engine's first
+            // state change, which on a busy desktop can be a second of silence.
+            <Status tone="accent">
+              {stateLabels[state === "idle" ? "migrating" : state]}
+            </Status>
           ) : hasWork ? (
             <Status tone="accent">布局已启用</Status>
           ) : (
@@ -110,14 +117,19 @@ export function OverviewPage({
         </div>
 
         {target && !target.present ? (
-          <button
-            type="button"
-            onClick={onOpenDisplays}
-            className="mt-2.5 flex w-full items-center justify-between gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] px-3 py-2 text-left text-xs text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-hover)]"
-          >
-            <span>已保存的目标显示器当前不可用，将回退到主显示器。</span>
-            <IconArrowRight className="size-3.5 shrink-0 opacity-50" />
-          </button>
+          <div className="mt-2.5 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
+            <p className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
+              保存的目标显示器（{target.label}）已断开，整理时会改用主显示器。
+            </p>
+            <button
+              type="button"
+              onClick={onOpenDisplays}
+              className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-[var(--color-fg)] hover:underline"
+            >
+              重新选择目标显示器
+              <IconArrowRight className="size-3" />
+            </button>
+          </div>
         ) : null}
 
         {needsAttention ? (
@@ -128,6 +140,12 @@ export function OverviewPage({
           </p>
         ) : null}
 
+        {singleDisplay && !hasWork ? (
+          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+            当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。
+          </p>
+        ) : null}
+
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {hasWork ? (
             <>
@@ -135,8 +153,9 @@ export function OverviewPage({
                 variant="primary"
                 onClick={onRestore}
                 disabled={busy || busyState}
+                loading={busy || busyState}
               >
-                恢复本次布局
+                {busy || busyState ? "正在恢复…" : "恢复本次布局"}
               </Button>
               <Button
                 onClick={() => onPause(!paused)}
@@ -150,9 +169,10 @@ export function OverviewPage({
               <Button
                 variant="primary"
                 onClick={onMigrate}
-                disabled={busy || !supported}
+                disabled={busy || !supported || singleDisplay}
+                loading={busy}
               >
-                整理到目标屏
+                {busy ? "正在整理…" : "整理到目标屏"}
               </Button>
               <Button
                 onClick={onPreview}

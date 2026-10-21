@@ -81,7 +81,14 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
         }
     };
 
-    let observation = conflux_detect::platform::observe(&topology);
+    let mut observation = conflux_detect::platform::observe(&topology);
+    // The manual marker lives in memory, not in the OS: the detector's platform
+    // probe always reports `false` for it. Merging it here means a user-marked
+    // session keeps activating regardless of what the probes see, and ending it is
+    // also a user action (clearing the flag).
+    observation.manual_marker = state
+        .manual_remote
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     // Log only when the *observation* changes, not on every poll: two lines a
     // second would bury every other event within minutes. The interesting moment

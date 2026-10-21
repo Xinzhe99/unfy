@@ -23,6 +23,7 @@ export function Onboarding({
   busy,
   onSelectTarget,
   onIdentify,
+  onSetDetect,
   onFinish,
 }: {
   displays: DisplayDto[];
@@ -31,6 +32,10 @@ export function Onboarding({
   busy: boolean;
   onSelectTarget: (nativeId: string) => Promise<void>;
   onIdentify: () => void;
+  onSetDetect: (
+    level: SettingsDto["auto_detect"],
+    auto: boolean,
+  ) => Promise<void>;
   onFinish: () => void;
 }) {
   // The step is persisted rather than held only in memory: hiding and re-showing
@@ -90,6 +95,36 @@ export function Onboarding({
           <Button size="sm" onClick={onIdentify} disabled={busy}>
             在每块屏幕上显示编号
           </Button>
+        </div>
+      ),
+    },
+    {
+      title: "让它自动开始和结束",
+      body: (
+        <div className="space-y-3">
+          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
+            Conflux 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，
+            级别越高覆盖越多，但也越容易误判。
+          </p>
+          <div className="rounded-[var(--radius-control)] border border-[var(--color-border)]">
+            <DetectChoice
+              title="手动"
+              description="只用快捷键与托盘，检测保持关闭"
+              selected={settings.auto_detect === "off"}
+              disabled={busy}
+              onSelect={() => onSetDetect("off", false)}
+            />
+            <DetectChoice
+              title="自动（推荐）"
+              description="识别远程桌面会话与虚拟显示器，开始时整理、结束时恢复"
+              selected={settings.auto_detect !== "off" && settings.auto_gather}
+              disabled={busy}
+              onSelect={() => onSetDetect("balanced", true)}
+            />
+          </div>
+          <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">
+            随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。
+          </p>
         </div>
       ),
     },
@@ -191,6 +226,60 @@ export function Onboarding({
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * One radio-style row for the detection choice.
+ *
+ * A switch would work, but the two options are not independent toggles: "manual"
+ * and "automatic" are alternatives, and presenting them as a pair of switches
+ * invites the state "detection on, both actions off", which does nothing and
+ * looks broken.
+ */
+function DetectChoice({
+  title,
+  description,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  title: string;
+  description: string;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      disabled={disabled}
+      onClick={onSelect}
+      className={`flex w-full items-start gap-2.5 border-b border-[var(--color-border)] px-3 py-2.5 text-left last:border-b-0 disabled:opacity-50 ${
+        selected ? "bg-[var(--color-surface-hover)]" : ""
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border ${
+          selected
+            ? "border-[var(--color-accent)]"
+            : "border-[var(--color-border-strong)]"
+        }`}
+      >
+        {selected ? (
+          <span className="size-1.5 rounded-full bg-[var(--color-accent)]" />
+        ) : null}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[13px] font-medium">{title}</span>
+        <span className="mt-0.5 block text-xs leading-relaxed text-[var(--color-muted)]">
+          {description}
+        </span>
+      </span>
+    </button>
   );
 }
 
