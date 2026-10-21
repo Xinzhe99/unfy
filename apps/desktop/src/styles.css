@@ -4,10 +4,15 @@
  * Design tokens.
  *
  * The visual language is deliberately quiet: a neutral grey canvas, white cards
- * with a hairline border, and a single blue used only for the primary action and
- * the selected state. Semantic colours appear as a dot or a short label, never as
- * a filled block — a page full of amber and green boxes reads as an alert
- * dashboard rather than a tool.
+ * with a hairline border, and a monochrome accent — near-black in light mode,
+ * near-white in dark mode — used only for the primary action and the selected
+ * state. Semantic colours appear as a dot or a short label, never as a filled
+ * block: a page full of amber and green boxes reads as an alert dashboard rather
+ * than a tool.
+
+ * No blue anywhere. A blue accent is the default choice of every utility
+ * dashboard, and it competes with the three semantic hues; a near-black primary
+ * button reads as deliberate and leaves colour free to mean *state*.
  */
 @theme {
   /* Canvas and surfaces */
@@ -26,11 +31,11 @@
   --color-fg-soft: oklch(0.44 0.008 265);
   --color-muted: oklch(0.60 0.007 265);
 
-  /* Accent: used for the primary button and the selected state, nothing else */
-  --color-accent: oklch(0.55 0.155 264);
-  --color-accent-hover: oklch(0.49 0.16 264);
+  /* Accent: the primary button and the selected state, nothing else */
+  --color-accent: oklch(0.26 0.006 265);
+  --color-accent-hover: oklch(0.34 0.006 265);
   --color-accent-fg: oklch(0.99 0 0);
-  --color-accent-soft: oklch(0.955 0.025 264);
+  --color-accent-soft: oklch(0.955 0.002 265);
 
   /* Semantic, rendered as text/dot only */
   --color-success: oklch(0.52 0.11 155);
@@ -54,10 +59,10 @@
   --conflux-dark-fg: oklch(0.94 0.004 265);
   --conflux-dark-fg-soft: oklch(0.79 0.006 265);
   --conflux-dark-muted: oklch(0.63 0.008 265);
-  --conflux-dark-accent: oklch(0.68 0.14 264);
-  --conflux-dark-accent-hover: oklch(0.74 0.14 264);
-  --conflux-dark-accent-fg: oklch(0.99 0 0);
-  --conflux-dark-accent-soft: oklch(0.28 0.05 264);
+  --conflux-dark-accent: oklch(0.93 0.004 265);
+  --conflux-dark-accent-hover: oklch(0.86 0.004 265);
+  --conflux-dark-accent-fg: oklch(0.17 0.006 265);
+  --conflux-dark-accent-soft: oklch(0.30 0.006 265);
   --conflux-dark-success: oklch(0.7 0.11 155);
   --conflux-dark-warning: oklch(0.76 0.1 70);
   --conflux-dark-danger: oklch(0.68 0.15 25);

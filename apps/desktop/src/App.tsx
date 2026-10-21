@@ -378,14 +378,6 @@ export default function App() {
             <span className="text-[11px] tabular-nums text-[var(--color-muted)]">
               v{updateStatus?.current_version ?? "—"}
             </span>
-            <button
-              type="button"
-              onClick={() => setPage("general")}
-              className="text-[var(--color-muted)] transition-colors hover:text-[var(--color-fg)]"
-              aria-label="设置"
-            >
-              <IconSettings className="size-4" />
-            </button>
           </div>
         </header>
 

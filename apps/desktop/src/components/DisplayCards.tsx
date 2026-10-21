@@ -91,7 +91,7 @@ export function DisplayCards({
                 </p>
               </div>
               {selected ? (
-                <span className="shrink-0 text-[11px] font-medium text-[var(--color-accent)]">
+                <span className="shrink-0 text-[11px] font-medium text-[var(--color-fg-soft)]">
                   使用中
                 </span>
               ) : null}
