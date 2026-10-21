@@ -161,6 +161,7 @@ pub struct SaveSettingsRequest {
     pub auto_detect: Option<String>,
     pub auto_gather: Option<bool>,
     pub auto_restore: Option<bool>,
+    pub remote_screens: Option<String>,
 }
 
 /// Refresh the tray after a state change so its labels, enabled set and tooltip
@@ -815,6 +816,8 @@ pub struct SettingsDto {
     pub auto_detect: String,
     pub auto_gather: bool,
     pub auto_restore: bool,
+    /// `single` or `all`: what the remote client can display.
+    pub remote_screens: String,
     /// Applications that refused the last gather, for the "exclude" shortcut.
     pub last_refused_apps: Vec<String>,
     pub target: Option<TargetDto>,
@@ -851,6 +854,10 @@ impl From<&Settings> for SettingsDto {
             auto_detect: s.auto_detect.clone(),
             auto_gather: s.auto_gather,
             auto_restore: s.auto_restore,
+            remote_screens: match s.remote_screens {
+                conflux_settings::RemoteScreens::Single => "single".into(),
+                conflux_settings::RemoteScreens::All => "all".into(),
+            },
             last_refused_apps: s.last_refused_apps.clone(),
             // Filled in by `settings_dto`, which has access to the detector.
             remote_active: false,
@@ -943,6 +950,13 @@ pub fn save_settings(
     }
     if let Some(auto_restore) = request.auto_restore {
         settings.auto_restore = auto_restore;
+    }
+    if let Some(screens) = request.remote_screens {
+        settings.remote_screens = match screens.as_str() {
+            "single" => conflux_settings::RemoteScreens::Single,
+            "all" => conflux_settings::RemoteScreens::All,
+            other => return Err(format!("unknown remote_screens: {other}")),
+        };
     }
     if let Some(excluded_apps) = request.excluded_apps {
         settings.excluded_apps = excluded_apps;

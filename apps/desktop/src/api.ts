@@ -135,6 +135,8 @@ export interface SettingsDto {
   auto_detect: "off" | "conservative" | "balanced" | "aggressive";
   auto_gather: boolean;
   auto_restore: boolean;
+  /** What the remote client can display: one screen, or all of them. */
+  remote_screens: "single" | "all";
   /** Applications that refused the last gather. */
   last_refused_apps: string[];
   target: TargetDto | null;

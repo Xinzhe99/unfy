@@ -87,6 +87,7 @@ const settings: SettingsDto = {
   auto_detect: "balanced",
   auto_gather: false,
   auto_restore: false,
+  remote_screens: "single",
   last_refused_apps: [],
   target: { native_id: "DISPLAY1", label: "DISPLAY1", present: true, number: 1 },
   remote_active: false,

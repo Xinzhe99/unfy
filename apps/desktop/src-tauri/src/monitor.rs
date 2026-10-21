@@ -144,6 +144,55 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                 );
                 return;
             }
+
+            // The user told us the remote client already shows every screen, so
+            // there is nothing hidden to gather. Acting anyway would rearrange a
+            // desktop the user can already see in full.
+            if settings.remote_screens == conflux_settings::RemoteScreens::All {
+                tracing::info!(
+                    evidence = %evidence,
+                    "remote shows all screens; nothing to gather"
+                );
+                let _ = app.emit(
+                    "conflux://remote",
+                    serde_json::json!({
+                        "active": true,
+                        "evidence": evidence.label(),
+                        "acted": false,
+                        "suppressed": "all_screens",
+                    }),
+                );
+                return;
+            }
+
+            // Spec: at most one automatic cycle per 30 s for the same evidence.
+            // Emergency rescues are not gated by this - they are handled by the
+            // topology watcher, which never reaches this code.
+            {
+                const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
+                let recent = state
+                    .last_auto_gather
+                    .lock()
+                    .ok()
+                    .and_then(|guard| *guard)
+                    .is_some_and(|at| at.elapsed() < COOLDOWN);
+                if recent {
+                    tracing::info!(evidence = %evidence, "auto-gather suppressed by cooldown");
+                    let _ = app.emit(
+                        "conflux://remote",
+                        serde_json::json!({
+                            "active": true,
+                            "evidence": evidence.label(),
+                            "acted": false,
+                            "suppressed": "cooldown",
+                        }),
+                    );
+                    return;
+                }
+                if let Ok(mut slot) = state.last_auto_gather.lock() {
+                    *slot = Some(std::time::Instant::now());
+                }
+            }
             match gather(app, &evidence) {
                 Ok(applied) => {
                     crate::tray::record(app, crate::activity::Kind::AutoGather, applied, 0, "auto");

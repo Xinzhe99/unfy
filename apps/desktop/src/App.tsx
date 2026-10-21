@@ -222,9 +222,20 @@ export default function App() {
       applied?: number;
       restored?: number;
       error?: string;
+      suppressed?: string;
     }>("conflux://remote", (event) => {
       void refresh();
-      const { active, evidence, acted, applied, restored, error } = event.payload;
+      const { active, evidence, acted, applied, restored, error, suppressed } =
+        event.payload;
+      if (suppressed === "cooldown") {
+        // Silence would look like a bug: the session was detected but nothing
+        // happened. Say why, and say that the manual button still works.
+        flash({
+          tone: "neutral",
+          text: `检测到${evidence ?? "远程会话"}，但 30 秒内已经整理过一次，这次跳过。需要时可直接点「整理到目标屏」。`,
+        });
+        return;
+      }
       if (error) {
         flash({
           tone: "warning",

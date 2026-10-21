@@ -57,6 +57,13 @@ pub struct Settings {
     pub layout_mode: LayoutModeName,
     pub margin: i32,
     pub gap: i32,
+    /// How many screens the remote client can show.
+    ///
+    /// Spec P0-06: when the remote端 can see every screen, gathering is the wrong
+    /// action - the user already has all their windows. The default is "one",
+    /// because that is the situation the product exists for, but a user with
+    /// multi-monitor streaming should be able to say so and be left alone.
+    pub remote_screens: RemoteScreens,
     /// Launch when the user logs in.
     pub autostart: bool,
     /// Theme preference; `system` follows the OS.
@@ -136,6 +143,16 @@ pub struct Settings {
     pub telemetry: bool,
 }
 
+/// What the remote client can display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteScreens {
+    /// One screen: gathering is the point.
+    Single,
+    /// All screens: nothing needs to move, so automation stays quiet.
+    All,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutModeName {
@@ -180,6 +197,7 @@ impl Default for Settings {
             layout_mode: LayoutModeName::Grid,
             margin: 12,
             gap: 8,
+            remote_screens: RemoteScreens::Single,
             autostart: false,
             theme: ThemeName::System,
             hotkey_gather: None,

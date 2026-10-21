@@ -44,6 +44,14 @@ pub struct AppState {
     /// marker that survived a restart would claim a remote session that ended
     /// with the previous process.
     pub manual_remote: Arc<std::sync::atomic::AtomicBool>,
+    /// When the last automatic gather ran, for the spec's 30-second cooldown.
+    ///
+    /// A session that flaps - connect, drop, connect - produces a sequence of
+    /// `Activated`/`Deactivated` transitions. The detector requires consecutive
+    /// polls for weak evidence, which filters a single flaky sample but not a
+    /// genuine two-second outage. The cooldown is the second layer: at most one
+    /// automatic gather per 30 seconds, whatever the evidence does.
+    pub last_auto_gather: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// When the storage probe last ran, as seconds since the process started.
     ///
     /// The probe writes and deletes a file; `health_check` is polled every four
@@ -139,6 +147,7 @@ impl AppState {
             last_remote: Arc::new(std::sync::Mutex::new(None)),
             last_observation: Arc::new(std::sync::Mutex::new(None)),
             manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_auto_gather: Arc::new(std::sync::Mutex::new(None)),
             storage_probe: Arc::new(std::sync::Mutex::new(None)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
             last_error: Arc::new(std::sync::Mutex::new(None)),

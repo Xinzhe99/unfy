@@ -75,6 +75,28 @@ export function GeneralPage({
         }
       >
         <SettingRow
+          label="远程端能看到"
+          hint={
+            settings.remote_screens === "all"
+              ? "既然全部屏幕都看得到，自动整理不会搬动任何窗口。"
+              : "默认。远端只有一块屏，整理才有意义。"
+          }
+        >
+          <Segmented
+            label="远程端能看到"
+            value={settings.remote_screens}
+            disabled={busy}
+            onChange={(remote_screens) => onSave({ remote_screens })}
+            options={[
+              { value: "single", label: "一块屏" },
+              { value: "all", label: "全部屏幕" },
+            ]}
+          />
+        </SettingRow>
+
+        <div className="border-t border-[var(--color-border)]" />
+
+        <SettingRow
           label="检测灵敏度"
           hint={detectHint(settings.auto_detect)}
         >
