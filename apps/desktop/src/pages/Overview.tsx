@@ -37,6 +37,7 @@ export function OverviewPage({
   onExport,
   onOpenDisplays,
   onExclude,
+  onKeepLayout,
 }: {
   status: StatusDto | null;
   settings: SettingsDto | null;
@@ -62,6 +63,8 @@ export function OverviewPage({
    * read before the first save landed, so only the last rule would survive.
    */
   onExclude: (appNames: string[]) => void;
+  /** Accept the current positions and drop the journal. */
+  onKeepLayout: () => void;
 }) {
   const supported = status?.supported ?? false;
   const state = status?.state ?? "idle";
@@ -196,6 +199,17 @@ export function OverviewPage({
                 disabled={busy || busyState}
               >
                 {paused ? "取消暂停" : "暂停"}
+              </Button>
+              {/* The only way out when restoring is impossible: the user decides
+                  the current arrangement is good enough. Without it the exit
+                  barrier refuses to quit, forever. */}
+              <Button
+                variant="quiet"
+                size="sm"
+                onClick={onKeepLayout}
+                disabled={busy || busyState}
+              >
+                保留当前布局
               </Button>
             </>
           ) : (
@@ -410,6 +424,7 @@ function activityLabel(entry: ActivityEntryDto): string {
     auto_gather: "自动整理",
     auto_restore: "自动恢复",
     pause: "暂停状态变更",
+    keep_layout: "保留当前布局",
   }[entry.kind];
   const trigger =
     entry.trigger === "hotkey"
@@ -417,7 +432,9 @@ function activityLabel(entry: ActivityEntryDto): string {
       : entry.trigger === "tray"
         ? "（托盘）"
         : "";
-  if (entry.kind === "pause") return `${name}${trigger}`;
+  if (entry.kind === "pause" || entry.kind === "keep_layout") {
+    return `${name}${trigger}`;
+  }
   return `${name}${trigger} · ${entry.affected} 个窗口`;
 }
 

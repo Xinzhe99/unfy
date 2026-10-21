@@ -1443,6 +1443,44 @@ pub fn set_paused(
     })
 }
 
+/// Accept the current window positions as the new baseline.
+///
+/// This is the third option the exit barrier has always implied but never
+/// offered: "restore", "try again", or **keep what is on screen now**. Without it
+/// a user whose windows will not go back has no way to quit without leaving an
+/// open transaction behind, and the tray keeps refusing to exit.
+///
+/// Semantically it closes the journal and clears the preimages: from this moment
+/// there is nothing to restore, so the next gather captures the current layout as
+/// home.
+#[tauri::command]
+pub fn keep_current_layout(app: State<'_, AppState>) -> Result<(), String> {
+    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+    let before = engine.captured_window_count();
+    engine.keep_current_layout().map_err(|e| e.to_string())?;
+    drop(engine);
+
+    if let Ok(mut settings) = app.settings.lock() {
+        // A paused engine has nothing left to pause once the transaction is gone.
+        settings.paused = false;
+        let _ = settings.save(&app.settings_path);
+    }
+    if let Ok(mut log) = app.activity.lock() {
+        log.record(crate::activity::Entry {
+            at: crate::activity::now(),
+            kind: crate::activity::Kind::KeepLayout,
+            affected: before,
+            unsettled: 0,
+            note: "接受了当前布局，不再恢复".into(),
+            trigger: "window".into(),
+        });
+    }
+    if let Ok(mut slot) = app.last_error.lock() {
+        *slot = None;
+    }
+    Ok(())
+}
+
 /// Result of the last hotkey registration attempt, so the UI can tell the truth
 /// instead of showing a shortcut that never got registered.
 #[derive(Debug, Serialize, Default, Clone)]

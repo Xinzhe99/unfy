@@ -41,6 +41,8 @@ pub enum Kind {
     AutoRestore,
     /// The user paused or resumed automation.
     Pause,
+    /// The user accepted the current window positions and dropped the journal.
+    KeepLayout,
 }
 
 impl Kind {
@@ -52,6 +54,7 @@ impl Kind {
             Kind::AutoGather => "auto_gather",
             Kind::AutoRestore => "auto_restore",
             Kind::Pause => "pause",
+            Kind::KeepLayout => "keep_layout",
         }
     }
 }

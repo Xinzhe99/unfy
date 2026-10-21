@@ -191,7 +191,14 @@ export interface HealthItemDto {
 
 export interface ActivityEntryDto {
   at: number;
-  kind: "gather" | "restore" | "rescue" | "auto_gather" | "auto_restore" | "pause";
+  kind:
+    | "gather"
+    | "restore"
+    | "rescue"
+    | "auto_gather"
+    | "auto_restore"
+    | "pause"
+    | "keep_layout";
   affected: number;
   unsettled: number;
   note: string;
@@ -240,6 +247,7 @@ export const api = {
   runningApplications: () => invoke<AppDto[]>("running_applications"),
   activityLog: () => invoke<ActivityEntryDto[]>("activity_log"),
   healthCheck: () => invoke<HealthItemDto[]>("health_check"),
+  keepCurrentLayout: () => invoke<void>("keep_current_layout"),
 };
 
 /** Human-readable Chinese labels for the engine states shown in the UI. */

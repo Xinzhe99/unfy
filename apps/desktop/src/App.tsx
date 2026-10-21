@@ -233,10 +233,13 @@ export default function App() {
       }
     });
     const unlistenExit = listen("conflux://exit-blocked", () => {
+      // The old message mentioned "keep the current layout" as an option while
+      // no such control existed anywhere in the app.
       flash({
         tone: "warning",
-        text: "还有窗口没有恢复，已取消退出。请先恢复布局，或选择保留当前布局。",
+        text: "还有窗口没有恢复，已取消退出。在概览页可以再试一次恢复，或点「保留当前布局」。",
       });
+      setPage("overview");
     });
     const unlistenProgress = listen<{
       phase: string;
@@ -663,6 +666,15 @@ export default function App() {
                   )
                 }
                 onOpenDisplays={() => setPage("displays")}
+                onKeepLayout={() =>
+                  void run(
+                    () => api.keepCurrentLayout(),
+                    () => ({
+                      tone: "neutral",
+                      text: "已保留当前布局，之后可以重新整理到目标屏。",
+                    }),
+                  )
+                }
                 onExclude={(appNames) => {
                   // Merge in one pass: each name is compared against the current
                   // rules and against the names added earlier in this batch, so a

@@ -277,6 +277,7 @@ pub fn run() {
             commands::identify_displays,
             commands::activity_log,
             commands::health_check,
+            commands::keep_current_layout,
             commands::live_transaction,
         ])
         .setup(|app| {

@@ -184,6 +184,7 @@ describe("pages render", () => {
         onExport={noop}
         onOpenDisplays={noop}
         onExclude={noop}
+        onKeepLayout={noop}
       />,
     );
     expect(html.length).toBeGreaterThan(200);
@@ -214,6 +215,7 @@ describe("pages render", () => {
         onExport={noop}
         onOpenDisplays={noop}
         onExclude={noop}
+        onKeepLayout={noop}
       />,
     );
     // A degraded state must offer restore, not a gather that can only fail.
@@ -241,6 +243,7 @@ describe("pages render", () => {
         onExport={noop}
         onOpenDisplays={noop}
         onExclude={noop}
+        onKeepLayout={noop}
       />,
     );
     expect(html).toContain("只检测到一块显示器");
@@ -265,6 +268,7 @@ describe("pages render", () => {
         onExport={noop}
         onOpenDisplays={noop}
         onExclude={noop}
+        onKeepLayout={noop}
       />,
     );
     // "working" alone is indistinguishable from "stuck" when one application
@@ -295,6 +299,7 @@ describe("pages render", () => {
         onExport={noop}
         onOpenDisplays={noop}
         onExclude={noop}
+        onKeepLayout={noop}
       />,
     );
     // The refusing app is offered; the already-excluded one is not, because a
@@ -325,6 +330,7 @@ describe("pages render", () => {
         onExport={noop}
         onOpenDisplays={noop}
         onExclude={noop}
+        onKeepLayout={noop}
       />,
     );
     // "ready" while five windows are displaced is the failure this row prevents.
@@ -351,11 +357,40 @@ describe("pages render", () => {
         onExport={noop}
         onOpenDisplays={noop}
         onExclude={noop}
+        onKeepLayout={noop}
       />,
     );
     // The raw code is an implementation detail; the sentence is the product.
     expect(html).toContain("请先恢复");
     expect(html).not.toContain("already_active");
+  });
+
+  test("overview offers a way out when restoring is impossible", () => {
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={{ ...status, state: "degraded", captured_windows: 4, pending_windows: 4 }}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+      />,
+    );
+    // Without this the exit barrier refuses to quit, forever, and the old copy
+    // told the user to pick an option that did not exist.
+    expect(html).toContain("保留当前布局");
+    expect(html).toContain("恢复本次布局");
   });
 
   test("overview offers a bulk exclude when several applications refused", () => {
@@ -381,6 +416,7 @@ describe("pages render", () => {
         onExport={noop}
         onOpenDisplays={noop}
         onExclude={noop}
+        onKeepLayout={noop}
       />,
     );
     expect(html).toContain("全部排除");
