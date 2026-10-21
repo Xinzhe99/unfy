@@ -7,8 +7,11 @@
 
 use tauri::Manager;
 
+mod activity;
 pub mod commands;
+mod monitor;
 pub mod platform;
+mod schedule;
 pub mod session;
 pub mod tray;
 pub mod update;
@@ -29,6 +32,19 @@ pub struct AppState {
     pub hotkey_status: Arc<std::sync::Mutex<commands::HotkeyStatusDto>>,
     /// Outcome of the most recent update check, as (outcome, version).
     pub last_update: Arc<std::sync::Mutex<Option<(String, String)>>>,
+    /// Remote-session detector state. One tracker per process, because the
+    /// activation streak must survive across polls.
+    pub detector: Arc<std::sync::Mutex<conflux_detect::Tracker>>,
+    /// The evidence string for the session that is currently active, if any.
+    pub last_remote: Arc<std::sync::Mutex<Option<String>>>,
+    /// Last logged evidence summary, so the monitor logs transitions rather than
+    /// every poll.
+    pub last_observation: Arc<std::sync::Mutex<Option<String>>>,
+    /// Owns the cancellable pre-restore wait. A new gather or restore cancels a
+    /// pending one, so a stale timer cannot undo a fresh layout.
+    pub schedule: Arc<std::sync::Mutex<schedule::Schedule>>,
+    /// Append-only history of completed actions, shown on the overview.
+    pub activity: Arc<std::sync::Mutex<activity::Activity>>,
 }
 
 impl Default for AppState {
@@ -91,6 +107,15 @@ impl AppState {
             settings_path,
             hotkey_status: Arc::new(std::sync::Mutex::new(commands::HotkeyStatusDto::default())),
             last_update: Arc::new(std::sync::Mutex::new(None)),
+            detector: Arc::new(std::sync::Mutex::new(conflux_detect::Tracker::new(
+                conflux_detect::Sensitivity::Off,
+            ))),
+            last_remote: Arc::new(std::sync::Mutex::new(None)),
+            last_observation: Arc::new(std::sync::Mutex::new(None)),
+            schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
+            activity: Arc::new(std::sync::Mutex::new(activity::Activity::load(
+                conflux_settings::config_dir().join("activity.jsonl"),
+            ))),
         }
     }
 }
@@ -227,6 +252,7 @@ pub fn run() {
             commands::display_thumbnails,
             commands::running_applications,
             commands::identify_displays,
+            commands::activity_log,
             commands::live_transaction,
         ])
         .setup(|app| {
@@ -251,6 +277,7 @@ pub fn run() {
             session::apply_saved_autostart(app.handle());
             session::watch_topology(&app.handle().clone());
             update::check_in_background(app.handle().clone());
+            monitor::install(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -138,6 +138,10 @@ pub enum EngineError {
     TransactionAlreadyOpen,
     /// The user paused automation; the current layout is still in effect.
     Paused,
+    /// A retarget could not proceed because the restore before it left windows
+    /// unresolved. Planning on half-restored windows would produce a layout the
+    /// user cannot reason about.
+    RestoreIncomplete { pending: usize },
 }
 
 impl std::fmt::Display for EngineError {
@@ -157,6 +161,9 @@ impl std::fmt::Display for EngineError {
                 )
             }
             EngineError::Paused => write!(f, "automation is paused"),
+            EngineError::RestoreIncomplete { pending } => {
+                write!(f, "{pending} windows could not be restored")
+            }
         }
     }
 }

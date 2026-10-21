@@ -79,12 +79,18 @@ fn pause_without_a_transaction_is_a_noop() {
     assert!(!engine.is_paused());
 }
 
+/// The engine must *not* sleep on the restore delay.
+///
+/// It used to, inside the engine mutex: a 30 s delay blocked status polling and
+/// tray refresh for 30 s, which looked like a frozen app. The desktop layer now
+/// owns the wait (cancellable, outside the lock). This test pins the contract so
+/// the sleep cannot come back.
 #[test]
-fn restore_respects_the_configured_delay() {
+fn restore_does_not_sleep_on_the_configured_delay() {
     let mut engine = Engine::new(
         backend(),
         EngineConfig {
-            restore_delay_secs: 1,
+            restore_delay_secs: 30,
             ..config("delay")
         },
     );
@@ -96,8 +102,8 @@ fn restore_respects_the_configured_delay() {
 
     assert!(report.is_complete());
     assert!(
-        elapsed >= std::time::Duration::from_millis(900),
-        "restore must wait for the configured delay, took {elapsed:?}"
+        elapsed < std::time::Duration::from_secs(2),
+        "the engine must leave the delay to its caller, took {elapsed:?}"
     );
 }
 

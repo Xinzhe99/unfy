@@ -46,6 +46,71 @@ export function GeneralPage({
         </SettingRow>
       </Card>
 
+      <Card
+        title="远程会话检测"
+        description="自动检测能识别到的远程会话，并按你的选择收拢或恢复窗口。"
+        aside={
+          settings.remote_active ? (
+            <Status tone="accent">
+              {settings.remote_evidence ?? "检测到远程会话"}
+            </Status>
+          ) : null
+        }
+      >
+        <SettingRow
+          label="检测灵敏度"
+          hint={detectHint(settings.auto_detect)}
+        >
+          <Segmented
+            label="检测灵敏度"
+            value={settings.auto_detect}
+            disabled={busy}
+            onChange={(auto_detect) => onSave({ auto_detect })}
+            options={[
+              { value: "off", label: "关闭" },
+              { value: "conservative", label: "保守" },
+              { value: "balanced", label: "均衡" },
+              { value: "aggressive", label: "激进" },
+            ]}
+          />
+        </SettingRow>
+
+        <div className="border-t border-[var(--color-border)]" />
+
+        <SettingRow
+          label="检测到远程时自动整理"
+          hint="关闭时只提示，不移动窗口"
+          disabled={settings.auto_detect === "off"}
+        >
+          <Switch
+            checked={settings.auto_gather}
+            disabled={busy || settings.auto_detect === "off"}
+            label="检测到远程时自动整理"
+            onChange={(auto_gather) => onSave({ auto_gather })}
+          />
+        </SettingRow>
+
+        <div className="border-t border-[var(--color-border)]" />
+
+        <SettingRow
+          label="断开后自动恢复"
+          hint="远程会话结束后把窗口放回原位"
+          disabled={settings.auto_detect === "off"}
+        >
+          <Switch
+            checked={settings.auto_restore}
+            disabled={busy || settings.auto_detect === "off"}
+            label="断开后自动恢复"
+            onChange={(auto_restore) => onSave({ auto_restore })}
+          />
+        </SettingRow>
+
+        <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">
+          没有任何系统接口能查询「谁正在远程这台电脑」。检测依靠可验证的信号：远程桌面会话、
+          虚拟显示器、已知远控工具的运行与连接状态。级别越高覆盖的软件越多，误判也越多。
+        </p>
+      </Card>
+
       <Card title="启动与运行">
         <SettingRow label="开机自动启动" hint="登录后静默启动，不打开窗口">
           <Switch
@@ -216,6 +281,19 @@ function HotkeyField({
       />
     </div>
   );
+}
+
+function detectHint(level: SettingsDto["auto_detect"]): string {
+  switch (level) {
+    case "conservative":
+      return "只识别 Windows 远程桌面会话。几乎不会误判。";
+    case "balanced":
+      return "还识别虚拟显示器（Parsec 等）。推荐。";
+    case "aggressive":
+      return "还识别已安装的远控工具是否在运行或已连接。可能误判。";
+    default:
+      return "关闭自动检测，只用快捷键、托盘和界面按钮。";
+  }
 }
 
 function outcomeLabel(outcome: string | null): string {

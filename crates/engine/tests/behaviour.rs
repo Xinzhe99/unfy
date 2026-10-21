@@ -706,3 +706,60 @@ fn adopted_journal_is_deleted_when_it_has_nothing_to_restore() {
     assert_eq!(engine.state(), EngineState::Idle);
     assert!(!path.exists(), "an empty transaction must be discarded");
 }
+
+/// A retarget must not redefine "home".
+///
+/// The failure this pins: `restore` then `migrate` as two user actions would
+/// record the restored positions as the new preimages the moment the second
+/// gather started. Doing it inside the engine gives the caller one operation,
+/// and the preimages the user started with must survive it.
+#[test]
+fn retarget_keeps_the_original_preimages() {
+    let backend = scenario();
+    let before: HashMap<u64, Rect> = backend
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .map(|w| (w.id.native_id, w.visible_rect))
+        .collect();
+
+    let mut engine = Engine::new(backend, config("retarget"));
+
+    // Gather onto display B, then change the target to display A while the
+    // windows are still captured.
+    let first = engine.retarget(&target_key()).expect("first retarget");
+    assert_eq!(first.restored, 0, "nothing to restore on a first gather");
+    assert_eq!(first.migration.applied_count(), 3);
+
+    let display_a = DisplayKey {
+        native_id: "fake-display-a".into(),
+        quality: IdentityQuality::Strong,
+    };
+    let second = engine.retarget(&display_a).expect("second retarget");
+    assert_eq!(second.restored, 3, "the previous layout went home first");
+    assert_eq!(second.migration.applied_count(), 3);
+    assert_eq!(engine.state(), EngineState::Active);
+
+    // And the final restore still knows where the windows came from.
+    let restored = engine.restore().expect("restore");
+    assert!(restored.is_complete());
+    assert_eq!(restored.count(WindowOutcome::Restored), 3);
+
+    for window in engine.backend().enumerate().unwrap() {
+        assert_eq!(
+            window.visible_rect, before[&window.id.native_id],
+            "retarget lost the original position of {:?}",
+            window.id
+        );
+    }
+}
+
+#[test]
+fn retarget_on_idle_engine_is_a_plain_gather() {
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("retarget-idle"));
+
+    let report = engine.retarget(&target_key()).expect("retarget");
+    assert_eq!(report.restored, 0);
+    assert_eq!(report.migration.applied_count(), 3);
+}

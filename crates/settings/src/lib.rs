@@ -90,6 +90,19 @@ pub struct Settings {
     /// Check for updates automatically. Default on; security updates are never
     /// gated on this, only the *check* is.
     pub auto_update: bool,
+    /// How much remote-session evidence the app may act on by itself.
+    ///
+    /// Persisted as a string so a newer version can add levels without a schema
+    /// bump, and so an unknown value degrades to "off" (never to "balanced": a
+    /// value we do not understand must not start moving windows).
+    pub auto_detect: String,
+    /// Automatically gather when a remote session starts.
+    pub auto_gather: bool,
+    /// Automatically restore when the remote session ends.
+    ///
+    /// Separate from `auto_gather`: some users want the cleanup but prefer to
+    /// start the layout themselves, and some want the opposite.
+    pub auto_restore: bool,
     /// Explicit consent for anonymous usage counters. Default off.
     ///
     /// No uploader exists in this build: the flag records the user's choice so a
@@ -152,6 +165,13 @@ impl Default for Settings {
             onboarding_done: false,
             onboarding_step: 0,
             excluded_apps: Vec::new(),
+            auto_detect: "balanced".to_string(),
+            // Both off by default. Automation that moves windows without being
+            // asked is the one thing users will not forgive, and a user who never
+            // enabled gathering has nothing to restore. The settings page explains
+            // the trade-off in one line; the manual controls work regardless.
+            auto_gather: false,
+            auto_restore: false,
             auto_update: true,
             telemetry: false,
         }
@@ -257,6 +277,18 @@ impl Settings {
             return Err(SettingsError::Validation(
                 "gather and restore hotkeys must differ".into(),
             ));
+        }
+        // Detection levels are a closed set: a typo would silently disable the
+        // feature, and an unknown value from a newer build must not be treated as
+        // an automatic-activation request.
+        if !matches!(
+            self.auto_detect.as_str(),
+            "off" | "conservative" | "balanced" | "aggressive"
+        ) {
+            return Err(SettingsError::Validation(format!(
+                "unknown auto_detect level: {}",
+                self.auto_detect
+            )));
         }
         if self.excluded_apps.len() > 200 {
             return Err(SettingsError::Validation(

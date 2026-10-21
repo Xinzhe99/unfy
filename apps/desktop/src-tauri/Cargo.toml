@@ -18,6 +18,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+conflux-detect = { workspace = true }
 conflux-domain = { workspace = true }
 conflux-engine = { workspace = true }
 conflux-journal = { workspace = true }

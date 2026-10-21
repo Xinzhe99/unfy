@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/domain",
+    "crates/detect",
     "crates/journal",
     "crates/layout",
     "crates/engine",
@@ -19,6 +20,7 @@ rust-version = "1.85"
 license = "MIT"
 
 [workspace.dependencies]
+conflux-detect = { path = "crates/detect" }
 conflux-domain = { path = "crates/domain" }
 conflux-engine = { path = "crates/engine" }
 conflux-journal = { path = "crates/journal" }

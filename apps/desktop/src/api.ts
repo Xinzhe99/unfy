@@ -124,7 +124,14 @@ export interface SettingsDto {
   excluded_apps: string[];
   onboarding_done: boolean;
   onboarding_step: number;
+  /** Evidence level the app may act on automatically. */
+  auto_detect: "off" | "conservative" | "balanced" | "aggressive";
+  auto_gather: boolean;
+  auto_restore: boolean;
   target: TargetDto | null;
+  /** Live detector verdict. Not persisted. */
+  remote_active: boolean;
+  remote_evidence: string | null;
 }
 
 export interface PendingWorkDto {
@@ -158,6 +165,15 @@ export interface UpdateStatusDto {
   configured: boolean;
   last_outcome: string | null;
   last_version: string | null;
+}
+
+export interface ActivityEntryDto {
+  at: number;
+  kind: "gather" | "restore" | "rescue" | "auto_gather" | "auto_restore" | "pause";
+  affected: number;
+  unsettled: number;
+  note: string;
+  trigger: string;
 }
 
 export interface DisplayThumbnailDto {
@@ -200,6 +216,7 @@ export const api = {
   displayThumbnails: () =>
     invoke<DisplayThumbnailDto[]>("display_thumbnails"),
   runningApplications: () => invoke<AppDto[]>("running_applications"),
+  activityLog: () => invoke<ActivityEntryDto[]>("activity_log"),
 };
 
 /** Human-readable Chinese labels for the engine states shown in the UI. */
@@ -252,8 +269,18 @@ export function skipLabel(reason: string): string {
  */
 export function errorMessage(error: unknown): string {
   const raw = String(error);
+  // Retargeting refuses when the restore it runs first left windows behind.
+  // Saying "整理失败" would hide the actionable part: those windows are still
+  // out, and trying again is the fix.
+  const incomplete = raw.match(/restore_incomplete:(\d+)/);
+  if (incomplete) {
+    return `还有 ${incomplete[1]} 个窗口没能恢复原位，已停止重新整理。请再点一次「恢复本次布局」，或先关闭这些窗口。`;
+  }
   if (raw.includes("already_active")) {
     return "窗口仍处于整理状态。请先点「恢复本次布局」，再重新整理到新的目标屏。";
+  }
+  if (raw.includes("restore_cancelled")) {
+    return "已取消这次恢复，因为期间开始了新的整理。";
   }
   if (raw.includes("paused")) {
     return "自动整理已暂停。在托盘菜单或概览页取消暂停后重试。";

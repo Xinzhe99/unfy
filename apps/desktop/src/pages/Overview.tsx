@@ -1,7 +1,8 @@
+import { stateLabels } from "../api";
 import type {
-  MigrationDto,
+  ActivityEntryDto,
+  DisplayDto,
   PreviewDto,
-  RestoreDto,
   SettingsDto,
   StatusDto,
 } from "../api";
@@ -23,8 +24,8 @@ export function OverviewPage({
   status,
   settings,
   preview,
-  lastMigration,
-  lastRestore,
+  displays,
+  activity,
   busy,
   onPreview,
   onMigrate,
@@ -38,8 +39,8 @@ export function OverviewPage({
   status: StatusDto | null;
   settings: SettingsDto | null;
   preview: PreviewDto | null;
-  lastMigration: MigrationDto | null;
-  lastRestore: RestoreDto | null;
+  displays: DisplayDto[];
+  activity: ActivityEntryDto[];
   busy: boolean;
   onPreview: () => void;
   onMigrate: () => void;
@@ -52,10 +53,18 @@ export function OverviewPage({
 }) {
   const supported = status?.supported ?? false;
   const state = status?.state ?? "idle";
-  const active = state === "active";
   const paused = status?.paused ?? false;
   const captured = status?.captured_windows ?? 0;
   const target = status?.target;
+
+  // `degraded` means the journal is still open: some windows are captured, some
+  // could not be restored. Treating it as "idle" (the previous behaviour) showed
+  // "就绪" and offered "整理到目标屏", which then failed with a transaction error.
+  // Anything with pending work must offer restore first.
+  const hasWork =
+    state === "active" || state === "degraded" || state === "restoring";
+  const busyState = state === "migrating" || state === "restoring";
+  const needsAttention = state === "degraded" || state === "error";
 
   return (
     <>
@@ -64,7 +73,13 @@ export function OverviewPage({
         aside={
           paused ? (
             <Status tone="warning">已暂停</Status>
-          ) : active ? (
+          ) : state === "error" ? (
+            <Status tone="danger">需要处理</Status>
+          ) : state === "degraded" ? (
+            <Status tone="warning">部分待恢复</Status>
+          ) : busyState ? (
+            <Status tone="accent">{stateLabels[state]}</Status>
+          ) : hasWork ? (
             <Status tone="accent">布局已启用</Status>
           ) : (
             <Status tone="neutral">就绪</Status>
@@ -74,7 +89,7 @@ export function OverviewPage({
         <div className="space-y-0.5">
           <Detail
             label="目标显示器"
-            value={target?.label ?? "主显示器"}
+            value={targetDisplayName(displays, target)}
             muted={!target}
           />
           <Detail
@@ -83,6 +98,15 @@ export function OverviewPage({
             muted={captured === 0}
           />
           <Detail label="布局" value={layoutLabel(settings?.layout_mode)} />
+          <Detail
+            label="远程检测"
+            value={
+              settings?.remote_active
+                ? (settings.remote_evidence ?? "已检测到")
+                : detectStatusLabel(settings)
+            }
+            muted={!settings?.remote_active}
+          />
         </div>
 
         {target && !target.present ? (
@@ -96,13 +120,28 @@ export function OverviewPage({
           </button>
         ) : null}
 
+        {needsAttention ? (
+          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+            {state === "error"
+              ? "出现了无法自动处理的问题。恢复与救援仍然可用；如果反复失败，请导出诊断包。"
+              : "有窗口没能恢复到原位。可以再试一次，或先关闭这些窗口。"}
+          </p>
+        ) : null}
+
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {active ? (
+          {hasWork ? (
             <>
-              <Button variant="primary" onClick={onRestore} disabled={busy}>
+              <Button
+                variant="primary"
+                onClick={onRestore}
+                disabled={busy || busyState}
+              >
                 恢复本次布局
               </Button>
-              <Button onClick={() => onPause(!paused)} disabled={busy}>
+              <Button
+                onClick={() => onPause(!paused)}
+                disabled={busy || busyState}
+              >
                 {paused ? "取消暂停" : "暂停"}
               </Button>
             </>
@@ -153,42 +192,48 @@ export function OverviewPage({
         </Card>
       ) : null}
 
-      {lastMigration ? (
-        <Card title="上次整理">
-          <Counts
-            items={[
-              { label: "已移动", value: lastMigration.applied },
-              { label: "应用拒绝", value: lastMigration.rejected },
-              { label: "已关闭", value: lastMigration.gone },
-              { label: "跳过", value: lastMigration.skipped },
-              { label: "放不下", value: lastMigration.unplaced },
-            ]}
-          />
-          {lastMigration.refused_apps.length > 0 ? (
-            <p className="mt-2 text-xs leading-relaxed text-[var(--color-muted)]">
-              {lastMigration.refused_apps.join("、")} 没有接受位置调整，已停止重试。
-            </p>
-          ) : null}
-        </Card>
-      ) : null}
-
-      {lastRestore ? (
-        <Card title="上次恢复">
-          <Counts
-            items={[
-              { label: "精确恢复", value: lastRestore.restored },
-              { label: "保留改动", value: lastRestore.kept_user_change },
-              { label: "回退可见", value: lastRestore.fallback_visible },
-              { label: "待处理", value: lastRestore.pending },
-            ]}
-          />
-          {lastRestore.pending_apps.length > 0 ? (
-            <p className="mt-2 text-xs leading-relaxed text-[var(--color-muted)]">
-              {lastRestore.pending_apps.join("、")} 的窗口仍未恢复，可以重试。
-            </p>
-          ) : null}
-        </Card>
-      ) : null}
+      <Card
+        title="最近活动"
+        aside={
+          activity.length > 0 ? (
+            <span className="text-[11px] tabular-nums text-[var(--color-muted)]">
+              最近 {activity.length} 次
+            </span>
+          ) : null
+        }
+      >
+        {activity.length === 0 ? (
+          <p className="py-1 text-xs text-[var(--color-muted)]">
+            还没有执行过操作。整理或恢复之后，这里会记录每次的结果。
+          </p>
+        ) : (
+          <ul>
+            {activity.slice(0, 8).map((entry) => (
+              <li
+                key={`${entry.at}-${entry.kind}-${entry.affected}`}
+                className="flex items-baseline justify-between gap-3 border-t border-[var(--color-border)] py-1.5 first:border-t-0 first:pt-0"
+              >
+                <div className="min-w-0">
+                  <span className="text-[13px]">{activityLabel(entry)}</span>
+                  {entry.unsettled > 0 ? (
+                    <span className="ml-1.5 text-[11px] text-[var(--color-warning)]">
+                      {entry.unsettled} 个未处理
+                    </span>
+                  ) : null}
+                  {entry.note ? (
+                    <span className="ml-1.5 text-[11px] text-[var(--color-muted)]">
+                      {entry.note}
+                    </span>
+                  ) : null}
+                </div>
+                <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-muted)]">
+                  {relativeTime(entry.at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       <Card title="工具">
         {supported ? null : (
@@ -213,29 +258,77 @@ export function OverviewPage({
   );
 }
 
-function Counts({
-  items,
-}: {
-  items: { label: string; value: number }[];
-}) {
-  return (
-    <div className="flex flex-wrap gap-x-5 gap-y-1.5">
-      {items.map((item) => (
-        <div key={item.label} className="flex items-baseline gap-1.5">
-          <span
-            className={`text-[15px] font-semibold tabular-nums ${
-              item.value === 0
-                ? "text-[var(--color-muted)]"
-                : "text-[var(--color-fg)]"
-            }`}
-          >
-            {item.value}
-          </span>
-          <span className="text-xs text-[var(--color-muted)]">{item.label}</span>
-        </div>
-      ))}
-    </div>
-  );
+/**
+ * Friendly name for the target display.
+ *
+ * The engine's label is the device name (`\\.\DISPLAY1`), which means nothing
+ * to a user looking at a physical screen. The picker numbers the same displays,
+ * so the same number is used here — that is the one identifier the user can see
+ * on their desk.
+ */
+function targetDisplayName(
+  displays: DisplayDto[],
+  target: { native_id: string; present: boolean } | null | undefined,
+): string {
+  if (!target) return "跟随主显示器";
+  const index = displays.findIndex((d) => d.native_id === target.native_id);
+  if (index === -1) return target.present ? "已选择" : "不可用";
+  const display = displays[index]!;
+  return display.primary ? `显示器 ${index + 1}（主）` : `显示器 ${index + 1}`;
+}
+
+/** One line per history entry: what happened and how many windows it touched. */
+function activityLabel(entry: ActivityEntryDto): string {
+  const name = {
+    gather: "整理",
+    restore: "恢复",
+    rescue: "救援越界窗口",
+    auto_gather: "自动整理",
+    auto_restore: "自动恢复",
+    pause: "暂停状态变更",
+  }[entry.kind];
+  const trigger =
+    entry.trigger === "hotkey"
+      ? "（快捷键）"
+      : entry.trigger === "tray"
+        ? "（托盘）"
+        : "";
+  if (entry.kind === "pause") return `${name}${trigger}`;
+  return `${name}${trigger} · ${entry.affected} 个窗口`;
+}
+
+/**
+ * Clock time for today, date for anything older.
+ *
+ * A raw timestamp is unreadable at a glance, and "3 分钟前" for something that
+ * happened yesterday is worse: the user cannot tell whether a restore happened
+ * before or after they last touched the machine.
+ */
+function relativeTime(at: number): string {
+  const then = new Date(at * 1000);
+  const now = new Date();
+  const sameDay =
+    then.getFullYear() === now.getFullYear() &&
+    then.getMonth() === now.getMonth() &&
+    then.getDate() === now.getDate();
+  const time = `${String(then.getHours()).padStart(2, "0")}:${String(
+    then.getMinutes(),
+  ).padStart(2, "0")}`;
+  if (sameDay) return `今天 ${time}`;
+  return `${then.getMonth() + 1}月${then.getDate()}日 ${time}`;
+}
+
+function detectStatusLabel(settings: SettingsDto | null): string {
+  if (!settings) return "—";
+  if (settings.auto_detect === "off") return "已关闭";
+  const level =
+    settings.auto_detect === "conservative"
+      ? "保守"
+      : settings.auto_detect === "aggressive"
+        ? "激进"
+        : "均衡";
+  if (!settings.auto_gather && !settings.auto_restore) return `监视中（${level}，未启用自动操作）`;
+  return `监视中（${level}）`;
 }
 
 function layoutLabel(mode: SettingsDto["layout_mode"] | undefined): string {

@@ -188,6 +188,14 @@ fn pending_windows(app: &AppHandle) -> usize {
 /// Spawn a background check at startup. Failures are only logged: an offline
 /// machine must not show an error dialog on every launch.
 pub fn check_in_background(app: AppHandle) {
+    // An unconfigured build has no endpoint and no signing key. Running the check
+    // anyway produced a logged failure on every single launch, which trains both
+    // the user and the developer to ignore the word "failed" in the log. Skipping
+    // is the honest behaviour: there is nothing to check.
+    if !is_configured(&app) {
+        tracing::debug!("update check skipped: no endpoint or signing key configured");
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         let outcome = check_and_install(app.clone(), false).await;
         tracing::info!(outcome = outcome.as_str(), "update check finished");

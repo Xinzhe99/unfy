@@ -93,50 +93,132 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
     fn emit_action(&self, action: &str) -> tauri::Result<()> {
         use tauri::Emitter;
         match action {
+            // Both actions run on a worker thread. The shortcut callback runs on
+            // the event loop, and a restore can legitimately sleep for the user's
+            // configured delay (up to 300 s) or block on a busy application's
+            // message pump. Doing that inline froze every subsequent shortcut.
             "hotkey_gather" => {
-                let result: std::result::Result<(), String> = (|| {
-                    let state = self.state::<AppState>();
-                    let settings = state
-                        .settings
-                        .lock()
-                        .map_err(|_| "settings lock".to_string())?;
-                    let mut engine = state.engine.lock().map_err(|_| "engine lock".to_string())?;
-                    match engine.resolve_target(
-                        settings
-                            .target_display
-                            .as_ref()
-                            .map(|t| t.native_id.as_str()),
-                    ) {
-                        Some(key) => engine.migrate(&key).map(|_| ()).map_err(|e| e.to_string()),
-                        None => Err("no displays".to_string()),
+                let app = self.clone();
+                std::thread::spawn(move || {
+                    // Counters are filled inside the engine scope and read after
+                    // the locks are dropped, so the history write never happens
+                    // while holding the engine mutex.
+                    let applied_count = std::sync::atomic::AtomicUsize::new(0);
+                    let unsettled_count = std::sync::atomic::AtomicUsize::new(0);
+                    let result: std::result::Result<(), String> = (|| {
+                        let state = app.state::<AppState>();
+                        let settings = state
+                            .settings
+                            .lock()
+                            .map_err(|_| "settings lock".to_string())?;
+                        let mut engine =
+                            state.engine.lock().map_err(|_| "engine lock".to_string())?;
+                        match engine.resolve_target(
+                            settings
+                                .target_display
+                                .as_ref()
+                                .map(|t| t.native_id.as_str()),
+                        ) {
+                            // Retarget, not migrate: pressing the shortcut while a
+                            // layout is active means "redo it here", which is what
+                            // the user sees happen when it works.
+                            Some(key) => engine
+                                .retarget(&key)
+                                .map(|retarget| {
+                                    let applied = retarget.migration.applied_count();
+                                    let unsettled = retarget.migration.failed_count()
+                                        + retarget.migration.unplaced.len();
+                                    // Record inside the closure so the counts are
+                                    // available; the guard is released right after.
+                                    applied_count
+                                        .store(applied, std::sync::atomic::Ordering::Relaxed);
+                                    unsettled_count
+                                        .store(unsettled, std::sync::atomic::Ordering::Relaxed);
+                                })
+                                .map_err(|e| e.to_string()),
+                            None => Err("no displays".to_string()),
+                        }
+                    })();
+                    if let Err(message) = &result {
+                        tracing::warn!(error = %message, "hotkey gather failed");
                     }
-                })();
-                if let Err(message) = &result {
-                    tracing::warn!(error = %message, "hotkey gather failed");
-                }
-                self.emit(
-                    "conflux://action",
-                    serde_json::json!({
-                        "action": "gather",
-                        "ok": result.is_ok(),
-                        "message": result.err(),
-                    }),
-                )
+                    if result.is_ok() {
+                        crate::tray::record(
+                            &app,
+                            crate::activity::Kind::Gather,
+                            applied_count.load(std::sync::atomic::Ordering::Relaxed),
+                            unsettled_count.load(std::sync::atomic::Ordering::Relaxed),
+                            "hotkey",
+                        );
+                    }
+                    crate::tray::refresh(&app);
+                    let _ = app.emit(
+                        "conflux://action",
+                        serde_json::json!({
+                            "action": "gather",
+                            "ok": result.is_ok(),
+                            "message": result.err(),
+                        }),
+                    );
+                });
+                Ok(())
             }
             "hotkey_restore" => {
-                let result: std::result::Result<(), String> = (|| {
-                    let state = self.state::<AppState>();
-                    let mut engine = state.engine.lock().map_err(|_| "engine lock".to_string())?;
-                    engine.restore().map(|_| ()).map_err(|e| e.to_string())
-                })();
-                self.emit(
-                    "conflux://action",
-                    serde_json::json!({
-                        "action": "restore",
-                        "ok": result.is_ok(),
-                        "message": result.err(),
-                    }),
-                )
+                let app = self.clone();
+                std::thread::spawn(move || {
+                    // Counters are filled inside the engine scope and read after
+                    // the locks are dropped, so the history write never happens
+                    // while holding the engine mutex.
+                    let affected = std::sync::atomic::AtomicUsize::new(0);
+                    let unsettled = std::sync::atomic::AtomicUsize::new(0);
+                    let result: std::result::Result<(), String> = (|| {
+                        let state = app.state::<AppState>();
+                        let mut engine =
+                            state.engine.lock().map_err(|_| "engine lock".to_string())?;
+                        engine
+                            .restore()
+                            .map(|report| {
+                                affected.store(
+                                    report
+                                        .outcomes
+                                        .values()
+                                        .filter(|o| {
+                                            **o == conflux_domain::WindowOutcome::Restored
+                                                || **o == conflux_domain::WindowOutcome::FallbackVisible
+                                        })
+                                        .count(),
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                unsettled.store(
+                                    report.pending.len(),
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                            })
+                            .map_err(|e| e.to_string())
+                    })();
+                    if let Err(message) = &result {
+                        tracing::warn!(error = %message, "hotkey restore failed");
+                    }
+                    if result.is_ok() {
+                        crate::tray::record(
+                            &app,
+                            crate::activity::Kind::Restore,
+                            affected.load(std::sync::atomic::Ordering::Relaxed),
+                            unsettled.load(std::sync::atomic::Ordering::Relaxed),
+                            "hotkey",
+                        );
+                    }
+                    crate::tray::refresh(&app);
+                    let _ = app.emit(
+                        "conflux://action",
+                        serde_json::json!({
+                            "action": "restore",
+                            "ok": result.is_ok(),
+                            "message": result.err(),
+                        }),
+                    );
+                });
+                Ok(())
             }
             _ => Ok(()),
         }

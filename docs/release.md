@@ -101,7 +101,7 @@ npx tauri signer generate -w ~/.tauri/conflux.key
 | Windows 无法操作提权窗口 | 以管理员运行的程序保持原位 | 跳过并计入 `permission_denied` |
 | 部分 Chromium 系应用会回弹 | 少数窗口拒绝移动 | 有界重试后标记 `rejected`，UI 显示进程号 |
 | 无法得知远程端在看哪块屏 | 目标屏需要用户指定 | 首次向导 + 热键循环 + 托盘提示 |
-| 无自动远程检测 | 需要手动触发 | 热键与托盘；不做启发式检测以避免误搬 |
+| 自动检测覆盖不完整 | TeamViewer/AnyDesk 等不置位任何系统标志 | 分级检测：RDP 与虚拟显示器可靠，进程级信号需连续两次确认；默认不自动移动窗口 |
 
 ## 6. 未做的事
 
@@ -109,4 +109,5 @@ npx tauri signer generate -w ~/.tauri/conflux.key
 - 无虚拟显示器、无强制单屏模式。
 - 无特权 helper，因此提权窗口不会被动到。
 - 无遥测上传（设置项存在，但没有任何上传代码）。
+- 自动检测不覆盖 macOS/Linux：`conflux-detect` 在这两个平台返回空观测，检测器保持惰性。
 - 无 License/支付。

@@ -140,6 +140,9 @@ pub struct SaveSettingsRequest {
     pub excluded_apps: Option<Vec<String>>,
     pub onboarding_done: Option<bool>,
     pub onboarding_step: Option<u8>,
+    pub auto_detect: Option<String>,
+    pub auto_gather: Option<bool>,
+    pub auto_restore: Option<bool>,
 }
 
 /// Refresh the tray after a state change so its labels, enabled set and tooltip
@@ -306,6 +309,12 @@ pub async fn migrate(
     // like a hang on a busy desktop. The engine stays behind the same mutex, so
     // moving the work to a blocking thread does not change the single-writer
     // guarantee.
+    // A gather supersedes a pending delayed restore: the user just asked for the
+    // windows to be gathered, so a timer that would scatter them again must die.
+    if let Ok(mut schedule) = app.schedule.lock() {
+        schedule.cancel();
+    }
+
     let engine_state = app.engine.clone();
     let settings = app.settings.clone();
     let emitter = handle.clone();
@@ -318,9 +327,11 @@ pub async fn migrate(
         serde_json::json!({ "phase": "migrating", "done": 0, "total": 0 }),
     );
 
-    let result = tokio::task::spawn_blocking(move || migrate_blocking(engine_state, settings))
-        .await
-        .map_err(|e| format!("migration task failed: {e}"))?;
+    let activity = app.activity.clone();
+    let result =
+        tokio::task::spawn_blocking(move || migrate_blocking(engine_state, settings, activity))
+            .await
+            .map_err(|e| format!("migration task failed: {e}"))?;
 
     let _ = tauri::Emitter::emit(
         &emitter,
@@ -334,6 +345,7 @@ pub async fn migrate(
 fn migrate_blocking(
     engine: Arc<std::sync::Mutex<conflux_engine::Engine<crate::platform::Backend>>>,
     settings: Arc<std::sync::Mutex<Settings>>,
+    activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
 ) -> Result<MigrationDto, String> {
     let mut engine = engine.lock().map_err(|e| e.to_string())?;
     let settings = settings.lock().map_err(|e| e.to_string())?;
@@ -349,11 +361,37 @@ fn migrate_blocking(
 
     // A gather while windows are still captured is refused by the engine; give
     // the user the action that actually helps instead of a raw error string.
-    let report: MigrationReport = engine.migrate(&target).map_err(|e| match e {
-        conflux_domain::EngineError::TransactionAlreadyOpen => "already_active".to_string(),
+    // `retarget` rather than `migrate`: the tray and the button both say
+    // "整理到目标屏", and pressing it while a layout is already active means
+    // "move everything to the display I just picked". Refusing with
+    // `already_active` made the label a lie. `retarget` restores first, so the
+    // original preimages survive.
+    let retarget = engine.retarget(&target).map_err(|e| match e {
         conflux_domain::EngineError::Paused => "paused".to_string(),
+        conflux_domain::EngineError::RestoreIncomplete { pending } => {
+            format!("restore_incomplete:{pending}")
+        }
         other => other.to_string(),
     })?;
+    let restored_first = retarget.restored;
+    let report: MigrationReport = retarget.migration;
+
+    // Record before returning: the user's question ("what did it just do?") is
+    // asked immediately after the action, not after a later poll.
+    if let Ok(mut log) = activity.lock() {
+        log.record(crate::activity::Entry {
+            at: crate::activity::now(),
+            kind: crate::activity::Kind::Gather,
+            affected: report.applied_count(),
+            unsettled: report.failed_count() + report.unplaced.len(),
+            note: if restored_first > 0 {
+                format!("先恢复了 {restored_first} 个窗口")
+            } else {
+                String::new()
+            },
+            trigger: "window".into(),
+        });
+    }
     Ok(MigrationDto {
         transaction: report.transaction.to_string(),
         applied: report.applied_count(),
@@ -395,19 +433,66 @@ pub async fn restore(
     handle: tauri::AppHandle,
     app: State<'_, AppState>,
 ) -> Result<RestoreDto, String> {
-    // Restore can sleep for the configured delay and blocks on each target
-    // application, so it runs off the command thread for the same reason as
-    // `migrate`.
-    let _ = (&handle, &app);
+    restore_after_delay(&handle, &app, true).await
+}
+
+/// Restore, optionally honouring the configured delay.
+///
+/// `honour_delay` is false for the exit barrier and for automatic restores that
+/// follow a remote session ending: both must be immediate, because the user is
+/// waiting for the app to finish, not idling before it starts.
+pub async fn restore_after_delay<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    app: &State<'_, AppState>,
+    honour_delay: bool,
+) -> Result<RestoreDto, String> {
+    let delay = if honour_delay {
+        let secs = {
+            let settings = app.settings.lock().map_err(|e| e.to_string())?;
+            settings.restore_delay_secs
+        };
+        std::time::Duration::from_secs(u64::from(secs))
+    } else {
+        std::time::Duration::ZERO
+    };
+
+    // Claim the schedule even for a zero delay: a zero-delay restore must also
+    // cancel any older pending one, otherwise two restores run back to back.
+    let token = {
+        let mut schedule = app.schedule.lock().map_err(|e| e.to_string())?;
+        schedule.claim()
+    };
+
+    if delay > std::time::Duration::ZERO {
+        let seconds = delay.as_secs();
+        let _ = tauri::Emitter::emit(
+            handle,
+            "conflux://progress",
+            serde_json::json!({ "phase": "waiting", "seconds": seconds }),
+        );
+        let waiting = token.clone();
+        let cancelled = tokio::task::spawn_blocking(move || {
+            !crate::schedule::wait_cancellable(delay, &waiting)
+        })
+        .await
+        .unwrap_or(true);
+        if cancelled {
+            // A newer request superseded this one. Report it as an error so the
+            // UI does not print "已恢复 0 个窗口" for a restore that never ran.
+            return Err("restore_cancelled".to_string());
+        }
+    }
+
     let engine_state = app.engine.clone();
     let settings = app.settings.clone();
     let settings_path = app.settings_path.clone();
+    let activity = app.activity.clone();
     let result = tokio::task::spawn_blocking(move || {
-        restore_blocking(engine_state, settings, settings_path)
+        restore_blocking(engine_state, settings, settings_path, activity)
     })
     .await
     .map_err(|e| format!("restore task failed: {e}"))?;
-    sync_tray(&handle);
+    crate::tray::refresh(handle);
     result
 }
 
@@ -415,6 +500,7 @@ fn restore_blocking(
     engine: Arc<std::sync::Mutex<conflux_engine::Engine<crate::platform::Backend>>>,
     settings: Arc<std::sync::Mutex<Settings>>,
     settings_path: std::path::PathBuf,
+    activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
 ) -> Result<RestoreDto, String> {
     let mut engine = engine.lock().map_err(|e| e.to_string())?;
     let report: RestoreReport = engine.restore().map_err(|e| e.to_string())?;
@@ -451,6 +537,18 @@ fn restore_blocking(
         }
     }
 
+    if let Ok(mut log) = activity.lock() {
+        log.record(crate::activity::Entry {
+            at: crate::activity::now(),
+            kind: crate::activity::Kind::Restore,
+            affected: report.count(conflux_domain::WindowOutcome::Restored)
+                + report.count(conflux_domain::WindowOutcome::FallbackVisible),
+            unsettled: report.pending.len(),
+            note: String::new(),
+            trigger: "window".into(),
+        });
+    }
+
     Ok(RestoreDto {
         restored: report.count(conflux_domain::WindowOutcome::Restored),
         kept_user_change: report.count(conflux_domain::WindowOutcome::KeptUserChange),
@@ -470,9 +568,32 @@ pub fn rescue_offscreen(app: State<'_, AppState>) -> Result<usize, String> {
 }
 
 #[tauri::command]
-pub fn get_settings(app: State<'_, AppState>) -> Result<SettingsDto, String> {
-    let settings = app.settings.lock().map_err(|e| e.to_string())?;
-    Ok(SettingsDto::from(&*settings))
+pub fn get_settings<'a>(
+    app: State<'a, AppState>,
+    handle: tauri::AppHandle,
+) -> Result<SettingsDto, String> {
+    settings_dto(&app, &handle)
+}
+
+/// Build the settings payload, including the live detector verdict.
+///
+/// The detector state is not part of `Settings`, so it is attached here rather
+/// than stored: persisting "a remote session is happening" would make a crash
+/// during a session look like a permanent one on the next launch.
+fn settings_dto(
+    app: &State<'_, AppState>,
+    handle: &tauri::AppHandle,
+) -> Result<SettingsDto, String> {
+    let mut dto = {
+        let settings = app.settings.lock().map_err(|e| e.to_string())?;
+        SettingsDto::from(&*settings)
+    };
+    let _ = handle;
+    if let Ok(tracker) = app.detector.lock() {
+        dto.remote_active = tracker.is_active();
+        dto.remote_evidence = tracker.evidence().map(|e| e.label());
+    }
+    Ok(dto)
 }
 
 #[derive(Debug, Serialize)]
@@ -490,7 +611,14 @@ pub struct SettingsDto {
     pub excluded_apps: Vec<String>,
     pub onboarding_done: bool,
     pub onboarding_step: u8,
+    pub auto_detect: String,
+    pub auto_gather: bool,
+    pub auto_restore: bool,
     pub target: Option<TargetDto>,
+    /// What the detector currently believes, and why. Independent of whether
+    /// automation is enabled: the overview shows the evidence either way.
+    pub remote_active: bool,
+    pub remote_evidence: Option<String>,
 }
 
 impl From<&Settings> for SettingsDto {
@@ -517,6 +645,12 @@ impl From<&Settings> for SettingsDto {
             auto_update: s.auto_update,
             telemetry: s.telemetry,
             excluded_apps: s.excluded_apps.clone(),
+            auto_detect: s.auto_detect.clone(),
+            auto_gather: s.auto_gather,
+            auto_restore: s.auto_restore,
+            // Filled in by `settings_dto`, which has access to the detector.
+            remote_active: false,
+            remote_evidence: None,
             onboarding_done: s.onboarding_done,
             onboarding_step: s.onboarding_step,
             target: s.target_display.as_ref().map(|t| TargetDto {
@@ -586,6 +720,21 @@ pub fn save_settings(
     if let Some(telemetry) = request.telemetry {
         settings.telemetry = telemetry;
     }
+    if let Some(level) = request.auto_detect {
+        if !matches!(
+            level.as_str(),
+            "off" | "conservative" | "balanced" | "aggressive"
+        ) {
+            return Err(format!("unknown detection level: {level}"));
+        }
+        settings.auto_detect = level;
+    }
+    if let Some(auto_gather) = request.auto_gather {
+        settings.auto_gather = auto_gather;
+    }
+    if let Some(auto_restore) = request.auto_restore {
+        settings.auto_restore = auto_restore;
+    }
     if let Some(excluded_apps) = request.excluded_apps {
         settings.excluded_apps = excluded_apps;
     }
@@ -636,6 +785,11 @@ pub fn save_settings(
             tracing::warn!(error = %e, "could not apply settings to the engine");
         }
     }
+
+    // Apply the new detection level to the running tracker: without this the
+    // change would only take effect at the next launch, and the settings screen
+    // would look like it did nothing.
+    crate::monitor::apply_sensitivity(&handle);
 
     Ok(dto)
 }
@@ -914,6 +1068,38 @@ pub async fn check_update(handle: tauri::AppHandle) -> Result<String, String> {
     }
 
     Ok(outcome.as_str().to_string())
+}
+
+#[derive(Debug, Serialize)]
+pub struct ActivityEntryDto {
+    pub at: u64,
+    pub kind: String,
+    pub affected: usize,
+    pub unsettled: usize,
+    pub note: String,
+    pub trigger: String,
+}
+
+/// Recent history, newest first, for the overview.
+#[tauri::command]
+pub fn activity_log(app: State<'_, AppState>) -> Vec<ActivityEntryDto> {
+    let activity = app.activity.clone();
+    let entries = match activity.lock() {
+        Ok(log) => log.entries().to_vec(),
+        Err(_) => return Vec::new(),
+    };
+    entries
+        .into_iter()
+        .rev()
+        .map(|e| ActivityEntryDto {
+            at: e.at,
+            kind: e.kind.code().to_string(),
+            affected: e.affected,
+            unsettled: e.unsettled,
+            note: e.note,
+            trigger: e.trigger,
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]

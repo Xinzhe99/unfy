@@ -530,6 +530,7 @@ dependencies = [
 name = "conflux-desktop"
 version = "0.1.0"
 dependencies = [
+ "conflux-detect",
  "conflux-domain",
  "conflux-engine",
  "conflux-journal",
@@ -552,6 +553,15 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "conflux-detect"
+version = "0.1.0"
+dependencies = [
+ "conflux-domain",
+ "tracing",
+ "windows",
 ]
 
 [[package]]

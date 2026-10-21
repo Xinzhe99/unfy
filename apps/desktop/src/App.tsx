@@ -4,15 +4,14 @@ import { listen } from "@tauri-apps/api/event";
 import {
   api,
   errorMessage,
+  type ActivityEntryDto,
   formatBytes,
   type AppDto,
   type DisplayDto,
   type EngineStateName,
   type HotkeyStatusDto,
-  type MigrationDto,
   type PendingWorkDto,
   type PreviewDto,
-  type RestoreDto,
   type SettingsDto,
   type StatusDto,
   type UpdateStatusDto,
@@ -84,8 +83,7 @@ export default function App() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [runningApps, setRunningApps] = useState<AppDto[]>([]);
-  const [lastMigration, setLastMigration] = useState<MigrationDto | null>(null);
-  const [lastRestore, setLastRestore] = useState<RestoreDto | null>(null);
+  const [activity, setActivity] = useState<ActivityEntryDto[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const noticeTimer = useRef<number | null>(null);
@@ -98,15 +96,24 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextStatus, nextDisplays, nextSettings, nextPending, nextHotkeys, nextUpdate] =
-        await Promise.all([
-          api.getStatus(),
-          api.listDisplays(),
-          api.getSettings(),
-          api.pendingWork(),
-          api.hotkeyStatus(),
-          api.updateStatus(),
-        ]);
+      const [
+        nextStatus,
+        nextDisplays,
+        nextSettings,
+        nextPending,
+        nextHotkeys,
+        nextUpdate,
+        nextActivity,
+      ] = await Promise.all([
+        api.getStatus(),
+        api.listDisplays(),
+        api.getSettings(),
+        api.pendingWork(),
+        api.hotkeyStatus(),
+        api.updateStatus(),
+        api.activityLog(),
+      ]);
+      setActivity(nextActivity);
       setStatus(nextStatus);
       setDisplays(nextDisplays);
       setSettings(nextSettings);
@@ -173,17 +180,67 @@ export default function App() {
         }
       },
     );
+    const unlistenRemote = listen<{
+      active: boolean;
+      evidence?: string;
+      acted?: boolean;
+      applied?: number;
+      restored?: number;
+      error?: string;
+    }>("conflux://remote", (event) => {
+      void refresh();
+      const { active, evidence, acted, applied, restored, error } = event.payload;
+      if (error) {
+        flash({
+          tone: "warning",
+          text: `自动处理失败：${error}`,
+        });
+        return;
+      }
+      if (active && acted) {
+        flash({
+          tone: "success",
+          text: `检测到${evidence ?? "远程会话"}，已整理 ${applied ?? 0} 个窗口。`,
+        });
+        return;
+      }
+      if (active && evidence) {
+        flash({
+          tone: "neutral",
+          text: `检测到${evidence}。自动整理已关闭，可点「整理到目标屏」。`,
+        });
+        return;
+      }
+      if (!active && acted) {
+        flash({
+          tone: "success",
+          text: `远程会话已结束，已恢复 ${restored ?? 0} 个窗口。`,
+        });
+      }
+    });
     const unlistenExit = listen("conflux://exit-blocked", () => {
       flash({
         tone: "warning",
         text: "还有窗口没有恢复，已取消退出。请先恢复布局，或选择保留当前布局。",
       });
     });
-    const unlistenProgress = listen<{ phase: string }>(
+    const unlistenProgress = listen<{ phase: string; seconds?: number }>(
       "conflux://progress",
       (event) => {
-        setBusy(event.payload.phase !== "done");
-        if (event.payload.phase === "done") void refresh();
+        const phase = event.payload.phase;
+        setBusy(phase !== "done" && phase !== "waiting");
+        // A delayed restore is not "busy": the window is still usable and the
+        // user can cancel it by gathering. Saying "正在恢复" during the wait
+        // would be a lie, and hiding the countdown leaves the button looking dead.
+        if (phase === "waiting") {
+          const seconds = event.payload.seconds ?? 0;
+          setNotice({
+            tone: "neutral",
+            text: `${seconds} 秒后恢复布局。现在点「整理到目标屏」可以取消。`,
+          });
+          return;
+        }
+        if (phase === "done") void refresh();
       },
     );
     const unlistenTopology = listen<{ rescued: number }>(
@@ -218,6 +275,7 @@ export default function App() {
 
     return () => {
       void unlistenAction.then((fn) => fn());
+      void unlistenRemote.then((fn) => fn());
       void unlistenExit.then((fn) => fn());
       void unlistenProgress.then((fn) => fn());
       void unlistenTopology.then((fn) => fn());
@@ -258,9 +316,7 @@ export default function App() {
   const onRestore = () =>
     run(
       async () => {
-        const report = await api.restore();
-        setLastRestore(report);
-        return report;
+        return api.restore();
       },
       (report) => ({
         tone: report.pending > 0 ? "warning" : "success",
@@ -435,8 +491,8 @@ export default function App() {
                 status={status}
                 settings={settings}
                 preview={preview}
-                lastMigration={lastMigration}
-                lastRestore={lastRestore}
+                displays={displays}
+                activity={activity}
                 busy={busy}
                 onPreview={() =>
                   void run(
@@ -455,7 +511,6 @@ export default function App() {
                   void run(
                     async () => {
                       const result = await api.migrate();
-                      setLastMigration(result);
                       setPreview(null);
                       return result;
                     },

@@ -83,6 +83,13 @@ pub struct MigrationReport {
     pub refused: Vec<RefusedWindow>,
 }
 
+/// Result of a retarget: how many windows went home first, plus the gather.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetargetReport {
+    pub restored: usize,
+    pub migration: MigrationReport,
+}
+
 /// A window that stayed where it was despite the request.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RefusedWindow {
@@ -149,6 +156,9 @@ pub struct EngineConfig {
     /// A window narrower than this is not considered "reachable".
     pub min_reachable: conflux_domain::Size,
     /// Seconds to wait at the start of `restore()`.
+    /// Advisory: the desktop layer waits this long before calling `restore`.
+    /// Kept in the config so diagnostics can report it, but the engine never
+    /// sleeps on it — see the note in `restore`.
     pub restore_delay_secs: u32,
     /// Executable names that are never moved.
     ///
@@ -350,20 +360,6 @@ impl<B: Backend> Engine<B> {
 
     pub fn is_paused(&self) -> bool {
         self.paused
-    }
-
-    /// Apply the user's restore delay.
-    ///
-    /// Returns immediately when the delay is zero, which is the default. The wait
-    /// exists so a remote session that drops and reconnects within a few seconds
-    /// does not cause two full window migrations.
-    fn wait_restore_delay(&self) {
-        let delay = self.config.restore_delay_secs;
-        if delay == 0 {
-            return;
-        }
-        tracing::info!(delay, "waiting before restore");
-        std::thread::sleep(std::time::Duration::from_secs(u64::from(delay)));
     }
 
     /// Adopt a journal left behind by a previous run.
@@ -1035,10 +1031,11 @@ impl<B: Backend> Engine<B> {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
 
-        // A remote session that reconnects within a few seconds must not cause
-        // two migrations, so the user's delay is applied before anything moves.
-        self.wait_restore_delay();
-
+        // The user's restore delay is deliberately *not* applied here. Sleeping
+        // inside this method blocks the engine mutex, which froze status polling
+        // and the tray for the whole delay (up to 300 s). The desktop layer owns
+        // the wait and can cancel it when a newer request arrives; see
+        // `apps/desktop/src-tauri/src/schedule.rs`.
         self.state = EngineState::Restoring;
         self.paused = false;
 
@@ -1253,6 +1250,61 @@ impl<B: Backend> Engine<B> {
     ///
     /// Used when the user explicitly chooses "keep this layout". The journal is
     /// closed so the next launch does not try to restore it.
+    /// Re-plan the current set of windows onto `target`, keeping the original
+    /// preimages.
+    ///
+    /// This is what "re-gather to a different display" means to a user: the
+    /// windows are already gathered, and the target display changed (a typo, a
+    /// second remote session, a monitor re-arranged). Doing it as `restore` then
+    /// `migrate` would work but would throw away the preimages and record the
+    /// restored positions as the new home, so a later restore could land nowhere
+    /// near where the user started.
+    ///
+    /// The implementable version runs the restore first (to get the windows back
+    /// to their original rectangles), then a fresh gather. Window positions, not
+    /// the journal, are what the planner reads, so the intermediate state has to
+    /// exist. If the restore leaves windows pending, retargeting is refused:
+    /// planning on top of half-restored windows would produce a layout the user
+    /// cannot reason about.
+    pub fn retarget(&mut self, target: &DisplayKey) -> Result<RetargetReport, EngineError> {
+        if self.state.may_write() {
+            return Err(EngineError::InvalidTransition { from: self.state });
+        }
+        if self.paused {
+            return Err(EngineError::Paused);
+        }
+
+        // Idle with no transaction: nothing to restore, so this is a plain
+        // gather.
+        if self.transaction.is_none() {
+            let migration = self.migrate(target)?;
+            return Ok(RetargetReport {
+                restored: 0,
+                migration,
+            });
+        }
+
+        let restore = self.restore()?;
+        if !restore.is_complete() {
+            // Leave the engine in whatever state restore produced (Degraded).
+            // The caller reports the pending count so the UI can offer "try
+            // again" instead of pretending the retarget finished.
+            return Err(EngineError::RestoreIncomplete {
+                pending: restore.pending.len(),
+            });
+        }
+
+        let migration = self.migrate(target)?;
+        Ok(RetargetReport {
+            restored: restore
+                .outcomes
+                .values()
+                .filter(|o| **o == WindowOutcome::Restored)
+                .count(),
+            migration,
+        })
+    }
+
     pub fn keep_current_layout(&mut self) -> Result<(), EngineError> {
         if let Some(transaction) = self.transaction.take() {
             transaction

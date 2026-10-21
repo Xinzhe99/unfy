@@ -269,6 +269,33 @@ fn toggle_pause<R: Runtime>(app: &AppHandle<R>) {
     refresh(app);
 }
 
+/// Append one line to the history so the overview can answer "what did it do?".
+pub fn record<R: Runtime>(
+    app: &AppHandle<R>,
+    kind: crate::activity::Kind,
+    affected: usize,
+    unsettled: usize,
+    trigger: &str,
+) {
+    // Clone the Arc out of the state before locking: a `State<'_, _>` guard makes
+    // the borrow checker treat the mutex guard as borrowed from a temporary.
+    let activity = app.state::<AppState>().activity.clone();
+    {
+        let mut log = match activity.lock() {
+            Ok(log) => log,
+            Err(_) => return,
+        };
+        log.record(crate::activity::Entry {
+            at: crate::activity::now(),
+            kind,
+            affected,
+            unsettled,
+            note: String::new(),
+            trigger: trigger.to_string(),
+        });
+    };
+}
+
 fn run_gather<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let state = app.state::<AppState>();
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
@@ -284,16 +311,54 @@ fn run_gather<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         return Err("没有可用显示器".into());
     };
 
-    engine
-        .migrate(&target)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    // Same semantics as the main button: "gather to the target display" while a
+    // layout is active means retarget, not "refuse because something is open".
+    match engine.retarget(&target) {
+        Ok(retarget) => {
+            let applied = retarget.migration.applied_count();
+            let unsettled = retarget.migration.failed_count() + retarget.migration.unplaced.len();
+            drop(engine);
+            drop(settings);
+            record(
+                app,
+                crate::activity::Kind::Gather,
+                applied,
+                unsettled,
+                "tray",
+            );
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 fn run_restore<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    // The tray must honour the same delay the window does, or the two entry
+    // points would behave differently for the same button label. The wait runs
+    // without holding the engine lock.
+    let handle = app.clone();
+    let state = app.state::<AppState>();
+    let result = tauri::async_runtime::block_on(async {
+        crate::commands::restore_after_delay(&handle, &state, true).await
+    });
+    if let Ok(dto) = &result {
+        record(
+            app,
+            crate::activity::Kind::Restore,
+            dto.restored + dto.fallback_visible,
+            dto.pending,
+            "tray",
+        );
+    }
+    result.map(|_| ())
+}
+
+/// Restore without the configured delay, for paths where the user is actively
+/// waiting (exit).
+fn restore_now<R: Runtime>(app: &AppHandle<R>) -> Result<conflux_engine::RestoreReport, String> {
     let state = app.state::<AppState>();
     let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
-    engine.restore().map(|_| ()).map_err(|e| e.to_string())
+    engine.restore().map_err(|e| e.to_string())
 }
 
 fn run_rescue<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -331,27 +396,25 @@ fn toggle_settings<R: Runtime>(app: &AppHandle<R>) {
 /// A failure to restore must not silently drop windows, so the process stays
 /// alive and the error is surfaced. The user can retry from the tray.
 fn quit<R: Runtime>(app: &AppHandle<R>) {
-    let state = app.state::<AppState>();
-    let blocked = match state.engine.lock() {
-        Ok(mut engine) => {
-            // If anything is still captured, try to put it back first.
-            if engine.state().has_pending_work() {
-                match engine.restore() {
-                    Ok(report) if report.is_complete() => false,
-                    Ok(report) => {
-                        tracing::warn!(pending = report.pending.len(), "restore incomplete");
-                        true
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "restore failed during exit");
-                        true
-                    }
-                }
-            } else {
-                false
-            }
+    // A pending delayed restore is irrelevant now: the user is quitting, and the
+    // exit restore below runs immediately.
+    if let Ok(mut schedule) = app.state::<AppState>().schedule.lock() {
+        schedule.cancel();
+    }
+
+    // The exit path ignores the configured delay: the user is waiting for the
+    // process to end, not for a timer.
+    let blocked = match restore_now(app) {
+        // Nothing was captured, or everything went back: exit.
+        Ok(report) if report.is_complete() => false,
+        Ok(report) => {
+            tracing::warn!(pending = report.pending.len(), "restore incomplete");
+            true
         }
-        Err(_) => true,
+        Err(e) => {
+            tracing::error!(error = %e, "restore failed during exit");
+            true
+        }
     };
 
     if blocked {
@@ -362,6 +425,10 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
         show_settings(app);
         return;
     }
+    // Stop the detector loop before the process tears down: it holds no lock
+    // across `exit`, but a sleeping thread that wakes during shutdown would emit
+    // events into a dying runtime and log a spurious error.
+    crate::monitor::stop();
     app.exit(0);
 }
 
