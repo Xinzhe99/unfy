@@ -261,7 +261,13 @@ pub fn run() {
             commands::live_transaction,
         ])
         .setup(|app| {
-            tray::install(app.handle())?;
+            // A tray failure must not abort startup. Tauri turns a `setup` error
+            // into a panic ("Failed to setup app"), which kills the process - and
+            // the tray is an optional surface: shortcuts and the window still
+            // work without it. The failure is logged and the app continues.
+            if let Err(e) = tray::install(app.handle()) {
+                tracing::error!(error = %e, "tray unavailable; continuing without it");
+            }
             session::install(app.handle());
 
             // A manual launch opens the window; an autostart launch stays in the
