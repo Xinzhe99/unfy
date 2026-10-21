@@ -70,3 +70,38 @@ fn a_chosen_target_does_not_imply_completion() {
     };
     assert!(!settings.onboarding_done);
 }
+
+/// Window geometry must round-trip and must reject nonsense.
+///
+/// A window restored to an off-screen position or a 1x1 size is unrecoverable
+/// without hand-editing JSON, so the range check at the boundary matters more
+/// than it looks.
+#[test]
+fn window_geometry_round_trips_and_is_range_checked() {
+    let path = temp_path("geometry");
+
+    let mut settings = conflux_settings::Settings::default();
+    assert_eq!(settings.window_geometry, None);
+    settings.window_geometry = Some((200, 120, 1040, 800));
+    settings.save(&path).expect("save");
+    assert_eq!(
+        conflux_settings::Settings::load(&path)
+            .unwrap()
+            .window_geometry,
+        Some((200, 120, 1040, 800))
+    );
+
+    for bad in [
+        (0, 0, 10, 800),         // far too narrow
+        (0, 0, 1040, 100),       // far too short
+        (0, 0, 9000, 800),       // wider than any display
+        (999_999, 0, 1040, 800), // unreachable position
+    ] {
+        let mut settings = conflux_settings::Settings::default();
+        settings.window_geometry = Some(bad);
+        assert!(
+            settings.save(&path).is_err(),
+            "geometry {bad:?} should be rejected"
+        );
+    }
+}

@@ -271,6 +271,11 @@ pub fn run() {
             }
             session::install(app.handle());
 
+            // Restore the last size and position. Applied before the autostart
+            // hide so a login launch keeps the geometry for when the user opens
+            // the window later.
+            restore_window_geometry(app.handle());
+
             // A manual launch opens the window; an autostart launch stays in the
             // tray. Users who double-click the app expect to see something.
             // The window is created visible so Windows gives it its configured
@@ -297,11 +302,90 @@ pub fn run() {
             // shortcuts must keep working.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                // Capture geometry before hiding: the window still has its real
+                // size here, and hiding it is what the user just asked for.
+                persist_window_geometry(window.app_handle());
                 let _ = window.hide();
             }
         })
         .run(tauri::generate_context!())
         .expect("error while running Conflux");
+}
+
+/// Apply the persisted window geometry, if it still lands on a visible display.
+///
+/// A monitor can be unplugged between sessions, and a window restored onto a
+/// display that no longer exists opens off-screen with no way to reach it. The
+/// saved rect is therefore clamped into the union of the current work areas
+/// before it is applied; if no display contains it at all, the configured default
+/// is kept instead.
+fn restore_window_geometry(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Some((x, y, width, height)) = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .ok()
+        .and_then(|settings| settings.window_geometry)
+    else {
+        return;
+    };
+
+    let visible = app
+        .available_monitors()
+        .map(|monitors| {
+            monitors.iter().any(|monitor| {
+                let pos = monitor.position();
+                let size = monitor.size();
+                let (sx, sy) = (pos.x, pos.y);
+                let (sw, sh) = (size.width as i32, size.height as i32);
+                // Require a meaningful overlap: a window whose title bar is off
+                // the top edge cannot be dragged back.
+                x + width.min(200) > sx && x < sx + sw && y + 40 > sy && y < sy + sh
+            })
+        })
+        .unwrap_or(false);
+
+    if !visible {
+        tracing::info!("saved window geometry is off-screen; keeping the default");
+        return;
+    }
+
+    let _ = window.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// Remember the window's size and position.
+///
+/// Called from the close handler rather than the exit path: closing the window is
+/// the moment the user's intent is expressed, and the tray keeps running after it,
+/// so the geometry has to be captured while it still exists.
+fn persist_window_geometry(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let (Ok(size), Ok(position)) = (window.inner_size(), window.outer_position()) else {
+        return;
+    };
+    let state = app.state::<AppState>();
+    let Ok(mut settings) = state.settings.lock() else {
+        return;
+    };
+    let geometry = (
+        position.x,
+        position.y,
+        size.width as i32,
+        size.height as i32,
+    );
+    if settings.window_geometry == Some(geometry) {
+        return;
+    }
+    settings.window_geometry = Some(geometry);
+    if let Err(e) = settings.save(&state.settings_path) {
+        tracing::warn!(error = %e, "could not persist window geometry");
+    }
 }
 
 /// Convenience for tests and for the headless probe.

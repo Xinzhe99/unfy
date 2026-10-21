@@ -109,6 +109,16 @@ pub struct Settings {
     /// Purely informational: nothing in the engine reads it, and it is replaced
     /// on every gather. Executable base names only.
     pub last_refused_apps: Vec<String>,
+    /// Last window geometry, as (x, y, width, height) in logical pixels.
+    ///
+    /// Stored here rather than in a separate file so there is one place that can
+    /// be inspected and one atomic writer. `None` means the user has never
+    /// resized the window, so the configured default applies.
+    ///
+    /// The plugin approach was tried first and abandoned: it saves on a clean
+    /// exit, and this app is routinely killed from a terminal or by the installer
+    /// during development, so the geometry never persisted when it mattered.
+    pub window_geometry: Option<(i32, i32, i32, i32)>,
     /// Explicit consent for anonymous usage counters. Default off.
     ///
     /// No uploader exists in this build: the flag records the user's choice so a
@@ -179,6 +189,7 @@ impl Default for Settings {
             auto_gather: false,
             auto_restore: false,
             last_refused_apps: Vec::new(),
+            window_geometry: None,
             auto_update: true,
             telemetry: false,
         }
@@ -296,6 +307,20 @@ impl Settings {
                 "unknown auto_detect level: {}",
                 self.auto_detect
             )));
+        }
+        // Guard the geometry against a corrupt file: a window positioned at
+        // -100000 or sized 1x1 is unrecoverable without editing JSON by hand.
+        if let Some((x, y, width, height)) = self.window_geometry {
+            if width < 720 || height < 520 || width > 8000 || height > 8000 {
+                return Err(SettingsError::Validation(format!(
+                    "window size {width}x{height} is out of range"
+                )));
+            }
+            if x.abs() > 20000 || y.abs() > 20000 {
+                return Err(SettingsError::Validation(format!(
+                    "window position {x},{y} is out of range"
+                )));
+            }
         }
         if self.excluded_apps.len() > 200 {
             return Err(SettingsError::Validation(
