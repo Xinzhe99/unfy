@@ -18,6 +18,7 @@ export function DisplaysPage({
   busy,
   onSelect,
   onIdentify,
+  onCycle,
   onSave,
 }: {
   displays: DisplayDto[];
@@ -27,6 +28,8 @@ export function DisplaysPage({
   busy: boolean;
   onSelect: (nativeId: string) => void;
   onIdentify: () => void;
+  /** Advance the target to the next display, keeping the original baseline. */
+  onCycle: () => void;
   onSave: (patch: Partial<SettingsDto>) => void;
 }) {
   if (!settings) {
@@ -43,9 +46,16 @@ export function DisplaysPage({
         title="目标显示器"
         description="选择远程端能看到的那块屏。更换屏幕后需要重新选择。"
         aside={
-          <Button size="sm" onClick={onIdentify} disabled={busy}>
-            在屏幕上显示编号
-          </Button>
+          <div className="flex gap-1.5">
+            {displays.length > 1 ? (
+              <Button size="sm" onClick={onCycle} disabled={busy}>
+                切换到下一块屏
+              </Button>
+            ) : null}
+            <Button size="sm" onClick={onIdentify} disabled={busy}>
+              在屏幕上显示编号
+            </Button>
+          </div>
         }
       >
         <DisplayCards

@@ -1571,6 +1571,83 @@ pub fn reset_settings(
     settings_dto(&app, &handle)
 }
 
+/// Move the target display to the next one in positional order, keeping the
+/// original baseline.
+///
+/// Spec P0-04-B: cycling must not overwrite the preimages, so a later restore
+/// returns to the layout the user started from rather than to an intermediate one.
+/// `retarget` already guarantees that, which is why this delegates instead of
+/// duplicating the gather logic.
+#[tauri::command]
+pub async fn cycle_target<R: tauri::Runtime>(
+    handle: tauri::AppHandle<R>,
+    app: State<'_, AppState>,
+) -> Result<TargetDto, String> {
+    {
+        let engine = app.engine.lock().map_err(|e| e.to_string())?;
+        let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
+        let displays = engine.backend().topology().map_err(|e| e.to_string())?;
+        if displays.len() < 2 {
+            return Err("single_display".to_string());
+        }
+        let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+        let current = settings
+            .target_display
+            .as_ref()
+            .and_then(|t| ordered.iter().position(|d| t.matches(&d.key)));
+        let next = match current {
+            Some(index) => (index + 1) % ordered.len(),
+            // No target yet: start at the first, which is also what the picker
+            // would show as "显示器 1".
+            None => 0,
+        };
+        let display = ordered[next];
+        let mut target = TargetDisplay::from_key(&display.key, display.label.clone());
+        target.number = Some(next + 1);
+        settings.target_display = Some(target.clone());
+        settings
+            .save(&app.settings_path)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Re-gather onto the new display, keeping the original baseline.
+    let engine_state = app.engine.clone();
+    let settings_state = app.settings.clone();
+    let activity = app.activity.clone();
+    let progress_emitter = handle.clone();
+    let emit: Arc<dyn Fn(usize, usize) + Send + Sync> = Arc::new(move |done, total| {
+        let _ = tauri::Emitter::emit(
+            &progress_emitter,
+            "conflux://progress",
+            serde_json::json!({ "phase": "migrating", "done": done, "total": total }),
+        );
+    });
+    let _ = tokio::task::spawn_blocking(move || {
+        migrate_blocking(engine_state, settings_state, activity, emit)
+    })
+    .await;
+
+    {
+        let engine = app.engine.lock().map_err(|e| e.to_string())?;
+        let settings = app.settings.lock().map_err(|e| e.to_string())?;
+        let displays = engine.backend().topology().unwrap_or_default();
+        let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+        let target = settings.target_display.as_ref().map(|t| {
+            let live = ordered
+                .iter()
+                .position(|d| t.matches(&d.key))
+                .map(|i| i + 1);
+            TargetDto {
+                native_id: t.native_id.clone(),
+                label: t.label.clone(),
+                present: live.is_some(),
+                number: live.or(t.number),
+            }
+        });
+        target.ok_or_else(|| "no_target".to_string())
+    }
+}
+
 /// Reveal a directory in the OS file manager.
 ///
 /// The diagnostics line prints a path, but a path in a toast is not findable; the

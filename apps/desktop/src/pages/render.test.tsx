@@ -527,6 +527,7 @@ describe("pages render", () => {
         busy={false}
         onSelect={noop}
         onIdentify={noop}
+        onCycle={noop}
         onSave={noop}
       />,
     );
@@ -721,6 +722,7 @@ describe("pages render", () => {
         busy={false}
         onSelect={noop}
         onIdentify={noop}
+        onCycle={noop}
         onSave={noop}
       />,
     );

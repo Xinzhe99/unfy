@@ -824,6 +824,20 @@ export default function App() {
                       : "无法显示编号，请检查屏幕状态。",
                   }))
                 }
+                onCycle={() =>
+                  void run(
+                    async () => {
+                      const next = await api.cycleTarget();
+                      // The baseline is preserved by `retarget`, so this is safe to
+                      // repeat; say so, because "switch target" sounds destructive.
+                      return next;
+                    },
+                    (next) => ({
+                      tone: "neutral",
+                      text: `已切换到显示器 ${next.number ?? "?"}，原有位置记录已保留。`,
+                    }),
+                  )
+                }
                 onSave={(patch) => void saveSettings(patch)}
               />
             ) : null}

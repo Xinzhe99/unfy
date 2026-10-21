@@ -258,6 +258,8 @@ export const api = {
    * an explicit path is validated against that root on the backend.
    */
   openPath: (path?: string) => invoke<boolean>("open_path", { path: path ?? null }),
+  /** Move the target to the next display and re-gather onto it. */
+  cycleTarget: () => invoke<TargetDto>("cycle_target"),
   /** Declare or end a remote session by hand; returns the new active state. */
   toggleRemoteSession: () => invoke<boolean>("toggle_remote_session"),
 };

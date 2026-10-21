@@ -287,6 +287,7 @@ pub fn run() {
             commands::keep_current_layout,
             commands::dismiss_last_error,
             commands::open_path,
+            commands::cycle_target,
             commands::reset_settings,
             commands::toggle_remote_session,
         ])

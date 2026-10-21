@@ -24,6 +24,8 @@ pub const ID_RESTORE: &str = "restore";
 pub const ID_RESCUE: &str = "rescue";
 pub const ID_PAUSE: &str = "pause";
 pub const ID_IDENTIFY: &str = "identify";
+/// Cycle the target display and re-gather onto it (spec P0-04-B).
+pub const ID_CYCLE: &str = "cycle";
 /// Manual remote-mode toggle.
 ///
 /// Detection cannot cover every remote tool, and the verification work found
@@ -49,6 +51,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             ID_IDENTIFY => {
                 let _ = crate::commands::identify_displays(Some(4));
             }
+            ID_CYCLE => cycle_target(app),
             ID_REMOTE => toggle_remote(app),
             ID_SETTINGS => show_settings(app),
             ID_QUIT => quit(app),
@@ -202,6 +205,17 @@ fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
     tooltip
 }
 
+/// Cycle the target display from the tray.
+fn cycle_target<R: Runtime>(app: &AppHandle<R>) {
+    let handle = app.clone();
+    let state = app.state::<AppState>();
+    let result = tauri::async_runtime::block_on(crate::commands::cycle_target(handle, state));
+    if let Err(message) = &result {
+        tracing::warn!(error = %message, "cycle target failed");
+    }
+    refresh(app);
+}
+
 /// Mark the machine as remoted in, or end that and restore.
 ///
 /// Public so the command layer can offer the same action from the window: the
@@ -237,13 +251,19 @@ pub fn toggle_remote<R: Runtime>(app: &AppHandle<R>) {
 
 fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let state = app.state::<AppState>();
-    let (engine_state, paused, pending) = match state.engine.lock() {
+    let (engine_state, paused, pending, display_count) = match state.engine.lock() {
         Ok(engine) => (
             engine.state(),
             engine.is_paused(),
             engine.captured_window_count(),
+            // Read here so the cycle item can be enabled only when cycling means
+            // something. A topology query is a few microseconds and the menu is
+            // rebuilt only on state changes.
+            conflux_platform::DisplayProvider::topology(engine.backend())
+                .map(|d| d.len())
+                .unwrap_or(0),
         ),
-        Err(_) => (conflux_domain::EngineState::Error, false, 0),
+        Err(_) => (conflux_domain::EngineState::Error, false, 0, 0),
     };
 
     let has_layout = engine_state.has_pending_work() || pending > 0;
@@ -271,6 +291,15 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         None::<&str>,
     )?;
     let identify = MenuItem::with_id(app, ID_IDENTIFY, "识别屏幕编号", true, None::<&str>)?;
+    // Only meaningful with more than one display; disabled otherwise rather than
+    // hidden, so the item does not appear and disappear between setups.
+    let cycle = MenuItem::with_id(
+        app,
+        ID_CYCLE,
+        "切换到下一块屏",
+        display_count > 1,
+        None::<&str>,
+    )?;
     let remote = MenuItem::with_id(
         app,
         ID_REMOTE,
@@ -295,6 +324,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &rescue,
             &pause,
             &identify,
+            &cycle,
             &remote,
             &separator,
             &settings,
