@@ -67,6 +67,10 @@ export function OverviewPage({
   const state = status?.state ?? "idle";
   const paused = status?.paused ?? false;
   const captured = status?.captured_windows ?? 0;
+  // Windows in an unfinished transaction, including one the engine adopted from
+  // a previous run. A user looking at "ready" while five windows are displaced
+  // is the failure this row prevents.
+  const pending = status?.pending_windows ?? 0;
   const target = status?.target;
 
   // `degraded` means the journal is still open: some windows are captured, some
@@ -122,6 +126,12 @@ export function OverviewPage({
             value={captured > 0 ? captured : "—"}
             muted={captured === 0}
           />
+          {pending > 0 ? (
+            <Detail
+              label="待恢复窗口"
+              value={`${pending} 个`}
+            />
+          ) : null}
           <Detail label="布局" value={layoutLabel(settings?.layout_mode)} />
           <Detail
             label="远程检测"
@@ -148,6 +158,12 @@ export function OverviewPage({
               <IconArrowRight className="size-3" />
             </button>
           </div>
+        ) : null}
+
+        {status?.last_error ? (
+          <p className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-danger)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+            上次操作失败：{humanError(status.last_error)}
+          </p>
         ) : null}
 
         {needsAttention ? (
@@ -357,6 +373,32 @@ function targetDisplayName(
   if (index === -1) return target.present ? "已选择" : "不可用";
   const display = displays[index]!;
   return display.primary ? `显示器 ${index + 1}（主）` : `显示器 ${index + 1}`;
+}
+
+/**
+ * Translate a command error into something a user can act on.
+ *
+ * The raw values are internal codes (`already_active`, `no_displays`); showing
+ * them verbatim is the difference between "the app told me what to do" and "the
+ * app printed a developer string".
+ */
+function humanError(raw: string): string {
+  const incomplete = raw.match(/restore_incomplete:(\d+)/);
+  if (incomplete) return `还有 ${incomplete[1]} 个窗口没能恢复原位`;
+  switch (raw) {
+    case "already_active":
+      return "还有未完成的整理，请先恢复";
+    case "paused":
+      return "自动整理已暂停";
+    case "no_displays":
+      return "没有可用的显示器";
+    case "restore_cancelled":
+      return "恢复已被新的整理请求取消";
+    case "no_displays_found":
+      return "没有检测到显示器";
+    default:
+      return raw;
+  }
 }
 
 /** One line per history entry: what happened and how many windows it touched. */

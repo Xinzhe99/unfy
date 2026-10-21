@@ -95,6 +95,12 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
         </svg>
       </div>
 
+      {preview.target_present ? null : (
+        <p className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+          你选择的显示器当前不可用，这次会整理到主显示器。
+        </p>
+      )}
+
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--color-muted)]">
         <span>
           将移动 <strong className="font-medium text-[var(--color-fg)]">{placed}</strong> 个窗口

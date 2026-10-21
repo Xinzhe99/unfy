@@ -88,6 +88,9 @@ pub struct PlacementDto {
 
 #[derive(Debug, Serialize)]
 pub struct PreviewDto {
+    /// True when the plan targets the display the user configured. False means
+    /// the configured display is gone and the plan fell back to the primary one -
+    /// the user must see that before pressing "gather", not after.
     pub target_present: bool,
     pub placements: Vec<PlacementDto>,
     pub unplaced: Vec<String>,
@@ -160,6 +163,16 @@ fn sync_tray(handle: &tauri::AppHandle) {
     crate::tray::refresh(handle);
 }
 
+/// Record the outcome of an operation for the overview banner.
+///
+/// `None` clears: a success means the previous failure is no longer the current
+/// state of the app, and leaving it visible would cry wolf.
+fn note_result(app: &State<'_, AppState>, error: Option<String>) {
+    if let Ok(mut slot) = app.last_error.lock() {
+        *slot = error;
+    }
+}
+
 fn state_name(state: EngineState) -> &'static str {
     match state {
         EngineState::Idle => "idle",
@@ -215,6 +228,36 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
         present: displays.iter().any(|d| t.matches(&d.key)),
     });
 
+    // Windows still held by an unfinished transaction, from the same source the
+    // recovery banner uses. Computed before the DTO so one query serves both.
+    let pending_windows = {
+        let owned = engine.current_transaction();
+        let mut count = if engine.state().has_pending_work() {
+            engine.captured_window_count()
+        } else {
+            0
+        };
+        // A journal the engine does not own (another session, or an unreadable one
+        // at startup) still counts: the windows may be displaced.
+        let dir = conflux_settings::config_dir().join("journal");
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "journal") {
+                    if let Ok(conflux_journal::Recovered::Unfinished(tx)) =
+                        conflux_journal::recover(&path)
+                    {
+                        if Some(tx.transaction) != owned {
+                            count = count.max(tx.preimages.len());
+                        }
+                    }
+                }
+            }
+        }
+        count
+    };
+    let last_error = app.last_error.lock().ok().and_then(|guard| guard.clone());
+
     Ok(StatusDto {
         state: state_name(engine.state()),
         platform: platform::name(),
@@ -223,8 +266,13 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
         permission_name: platform::permission_name(),
         display_count: displays.len(),
         target,
-        pending_windows: 0,
-        last_error: None,
+        // Counted from the journal, not invented. The tray and the exit barrier
+        // both depend on this number, and a hardcoded zero made a degraded state
+        // look idle in every surface that read the status.
+        pending_windows,
+        // The engine keeps the last failure so a caller can explain it; the
+        // status is the natural place to carry it for the overview banner.
+        last_error,
         paused: engine.is_paused(),
         captured_windows: engine.captured_window_count(),
     })
@@ -280,8 +328,23 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
         .map(|w| (w.id.process_id, w.app_name))
         .collect();
 
+    // `resolve_target` falls back to the primary display when the configured one
+    // is missing, which is the right behaviour but must be visible: gathering to
+    // the wrong screen and then having to restore is worse than being told first.
+    let configured_present = settings
+        .target_display
+        .as_ref()
+        .map(|t| {
+            engine
+                .backend()
+                .topology()
+                .map(|d| d.iter().any(|x| t.matches(&x.key)))
+                .unwrap_or(false)
+        })
+        .unwrap_or(true);
+
     Ok(PreviewDto {
-        target_present: true,
+        target_present: configured_present,
         placements: preview
             .plan
             .placements
@@ -383,6 +446,7 @@ pub async fn migrate(
         "conflux://progress",
         serde_json::json!({ "phase": "done" }),
     );
+    note_result(&app, result.as_ref().err().cloned());
     sync_tray(&handle);
     result
 }
@@ -549,6 +613,7 @@ pub async fn restore_after_delay<R: tauri::Runtime>(
     })
     .await
     .map_err(|e| format!("restore task failed: {e}"))?;
+    note_result(app, result.as_ref().err().cloned());
     crate::tray::refresh(handle);
     result
 }

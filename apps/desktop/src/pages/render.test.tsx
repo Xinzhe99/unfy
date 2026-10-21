@@ -306,6 +306,58 @@ describe("pages render", () => {
     expect(html).not.toContain("全部排除");
   });
 
+  test("overview reports windows held by an unfinished transaction", () => {
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={{ ...status, pending_windows: 5, state: "degraded" }}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+      />,
+    );
+    // "ready" while five windows are displaced is the failure this row prevents.
+    expect(html).toContain("待恢复窗口");
+    expect(html).toContain("5 个");
+  });
+
+  test("overview translates a raw command error into an instruction", () => {
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={{ ...status, last_error: "already_active" }}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+      />,
+    );
+    // The raw code is an implementation detail; the sentence is the product.
+    expect(html).toContain("请先恢复");
+    expect(html).not.toContain("already_active");
+  });
+
   test("overview offers a bulk exclude when several applications refused", () => {
     const html = renderToStaticMarkup(
       <OverviewPage
@@ -444,6 +496,15 @@ describe("pages render", () => {
     expect(html).toContain("Alt");
     // "未设置" must not appear when a shortcut is bound.
     expect(html).not.toContain("未设置");
+  });
+
+  test("plan preview warns when the chosen display is gone", () => {
+    const html = renderToStaticMarkup(
+      <PlanPreview preview={{ ...preview, target_present: false }} />,
+    );
+    // Falling back silently means the user discovers it by finding their windows
+    // on the wrong screen and having to restore.
+    expect(html).toContain("会整理到主显示器");
   });
 
   test("plan preview names the applications instead of only numbering them", () => {

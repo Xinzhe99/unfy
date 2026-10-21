@@ -49,6 +49,14 @@ pub struct AppState {
     pub schedule: Arc<std::sync::Mutex<schedule::Schedule>>,
     /// Append-only history of completed actions, shown on the overview.
     pub activity: Arc<std::sync::Mutex<activity::Activity>>,
+    /// The most recent operational failure, cleared on the next success.
+    ///
+    /// Kept here rather than in the engine because not every failure originates
+    /// there: a hotkey that fails to register, an update that cannot download, and
+    /// a restore that leaves windows behind all matter to the user and none of
+    /// them is an `EngineError`. The overview shows this so a problem does not
+    /// live only in the log.
+    pub last_error: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl Default for AppState {
@@ -118,6 +126,7 @@ impl AppState {
             last_observation: Arc::new(std::sync::Mutex::new(None)),
             manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
+            last_error: Arc::new(std::sync::Mutex::new(None)),
             activity: Arc::new(std::sync::Mutex::new(activity::Activity::load(
                 conflux_settings::config_dir().join("activity.jsonl"),
             ))),
