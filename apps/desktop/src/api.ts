@@ -183,3 +183,24 @@ export const skipLabels: Record<string, string> = {
 export function skipLabel(reason: string): string {
   return skipLabels[reason] ?? reason;
 }
+
+/**
+ * Turn an engine error into something a user can act on.
+ *
+ * The Rust side returns sentinels for the cases that need a specific next step
+ * (`already_active`); everything else is passed through unchanged rather than
+ * being flattened into a generic failure message.
+ */
+export function errorMessage(error: unknown): string {
+  const raw = String(error);
+  if (raw.includes("already_active")) {
+    return "窗口仍处于整理状态。请先点「恢复本次布局」，再重新整理到新的目标屏。";
+  }
+  if (raw.includes("TargetDisplayMissing") || raw.includes("no_displays")) {
+    return "目标显示器当前不可用，请在「显示器与布局」里重新选择。";
+  }
+  if (raw.includes("PermissionDenied") || raw.includes("permission")) {
+    return "系统拒绝了窗口操作权限，请检查授权后重试。";
+  }
+  return raw;
+}

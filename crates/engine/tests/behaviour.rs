@@ -511,3 +511,61 @@ fn journal_without_preimages_is_discarded_instead_of_blocking() {
     assert_eq!(engine.state(), EngineState::Idle);
     assert!(!path.exists());
 }
+
+#[test]
+fn second_migration_keeps_the_original_preimage() {
+    // Real scenario: the user gathers windows, then notices the remote is
+    // showing the other display and switches the target. The restore must still
+    // return windows to where they were *before the first* gather, not to where
+    // they were after it.
+    let backend = scenario();
+    let original = backend
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .map(|w| (w.id.native_id, w.visible_rect))
+        .collect::<HashMap<_, _>>();
+
+    let mut engine = Engine::new(backend, config("retarget"));
+    let first = engine.migrate(&target_key()).expect("first migrate");
+    assert_eq!(first.applied.len(), 3);
+
+    // Switching the target while windows are captured must be refused: a second
+    // gather would capture the post-move rectangles as if they were home.
+    let primary = engine
+        .backend()
+        .topology()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.primary)
+        .unwrap()
+        .key;
+    let refused = engine.migrate(&primary);
+    assert!(
+        matches!(
+            refused,
+            Err(conflux_domain::EngineError::TransactionAlreadyOpen)
+        ),
+        "a second gather while Active must be refused, got {refused:?}"
+    );
+
+    // Restore, then gather again with the new target. The preimage is now the
+    // real original, so the round trip is still correct.
+    engine.restore().expect("restore");
+    let second = engine
+        .migrate(&primary)
+        .expect("second migrate after restore");
+    assert_eq!(second.applied.len(), 3);
+
+    let report = engine.restore().expect("restore");
+    assert!(report.is_complete());
+
+    for window in engine.backend().enumerate().unwrap() {
+        let before_first = original[&window.id.native_id];
+        assert_eq!(
+            window.visible_rect, before_first,
+            "window {} must return to its position before the *first* gather",
+            window.id.native_id
+        );
+    }
+}

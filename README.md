@@ -26,7 +26,7 @@
 | 用户改动保护 | 远程期间用户拖动的窗口，恢复时保留新位置 |
 | 全局热键 | `Ctrl+Alt+G` 移动 3 个窗口；`Ctrl+Alt+Shift+G` 让 11/11 个窗口精确回到原位 |
 
-测试总数 **77**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
+测试总数 **78**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
 
 完整记录（含未验证项与复现命令）见 [docs/verification.md](docs/verification.md)。
 

@@ -129,6 +129,10 @@ pub enum EngineError {
     Platform(String),
     /// The engine was asked to act from a state that forbids writes.
     InvalidTransition { from: EngineState },
+    /// A gather was requested while windows are still captured. Restore first,
+    /// otherwise the new preimages would record the positions this engine just
+    /// produced as if they were the user's original layout.
+    TransactionAlreadyOpen,
 }
 
 impl std::fmt::Display for EngineError {
@@ -140,6 +144,12 @@ impl std::fmt::Display for EngineError {
             EngineError::Platform(e) => write!(f, "platform error: {e}"),
             EngineError::InvalidTransition { from } => {
                 write!(f, "cannot write windows from state {from:?}")
+            }
+            EngineError::TransactionAlreadyOpen => {
+                write!(
+                    f,
+                    "windows are still captured; restore before gathering again"
+                )
             }
         }
     }

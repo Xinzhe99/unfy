@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use conflux_domain::{DisplayKey, DisplaySnapshot, IdentityQuality, Rect, WindowId};
+use conflux_domain::{DisplaySnapshot, IdentityQuality, Rect, WindowId};
 use conflux_engine::{EngineState, MigrationReport, PendingWork, Preview, RestoreReport};
 use conflux_platform::DisplayProvider;
 use conflux_settings::{Settings, TargetDisplay};
@@ -200,29 +200,19 @@ pub fn list_displays(app: State<'_, AppState>) -> Result<Vec<DisplayDto>, String
         .collect())
 }
 
-/// Resolve the configured target, falling back to the primary display.
-fn resolve_target(settings: &Settings, displays: &[DisplaySnapshot]) -> Result<DisplayKey, String> {
-    if let Some(target) = &settings.target_display {
-        if let Some(found) = displays.iter().find(|d| target.matches(&d.key)) {
-            return Ok(found.key.clone());
-        }
-        return Err("target_missing".to_string());
-    }
-    displays
-        .iter()
-        .find(|d| d.primary)
-        .or_else(|| displays.first())
-        .map(|d| d.key.clone())
-        .ok_or_else(|| "no_displays".to_string())
-}
-
 #[tauri::command]
 pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
-    let displays = engine.backend().topology().map_err(|e| e.to_string())?;
-    let target = resolve_target(&settings, &displays)?;
+    let target = engine
+        .resolve_target(
+            settings
+                .target_display
+                .as_ref()
+                .map(|t| t.native_id.as_str()),
+        )
+        .ok_or_else(|| "no_displays".to_string())?;
 
     let preview: Preview = engine.preview(&target).map_err(|e| e.to_string())?;
 
@@ -257,15 +247,31 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
     })
 }
 
+/// Gather every eligible window onto the target display.
+///
+/// Fails with `already_active` when a transaction is still open. That is not a
+/// transient error: the caller must restore first, otherwise the new preimages
+/// would record the moved positions as the user's original layout.
 #[tauri::command]
 pub fn migrate(app: State<'_, AppState>) -> Result<MigrationDto, String> {
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
-    let displays = engine.backend().topology().map_err(|e| e.to_string())?;
-    let target = resolve_target(&settings, &displays)?;
+    let target = engine
+        .resolve_target(
+            settings
+                .target_display
+                .as_ref()
+                .map(|t| t.native_id.as_str()),
+        )
+        .ok_or_else(|| "no_displays".to_string())?;
 
-    let report: MigrationReport = engine.migrate(&target).map_err(|e| e.to_string())?;
+    // A gather while windows are still captured is refused by the engine; give
+    // the user the action that actually helps instead of a raw error string.
+    let report: MigrationReport = engine.migrate(&target).map_err(|e| match e {
+        conflux_domain::EngineError::TransactionAlreadyOpen => "already_active".to_string(),
+        other => other.to_string(),
+    })?;
     Ok(MigrationDto {
         transaction: report.transaction.to_string(),
         applied: report.applied_count(),

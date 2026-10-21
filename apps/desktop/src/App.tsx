@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import {
   api,
+  errorMessage,
   stateLabels,
   type DisplayDto,
   type EngineStateName,
@@ -99,7 +100,7 @@ export default function App() {
         if (message) setNotice(message);
         return value;
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
         return null;
       } finally {
         setBusy(false);

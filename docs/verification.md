@@ -8,14 +8,14 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元与集成测试 | `cargo test --workspace` | 77 passed, 0 failed |
+| 单元与集成测试 | `cargo test --workspace` | 78 passed, 0 failed |
 | 静态检查 | `cargo clippy --workspace --all-targets -- -D warnings` | 无告警 |
 | 格式 | `cargo fmt --all -- --check` | 通过 |
 | 前端类型 | `npx tsc --noEmit` | 通过 |
 | 前端构建 | `npm run build` | 通过（245 kB JS / 19 kB CSS） |
 | macOS 编译 | `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` | 通过（仅类型检查，未在 Mac 运行） |
 
-测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 17、settings 11、win 1、mac 4（iOS/macOS 目标下编译）、doc 0。
+测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 18、settings 11、win 1、mac 4（iOS/macOS 目标下编译）、doc 0。
 
 ## 真实桌面验证
 
@@ -91,6 +91,26 @@ Finished 1 bundle at: target\debug\bundle\nsis\Conflux_0.1.0_x64-setup.exe (4.56
 | 静默卸载 `/S` | 二进制移除，进程终止，无残留 |
 
 Tauri 打包需要从 GitHub 下载 NSIS/WiX；本机直连超时，通过 `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR` 指向本地镜像完成。
+
+### 重复整理拦截
+
+已经在 Active 状态下再次点击"整理到目标屏"：
+
+```
+窗口仍处于整理状态。请先点「恢复本次布局」，再重新整理到新的目标屏。
+```
+
+**发现并修复的缺陷**：修复前第二次整理会新建事务并用**当前**（已被移动的）位置作为 preimage，导致之后恢复把窗口送回错误的位置——引擎的单写者与"原始位置"不变量被破坏。现在 `migrate` 在事务未关闭时返回 `TransactionAlreadyOpen`，并有回归测试 `second_migration_keeps_the_original_preimage` 覆盖"恢复后再整理"的正确路径。
+
+### 部分恢复
+
+一次真实恢复的结果：
+
+```
+已恢复 5 个窗口，保留你的改动 1 个，仍有 1 个待处理。
+```
+
+journal 保留在磁盘上，因为仍有窗口未达到安全终态。这是设计行为：删除 journal 会丢弃那些窗口的 preimage。
 
 ### 单实例
 

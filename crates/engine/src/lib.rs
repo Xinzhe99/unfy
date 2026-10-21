@@ -432,6 +432,14 @@ impl<B: Backend> Engine<B> {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
 
+        // A second gather while a transaction is open must not capture new
+        // preimages: the windows have already moved, so the "original" position
+        // would be recorded as the position this engine just produced. The user
+        // asked to change the target, not to redefine home. Restore first.
+        if self.transaction.is_some() {
+            return Err(EngineError::TransactionAlreadyOpen);
+        }
+
         let preview = self.build_preview(target)?;
         if preview.plan.is_empty() {
             self.state = EngineState::Idle;
