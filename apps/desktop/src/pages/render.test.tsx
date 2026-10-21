@@ -116,7 +116,7 @@ const preview: PreviewDto = {
     },
     {
       window_id: "1:1002",
-      app_name: "WindowsTerminal.exe",
+      app_name: "notepad.exe",
       order: 2,
       rect: { left: 960, top: 0, width: 960, height: 520 },
       clamped: false,
@@ -355,7 +355,7 @@ describe("pages render", () => {
   });
 
   test("onboarding at every step", () => {
-    for (const step of [0, 1, 2, 3]) {
+    for (const step of [0, 1, 2, 3, 4]) {
       const html = renderToStaticMarkup(
         <Onboarding
           displays={displays}
@@ -391,7 +391,30 @@ describe("pages render", () => {
     expect(html).toContain("<svg");
     // A grid of numbers tells the user nothing about where their work lands.
     expect(html).toContain("notepad");
-    // Long names are truncated to fit, not clipped.
+    // Two windows of one application must be distinguishable, because
+    // "which explorer window goes where" is the question the drawing exists for.
+    expect(html).toContain("notepad #1");
+    expect(html).toContain("notepad #2");
+  });
+
+  test("plan preview truncates a long application name instead of clipping it", () => {
+    const html = renderToStaticMarkup(
+      <PlanPreview
+        preview={{
+          ...preview,
+          placements: [
+            {
+              window_id: "1:7",
+              app_name: "WindowsTerminal.exe",
+              order: 1,
+              rect: { left: 0, top: 0, width: 100, height: 100 },
+              clamped: false,
+            },
+          ],
+        }}
+      />,
+    );
+    // A clipped word looks like a rendering bug; an ellipsis does not.
     expect(html).toContain("WindowsTe…");
   });
 

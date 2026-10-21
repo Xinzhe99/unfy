@@ -14,6 +14,15 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
   const work = preview.target_work;
   const placed = preview.placements.length;
 
+  // Two windows of the same application are indistinguishable in the drawing
+  // otherwise, and "which explorer window goes where" is exactly the question a
+  // user looking at two identical rectangles will ask.
+  const duplicates = new Map<string, number>();
+  for (const placement of preview.placements) {
+    if (!placement.app_name) continue;
+    duplicates.set(placement.app_name, (duplicates.get(placement.app_name) ?? 0) + 1);
+  }
+
   if (placed === 0 && preview.skipped.length === 0) {
     return (
       <p className="rounded-[var(--radius-control)] border border-dashed border-[var(--color-border-strong)] px-4 py-6 text-center text-xs text-[var(--color-muted)]">
@@ -79,7 +88,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
                     land. Long names are truncated by characters rather than with
                     SVG clipping, because a clipped word looks like a rendering
                     bug. */}
-                {shortName(placement.app_name) || `窗口 ${index + 1}`}
+                {label(placement.app_name, index, duplicates)}
               </text>
             </g>
           ))}
@@ -105,6 +114,19 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
       {preview.skipped.length > 0 ? <SkippedList skipped={preview.skipped} /> : null}
     </div>
   );
+}
+
+/**
+ * What to draw inside a rectangle.
+ *
+ * A short application name, with a `#2` suffix when the same application owns
+ * several windows in this plan. Falls back to the plan position when the platform
+ * could not read a name (elevated processes deny the query).
+ */
+function label(appName: string, index: number, duplicates: Map<string, number>): string {
+  if (!appName) return `窗口 ${index + 1}`;
+  const name = shortName(appName);
+  return (duplicates.get(appName) ?? 0) > 1 ? `${name} #${index + 1}` : name;
 }
 
 /**

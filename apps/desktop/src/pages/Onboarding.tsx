@@ -149,6 +149,23 @@ export function Onboarding({
         </div>
       ),
     },
+    {
+      title: "有些窗口不会被移动",
+      body: (
+        <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
+          <p>
+            少数应用会自己纠正窗口位置，整理时它们留在原处。这不是失败：Conflux
+            会把它们的名字列出来，并给一个「排除」按钮。
+          </p>
+          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">
+            排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。
+          </p>
+          <p className="text-xs text-[var(--color-muted)]">
+            全屏应用、最小化的窗口和系统外壳本来就会跳过。
+          </p>
+        </div>
+      ),
+    },
   ];
 
   const current = steps[step]!;
