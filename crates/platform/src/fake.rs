@@ -88,6 +88,13 @@ impl FakeBackend {
         backend
     }
 
+    /// Rename the app owning a window, so exclusion rules can be exercised.
+    pub fn set_app_name(&mut self, id: u64, name: &str) {
+        if let Some(w) = self.windows.borrow_mut().get_mut(&id) {
+            w.snapshot.app_name = name.to_string();
+        }
+    }
+
     /// Add a window. `rect` is its visible rectangle in physical pixels.
     pub fn add_window(
         &mut self,
@@ -98,6 +105,7 @@ impl FakeBackend {
         behaviour: FakeBehaviour,
     ) -> WindowId {
         let snapshot = WindowSnapshot {
+            app_name: format!("fake-{id}.exe"),
             id: WindowId {
                 native_id: id,
                 process_id: 1000 + id as u32,

@@ -8,7 +8,7 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元与集成测试 | `cargo test --workspace` | 91 passed, 0 failed |
+| 单元与集成测试 | `cargo test --workspace` | 95 passed, 0 failed |
 | 静态检查 | `cargo clippy --workspace --all-targets -- -D warnings` | 无告警 |
 | 格式 | `cargo fmt --all -- --check` | 通过 |
 | 前端类型 | `npx tsc --noEmit` | 通过 |
@@ -185,6 +185,36 @@ processes=1
 ### 隐私开关
 
 "发送匿名使用统计"默认关闭，勾选后 `settings.json` 的 `telemetry` 变为 `true`。当前构建**没有任何上传代码**，该字段只记录用户选择。
+
+### 应用排除
+
+真实桌面：规则 `msedge.exe`。
+
+```
+excluding msedge.exe at Rect { left: 960, top: 0, right: 1920, bottom: 1032 }
+applied=3 skipped=9
+  skipped msedge.exe reason=ExcludedApp
+  ...
+after: Some(Rect { left: 960, top: 0, right: 1920, bottom: 1032 })
+PASS: excluded app did not move
+```
+
+界面上添加规则后写入 `settings.json` 的 `excluded_apps`，即时生效。
+
+### 日志
+
+第一次实现把日志交给 `tracing_subscriber::fmt()`，GUI 构建没有控制台，日志全部丢失。改为按日滚动文件（5 个 × 2 MiB）。
+
+**第二个缺陷**：过滤器写成 `conflux=info`，而所有 crate 叫 `conflux_*`，因此引擎日志仍被丢弃——文件存在但只有两行。按 crate 逐条列出后，成功记录到：
+
+```
+INFO migration finished transaction=376f4b7d applied=4 refused=3 skipped=4 state=Active
+INFO restore finished transaction=376f4b7d restored=6 kept_user_change=1 pending=0 state=Idle
+```
+
+### 结果里的应用名
+
+结果卡片此前显示 `pid:hwnd`。现在按名称显示：`DeepSeek Harness.exe、Orca.exe、python.exe 没有接受位置调整`。
 
 ### 界面迭代后的回归
 

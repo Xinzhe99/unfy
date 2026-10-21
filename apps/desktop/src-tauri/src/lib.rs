@@ -61,6 +61,7 @@ impl AppState {
             },
             journal_dir: conflux_settings::config_dir().join("journal"),
             restore_delay_secs: settings.restore_delay_secs,
+            excluded_apps: settings.excluded_apps.clone(),
             ..Default::default()
         };
 
@@ -91,15 +92,68 @@ impl AppState {
     }
 }
 
+/// Initialise logging to a rotating file under the app's data directory.
+///
+/// A GUI build has no console on Windows, so the previous `fmt()` writer sent
+/// every log line to a stderr nobody could read: the diagnostics export shipped
+/// empty, and a failed migration left no trace. The file is the only logging
+/// destination that survives a user restarting the app.
+///
+/// Rotation keeps five files of 2 MiB. Logs contain only state transitions,
+/// counts and window handles — never titles, paths or screen content — so a
+/// bounded history is safe to keep and to attach to a support request.
+fn init_logging() {
+    let dir = conflux_settings::config_dir().join("logs");
+    let file = std::fs::create_dir_all(&dir).ok().and_then(|()| {
+        tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .max_log_files(5)
+            .filename_prefix("conflux")
+            .filename_suffix("log")
+            .build(&dir)
+            .ok()
+    });
+
+    let Some(file) = file else {
+        // Without a writable log directory the app must still run; fall back to
+        // stderr so a terminal launch remains debuggable.
+        tracing_subscriber::fmt()
+            .with_env_filter(log_filter())
+            .with_target(false)
+            .init();
+        return;
+    };
+
+    let (non_blocking, guard) = tracing_appender::non_blocking(file);
+    // The guard flushes on drop; leaking it keeps the writer alive for the whole
+    // process without threading an owned value through Tauri's builder.
+    std::mem::forget(guard);
+
+    tracing_subscriber::fmt()
+        .with_env_filter(log_filter())
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(non_blocking)
+        .init();
+}
+
+fn log_filter() -> tracing_subscriber::EnvFilter {
+    // `conflux=info` only matches a target literally named `conflux`. Every
+    // crate here is named `conflux_*` (engine, journal, platform_win...), so that
+    // filter silenced all of them: the log file existed and stayed two lines
+    // long while migrations ran. The directive is per-crate instead.
+    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(concat!(
+            "conflux_desktop_lib=info,conflux_engine=info,conflux_journal=info,",
+            "conflux_platform=info,conflux_platform_win=info,conflux_platform_mac=info,",
+            "conflux_settings=info,conflux_layout=info,warn"
+        ))
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("conflux=info")),
-        )
-        .with_target(false)
-        .init();
+    init_logging();
 
     tauri::Builder::default()
         // Must be the first plugin: a second instance has to hand off and exit

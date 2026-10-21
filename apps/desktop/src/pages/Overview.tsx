@@ -134,9 +134,9 @@ export function OverviewPage({
               { label: "放不下", value: lastMigration.unplaced, tone: "warning" },
             ]}
           />
-          {lastMigration.refused_pids.length > 0 ? (
+          {lastMigration.refused_apps.length > 0 ? (
             <p className="mt-3 text-xs leading-relaxed text-[var(--color-muted)]">
-              进程 {lastMigration.refused_pids.join("、")} 的窗口没有接受位置调整，已停止重试。
+              {lastMigration.refused_apps.join("、")} 没有接受位置调整，已停止重试。
               这些窗口保持原位，不影响其他窗口。
             </p>
           ) : null}
@@ -161,6 +161,12 @@ export function OverviewPage({
               { label: "仍待处理", value: lastRestore.pending, tone: "warning" },
             ]}
           />
+          {lastRestore.pending_apps.length > 0 ? (
+            <p className="mt-3 text-xs leading-relaxed text-[var(--color-muted)]">
+              {lastRestore.pending_apps.join("、")} 的窗口仍未恢复。
+              可以重试，或在托盘菜单里选择保留当前布局。
+            </p>
+          ) : null}
         </Card>
       ) : null}
 

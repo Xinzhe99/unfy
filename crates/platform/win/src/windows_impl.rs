@@ -15,7 +15,7 @@ use conflux_domain::{DisplayKey, IdentityQuality, Rect, WindowId, WindowMode, Wi
 use conflux_platform::{
     Capabilities, ObservedWindow, PlatformError, Result, WindowBackend, WindowPlan,
 };
-use windows::core::BOOL;
+use windows::core::{BOOL, PWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
@@ -136,6 +136,7 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
                     process_id: pid,
                     process_start: start,
                 },
+                app_name: executable_name(pid),
                 display: DisplayKey {
                     native_id: String::new(),
                     quality: IdentityQuality::Weak,
@@ -368,4 +369,43 @@ pub fn nudge_window(id: &WindowId) -> Result<()> {
         )
     }
     .map_err(map_win_error)
+}
+
+/// File name of the executable running in `pid`.
+///
+/// Only the base name is returned. The full path can contain a user name, and
+/// this value ends up in exclusion rules and the UI, so anything above the file
+/// name is deliberately dropped.
+fn executable_name(pid: u32) -> String {
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    if pid == 0 {
+        return String::new();
+    }
+    let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
+        // Elevated processes deny even limited queries; that window is skipped
+        // anyway, so an empty name is the honest answer.
+        return String::new();
+    };
+
+    let mut buffer = [0u16; 1024];
+    let mut size = buffer.len() as u32;
+    let queried = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
+    };
+    let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
+    if queried.is_err() || size == 0 {
+        return String::new();
+    }
+
+    let full = String::from_utf16_lossy(&buffer[..size as usize]);
+    full.rsplit(['\\', '/']).next().unwrap_or(&full).to_string()
 }

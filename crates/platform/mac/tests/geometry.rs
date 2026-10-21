@@ -50,6 +50,7 @@ fn fullscreen_windows_are_skipped_by_the_snapshot_predicate() {
             process_id: 1,
             process_start: 0,
         },
+        app_name: "Test.app".into(),
         display: DisplayKey {
             native_id: "d".into(),
             quality: IdentityQuality::Strong,

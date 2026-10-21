@@ -76,6 +76,8 @@ pub struct Settings {
     /// means the user dismisses one banner and never sees another crash warning
     /// for the rest of the installation's life.
     pub recovery_dismissed_until: u64,
+    /// Executable names never moved. Case-insensitive, file name only.
+    pub excluded_apps: Vec<String>,
     /// Check for updates automatically. Default on; security updates are never
     /// gated on this, only the *check* is.
     pub auto_update: bool,
@@ -138,6 +140,7 @@ impl Default for Settings {
             restore_delay_secs: 0,
             paused: false,
             recovery_dismissed_until: 0,
+            excluded_apps: Vec::new(),
             auto_update: true,
             telemetry: false,
         }
@@ -243,6 +246,25 @@ impl Settings {
             return Err(SettingsError::Validation(
                 "gather and restore hotkeys must differ".into(),
             ));
+        }
+        if self.excluded_apps.len() > 200 {
+            return Err(SettingsError::Validation(
+                "too many excluded applications".into(),
+            ));
+        }
+        for name in &self.excluded_apps {
+            // A rule is compared against a file name, so a path or a wildcard
+            // would silently never match. Reject it at the boundary instead.
+            if name.is_empty() || name.len() > 260 {
+                return Err(SettingsError::Validation(format!(
+                    "invalid excluded application name: {name:?}"
+                )));
+            }
+            if name.contains(['\\', '/', '*', '?']) {
+                return Err(SettingsError::Validation(format!(
+                    "excluded application must be a file name, not a path or pattern: {name}"
+                )));
+            }
         }
         Ok(())
     }

@@ -71,6 +71,8 @@ export interface PlacementDto {
 
 export interface SkipDto {
   window_id: string;
+  /** Executable name, or empty when the platform could not read it. */
+  app_name: string;
   reason: string;
 }
 
@@ -93,8 +95,8 @@ export interface MigrationDto {
   unplaced: number;
   cascaded: boolean;
   state: EngineStateName;
-  /** Process ids of applications that refused to move. */
-  refused_pids: number[];
+  /** Names of applications that refused to move. */
+  refused_apps: string[];
 }
 
 export interface RestoreDto {
@@ -104,6 +106,8 @@ export interface RestoreDto {
   rejected: number;
   pending: number;
   state: EngineStateName;
+  /** Applications whose windows are still unresolved. */
+  pending_apps: string[];
 }
 
 export interface SettingsDto {
@@ -117,6 +121,7 @@ export interface SettingsDto {
   restore_delay_secs: number;
   auto_update: boolean;
   telemetry: boolean;
+  excluded_apps: string[];
   target: TargetDto | null;
 }
 
@@ -212,6 +217,7 @@ export const skipLabels: Record<string, string> = {
   other_virtual_desktop: "其他虚拟桌面",
   permission_denied: "权限不足",
   minimized: "已最小化",
+  excluded_app: "已排除此应用",
 };
 
 export function skipLabel(reason: string): string {

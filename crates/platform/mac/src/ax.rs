@@ -227,6 +227,7 @@ fn read_window(element: CFTypeRef, pid: i32) -> Option<AxWindow> {
         element,
         id: id.clone(),
         snapshot: WindowSnapshot {
+            app_name: app_name_for(pid),
             id,
             display: DisplayKey {
                 native_id: String::new(),
@@ -449,4 +450,19 @@ fn running_application_pids() -> Vec<i32> {
         }
     }
     pids
+}
+
+/// Bundle display name or executable name for a pid.
+fn app_name_for(pid: i32) -> String {
+    use objc2_app_kit::NSRunningApplication;
+
+    let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
+        return String::new();
+    };
+    if let Some(name) = unsafe { app.localizedName() } {
+        return name.to_string();
+    }
+    app.bundleIdentifier()
+        .map(|id| id.to_string())
+        .unwrap_or_default()
 }

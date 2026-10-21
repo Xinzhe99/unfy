@@ -569,3 +569,140 @@ fn second_migration_keeps_the_original_preimage() {
         );
     }
 }
+
+#[test]
+fn excluded_app_is_never_moved() {
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        1,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.add_window(
+        2,
+        Rect::new(200, 300, 1000, 900),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.set_app_name(2, "obs64.exe");
+
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            excluded_apps: vec!["OBS64.EXE".into()],
+            ..config("exclude")
+        },
+    );
+
+    let report = engine.migrate(&target_key()).expect("migrate");
+    assert_eq!(report.outcomes.get(&id(1)), Some(&WindowOutcome::Applied));
+    assert!(
+        !report.outcomes.contains_key(&id(2)),
+        "the excluded window must not be touched at all"
+    );
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.id.native_id == 2 && s.reason == conflux_domain::SkipReason::ExcludedApp),
+        "the excluded window must be reported with its reason"
+    );
+
+    // And it must still be where it started.
+    let window = engine
+        .backend()
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id.native_id == 2)
+        .unwrap();
+    assert_eq!(window.visible_rect, Rect::new(200, 300, 1000, 900));
+}
+
+#[test]
+fn exclusion_is_case_insensitive_and_ignores_unknown_names() {
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        1,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.set_app_name(1, "Spotify.exe");
+
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            excluded_apps: vec!["spotify.EXE".into(), "never-running.exe".into()],
+            ..config("exclude-case")
+        },
+    );
+    let report = engine.migrate(&target_key()).expect("migrate");
+    assert!(report.applied.is_empty());
+}
+
+#[test]
+fn superseded_journals_are_removed_on_recovery() {
+    // Without cleanup, every crash leaves a file behind forever and startup
+    // rescans all of them.
+    let dir = journal_dir("stale-journals");
+
+    let make = |name: &str, id_value: u64| {
+        let path = dir.join(name);
+        let mut journal = conflux_journal::Journal::begin(&path, "test").unwrap();
+        journal
+            .write_preimage(&conflux_journal::Preimage {
+                id: id(id_value),
+                display_native_id: "fake-display-a".into(),
+                display_quality: IdentityQuality::Strong,
+                display_work_area: Rect::new(0, 0, 2560, 1400),
+                display_scale: Scale { x: 1.5, y: 1.5 },
+                visible_rect: Rect::new(100, 100, 900, 700),
+                outer_rect: Rect::new(93, 93, 907, 707),
+                mode: WindowMode::Normal,
+                topmost: false,
+                native_placement: None,
+            })
+            .unwrap();
+        journal.abandon();
+        // Distinct mtimes: the newest one must be the one adopted.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        path
+    };
+
+    let old_a = make("a.journal", 1);
+    let old_b = make("b.journal", 2);
+    let newest = make("c.journal", 3);
+
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("stale-engine"));
+    let adopted = engine.recover_latest(&dir).expect("recover");
+
+    assert!(adopted.is_some(), "the newest journal must be adopted");
+    assert!(!old_a.exists(), "superseded journal a must be deleted");
+    assert!(!old_b.exists(), "superseded journal b must be deleted");
+    assert!(newest.exists(), "the adopted journal must be kept");
+}
+
+#[test]
+fn adopted_journal_is_deleted_when_it_has_nothing_to_restore() {
+    // A crash between `Begin` and the first preimage left an empty transaction
+    // that used to block every future gather with "unfinished work" and could
+    // never be resolved.
+    let dir = journal_dir("empty-adopt");
+    let path = dir.join("empty.journal");
+    {
+        let journal = conflux_journal::Journal::begin(&path, "test").unwrap();
+        journal.abandon();
+    }
+
+    let backend = scenario();
+    let mut engine = Engine::new(backend, config("empty-adopt-engine"));
+    assert!(engine.recover_latest(&dir).expect("recover").is_none());
+    assert_eq!(engine.state(), EngineState::Idle);
+    assert!(!path.exists(), "an empty transaction must be discarded");
+}

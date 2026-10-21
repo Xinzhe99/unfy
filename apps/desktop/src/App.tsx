@@ -18,14 +18,16 @@ import {
 } from "./api";
 import { PermissionBanner } from "./components/PermissionBanner";
 import { DisplaysPage } from "./pages/Displays";
+import { ExclusionsPage } from "./pages/Exclusions";
 import { GeneralPage } from "./pages/General";
 import { OverviewPage } from "./pages/Overview";
 
-type Page = "overview" | "displays" | "general";
+type Page = "overview" | "displays" | "exclusions" | "general";
 
 const pages: { id: Page; label: string }[] = [
   { id: "overview", label: "概览" },
   { id: "displays", label: "显示器与布局" },
+  { id: "exclusions", label: "排除的应用" },
   { id: "general", label: "通用" },
 ];
 
@@ -115,6 +117,16 @@ export default function App() {
         text: "还有窗口没有恢复，已取消退出。请先恢复布局，或选择保留当前布局。",
       });
     });
+    // The engine reports when a long migration starts and finishes. Without it
+    // the button looks unresponsive for the second or two the platform calls
+    // take, and a user is likely to click again.
+    const unlistenProgress = listen<{ phase: string }>(
+      "conflux://progress",
+      (event) => {
+        setBusy(event.payload.phase !== "done");
+        if (event.payload.phase === "done") void refresh();
+      },
+    );
     const unlistenUpdate = listen<{ outcome: string; version?: string }>(
       "conflux://update",
       (event) => {
@@ -139,6 +151,7 @@ export default function App() {
       void unlistenAction.then((fn) => fn());
       void unlistenExit.then((fn) => fn());
       void unlistenUpdate.then((fn) => fn());
+      void unlistenProgress.then((fn) => fn());
       window.clearInterval(timer);
     };
   }, [refresh, flash]);
@@ -391,6 +404,23 @@ export default function App() {
                     : "无法显示编号，请检查屏幕状态。",
                 }))
               }
+              onSave={(patch) =>
+                void run(
+                  async () => {
+                    const next = await api.saveSettings(patch);
+                    setSettings(next);
+                    return next;
+                  },
+                  () => null,
+                )
+              }
+            />
+          ) : null}
+
+          {page === "exclusions" ? (
+            <ExclusionsPage
+              settings={settings}
+              busy={busy}
               onSave={(patch) =>
                 void run(
                   async () => {

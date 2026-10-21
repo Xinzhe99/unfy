@@ -95,6 +95,13 @@ pub struct WindowId {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowSnapshot {
     pub id: WindowId,
+    /// Executable name of the owning process (`Code.exe`), or empty when the
+    /// platform could not determine it.
+    ///
+    /// This is what an exclusion rule matches on. It is the file name only: the
+    /// full path is never stored, logged, or sent anywhere, because a path can
+    /// contain a user name.
+    pub app_name: String,
     pub display: DisplayKey,
     /// Visible rectangle in physical pixels, excluding invisible resize borders.
     pub visible_rect: Rect,
@@ -138,6 +145,7 @@ mod tests {
                 process_id: 2,
                 process_start: 3,
             },
+            app_name: "test-app.exe".into(),
             display: DisplayKey {
                 native_id: "display-a".into(),
                 quality: IdentityQuality::Strong,

@@ -103,13 +103,22 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
 }
 
 function SkippedList({ skipped }: { skipped: PreviewDto["skipped"] }) {
-  // Group by reason: "6 个窗口因最小化被跳过" is actionable, six separate rows
-  // of the same sentence is not.
-  const groups = new Map<string, number>();
+  // Group by reason and name the applications, because "已排除此应用" without the
+  // name leaves the user unable to confirm the rule matched what they expected.
+  // Reasons that are not about a specific application stay as a count.
+  const byReason = new Map<string, Map<string, number>>();
   for (const item of skipped) {
-    groups.set(item.reason, (groups.get(item.reason) ?? 0) + 1);
+    const apps = byReason.get(item.reason) ?? new Map<string, number>();
+    if (item.app_name) {
+      apps.set(item.app_name, (apps.get(item.app_name) ?? 0) + 1);
+    }
+    byReason.set(item.reason, apps);
   }
-  const entries = [...groups.entries()].sort((a, b) => b[1] - a[1]);
+
+  const entries = [...byReason.entries()].sort(
+    (a, b) =>
+      countOf(b[1]) - countOf(a[1]) || a[0].localeCompare(b[0]),
+  );
 
   return (
     <details className="group text-xs text-[var(--color-muted)]">
@@ -119,15 +128,28 @@ function SkippedList({ skipped }: { skipped: PreviewDto["skipped"] }) {
         </span>{" "}
         已跳过 {skipped.length} 个窗口
       </summary>
-      <ul className="mt-1 space-y-0.5 pl-4">
-        {entries.map(([reason, count]) => (
+      <ul className="mt-1 space-y-1 pl-4">
+        {entries.map(([reason, apps]) => (
           <li key={reason}>
-            {skipLabel(reason)} · {count} 个
+            {skipLabel(reason)} · {countOf(apps)} 个
+            {apps.size > 0 ? (
+              <span className="text-[var(--color-muted)]/70">
+                {" "}
+                （{[...apps.keys()].slice(0, 4).join("、")}
+                {apps.size > 4 ? " 等" : ""}）
+              </span>
+            ) : null}
           </li>
         ))}
       </ul>
     </details>
   );
+}
+
+function countOf(apps: Map<string, number>): number {
+  let total = 0;
+  for (const count of apps.values()) total += count;
+  return total;
 }
 
 /** Convert a rect to a CSS-friendly string; used by tests and future overlays. */

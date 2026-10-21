@@ -28,7 +28,7 @@
 | 全局热键 | `Ctrl+Alt+G` 移动 3 个窗口；`Ctrl+Alt+Shift+G` 让 11/11 个窗口精确回到原位 |
 | 识别屏幕编号 | 每块屏显示大号数字 4 秒后自动消失（双屏实测） |
 
-测试总数 **91**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
+测试总数 **95**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
 
 完整记录（含未验证项与复现命令）见 [docs/verification.md](docs/verification.md)。
 
@@ -45,7 +45,7 @@
 crates/domain/          # 几何、身份、状态机；无 OS 依赖
 crates/layout/          # 纯函数布局：网格 / 主次 / 保持顺序 / 容量不足级联
 crates/journal/         # 追加式事务日志，CRC + 崩溃重放
-crates/engine/          # 单写者状态机：预览、迁移、回读重试、恢复、救援
+crates/engine/          # 单写者状态机：预览、迁移、回读重试、恢复、救援、排除规则
 crates/settings/        # 原子写入的设置，拒绝未知字段
 crates/platform/        # trait + Fake 实现
 crates/platform/win/    # windows-rs 后端 + probe/e2e 二进制
@@ -79,6 +79,7 @@ cd apps/desktop && npm run tauri build
 
 - **概览**：当前状态 → 一个主操作（整理 / 恢复）→ 上次结果 → 工具（救援、识别编号、诊断）。
 - **显示器与布局**：按真实相对位置画出显示器，点选目标；布局方式与间距。
+- **排除的应用**：按可执行文件名排除，永久生效。
 - **通用**：自启、快捷键录制、主题、恢复延迟、更新与隐私。
 
 托盘菜单随状态变化：未整理时只能"整理"，已整理时"恢复"才可用，并多出"暂停自动整理"。

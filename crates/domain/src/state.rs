@@ -98,6 +98,8 @@ pub enum SkipReason {
     OtherVirtualDesktop,
     PermissionDenied,
     Minimized,
+    /// The user excluded this application from automation.
+    ExcludedApp,
 }
 
 impl SkipReason {
@@ -113,6 +115,7 @@ impl SkipReason {
             SkipReason::OtherVirtualDesktop => "other_virtual_desktop",
             SkipReason::PermissionDenied => "permission_denied",
             SkipReason::Minimized => "minimized",
+            SkipReason::ExcludedApp => "excluded_app",
         }
     }
 }
@@ -211,6 +214,7 @@ mod tests {
             SkipReason::OtherVirtualDesktop,
             SkipReason::PermissionDenied,
             SkipReason::Minimized,
+            SkipReason::ExcludedApp,
         ];
         let mut codes: Vec<_> = all.iter().map(|r| r.code()).collect();
         codes.sort_unstable();

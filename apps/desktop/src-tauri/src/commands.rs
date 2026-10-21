@@ -5,10 +5,11 @@
 //! only ask for a preview, a migration, a restore, or a setting change.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use conflux_domain::{DisplaySnapshot, IdentityQuality, Rect, WindowId};
 use conflux_engine::{EngineState, MigrationReport, PendingWork, Preview, RestoreReport};
-use conflux_platform::DisplayProvider;
+use conflux_platform::{DisplayProvider, WindowBackend};
 use conflux_settings::{Settings, TargetDisplay};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -90,6 +91,9 @@ pub struct PreviewDto {
 #[derive(Debug, Serialize)]
 pub struct SkipDto {
     pub window_id: String,
+    /// Executable name, so the user can recognise "obs64.exe" but not a
+    /// `pid:hwnd` pair. Empty when the platform could not determine it.
+    pub app_name: String,
     pub reason: &'static str,
 }
 
@@ -103,19 +107,22 @@ pub struct MigrationDto {
     pub unplaced: usize,
     pub cascaded: bool,
     pub state: &'static str,
-    /// Process ids of the applications that refused to move, so the user can
-    /// recognise "these three apps would not cooperate" instead of a bare count.
-    pub refused_pids: Vec<u32>,
+    /// Names of the applications that refused to move. A pid means nothing to a
+    /// user; "Code.exe 没有接受" is something they can act on.
+    pub refused_apps: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RestoreDto {
+    /// Window counts per result category.
     pub restored: usize,
     pub kept_user_change: usize,
     pub fallback_visible: usize,
     pub rejected: usize,
     pub pending: usize,
     pub state: &'static str,
+    /// Applications whose windows could not be restored, for the same reason.
+    pub pending_apps: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +137,7 @@ pub struct SaveSettingsRequest {
     pub restore_delay_secs: Option<u32>,
     pub auto_update: Option<bool>,
     pub telemetry: Option<bool>,
+    pub excluded_apps: Option<Vec<String>>,
 }
 
 /// Refresh the tray after a state change so its labels, enabled set and tooltip
@@ -272,6 +280,7 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
             .iter()
             .map(|s| SkipDto {
                 window_id: window_label(&s.id),
+                app_name: s.app_name.clone(),
                 reason: s.reason.code(),
             })
             .collect(),
@@ -286,9 +295,46 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
 /// transient error: the caller must restore first, otherwise the new preimages
 /// would record the moved positions as the user's original layout.
 #[tauri::command]
-pub fn migrate(handle: tauri::AppHandle, app: State<'_, AppState>) -> Result<MigrationDto, String> {
-    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
-    let settings = app.settings.lock().map_err(|e| e.to_string())?;
+pub async fn migrate(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+) -> Result<MigrationDto, String> {
+    // Window moves block on each target application's message pump. Running that
+    // on the command thread freezes the WebView for the duration, which looks
+    // like a hang on a busy desktop. The engine stays behind the same mutex, so
+    // moving the work to a blocking thread does not change the single-writer
+    // guarantee.
+    let engine_state = app.engine.clone();
+    let settings = app.settings.clone();
+    let emitter = handle.clone();
+
+    // Announce the start so the UI can show a busy state instead of appearing to
+    // ignore the click while the first windows are being captured.
+    let _ = tauri::Emitter::emit(
+        &emitter,
+        "conflux://progress",
+        serde_json::json!({ "phase": "migrating", "done": 0, "total": 0 }),
+    );
+
+    let result = tokio::task::spawn_blocking(move || migrate_blocking(engine_state, settings))
+        .await
+        .map_err(|e| format!("migration task failed: {e}"))?;
+
+    let _ = tauri::Emitter::emit(
+        &emitter,
+        "conflux://progress",
+        serde_json::json!({ "phase": "done" }),
+    );
+    sync_tray(&handle);
+    result
+}
+
+fn migrate_blocking(
+    engine: Arc<std::sync::Mutex<conflux_engine::Engine<crate::platform::Backend>>>,
+    settings: Arc<std::sync::Mutex<Settings>>,
+) -> Result<MigrationDto, String> {
+    let mut engine = engine.lock().map_err(|e| e.to_string())?;
+    let settings = settings.lock().map_err(|e| e.to_string())?;
 
     let target = engine
         .resolve_target(
@@ -306,7 +352,7 @@ pub fn migrate(handle: tauri::AppHandle, app: State<'_, AppState>) -> Result<Mig
         conflux_domain::EngineError::Paused => "paused".to_string(),
         other => other.to_string(),
     })?;
-    let dto = MigrationDto {
+    Ok(MigrationDto {
         transaction: report.transaction.to_string(),
         applied: report.applied_count(),
         rejected: report.failed_count(),
@@ -319,36 +365,90 @@ pub fn migrate(handle: tauri::AppHandle, app: State<'_, AppState>) -> Result<Mig
         unplaced: report.unplaced.len(),
         cascaded: report.cascaded,
         state: state_name(engine.state()),
-        refused_pids: report.refused.iter().map(|r| r.id.process_id).collect(),
-    };
-    drop(engine);
-    sync_tray(&handle);
-    Ok(dto)
+        refused_apps: {
+            // Look the names up while the engine lock is still held; the report
+            // only carries ids.
+            let names: std::collections::HashMap<u32, String> = engine
+                .backend()
+                .enumerate()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|w| (w.id.process_id, w.app_name))
+                .collect();
+            let mut apps: Vec<String> = report
+                .refused
+                .iter()
+                .filter_map(|r| names.get(&r.id.process_id).cloned())
+                .filter(|name| !name.is_empty())
+                .collect();
+            apps.sort();
+            apps.dedup();
+            apps
+        },
+    })
 }
 
 #[tauri::command]
-pub fn restore(handle: tauri::AppHandle, app: State<'_, AppState>) -> Result<RestoreDto, String> {
-    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+pub async fn restore(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+) -> Result<RestoreDto, String> {
+    // Restore can sleep for the configured delay and blocks on each target
+    // application, so it runs off the command thread for the same reason as
+    // `migrate`.
+    let _ = (&handle, &app);
+    let engine_state = app.engine.clone();
+    let settings = app.settings.clone();
+    let settings_path = app.settings_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        restore_blocking(engine_state, settings, settings_path)
+    })
+    .await
+    .map_err(|e| format!("restore task failed: {e}"))?;
+    sync_tray(&handle);
+    result
+}
+
+fn restore_blocking(
+    engine: Arc<std::sync::Mutex<conflux_engine::Engine<crate::platform::Backend>>>,
+    settings: Arc<std::sync::Mutex<Settings>>,
+    settings_path: std::path::PathBuf,
+) -> Result<RestoreDto, String> {
+    let mut engine = engine.lock().map_err(|e| e.to_string())?;
     let report: RestoreReport = engine.restore().map_err(|e| e.to_string())?;
     let state = state_name(engine.state());
     let complete = report.is_complete();
+    let names: std::collections::HashMap<u32, String> = engine
+        .backend()
+        .enumerate()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|w| (w.id.process_id, w.app_name))
+        .collect();
+    let mut pending_apps: Vec<String> = report
+        .pending
+        .iter()
+        .filter_map(|id| names.get(&id.process_id).cloned())
+        .filter(|name| !name.is_empty())
+        .collect();
+    pending_apps.sort();
+    pending_apps.dedup();
     drop(engine);
 
     // A completed restore means there is nothing left to warn about, so an
     // earlier dismissal is stale. Leaving it would suppress the next, unrelated
     // crash banner.
     if complete {
-        if let Ok(mut settings) = app.settings.lock() {
-            clear_recovery_dismissal(&mut settings);
+        if let Ok(mut guard) = settings.lock() {
+            clear_recovery_dismissal(&mut guard);
             // Restoring ends the cycle, so a paused engine has nothing left to
             // pause. Leaving the flag set would make the next launch start
             // paused with no transaction, which looks like automation is broken.
-            settings.paused = false;
-            let _ = settings.save(&app.settings_path);
+            guard.paused = false;
+            let _ = guard.save(&settings_path);
         }
     }
 
-    sync_tray(&handle);
     Ok(RestoreDto {
         restored: report.count(conflux_domain::WindowOutcome::Restored),
         kept_user_change: report.count(conflux_domain::WindowOutcome::KeptUserChange),
@@ -356,6 +456,7 @@ pub fn restore(handle: tauri::AppHandle, app: State<'_, AppState>) -> Result<Res
         rejected: report.count(conflux_domain::WindowOutcome::Rejected),
         pending: report.pending.len(),
         state,
+        pending_apps,
     })
 }
 
@@ -384,6 +485,7 @@ pub struct SettingsDto {
     pub restore_delay_secs: u32,
     pub auto_update: bool,
     pub telemetry: bool,
+    pub excluded_apps: Vec<String>,
     pub target: Option<TargetDto>,
 }
 
@@ -410,6 +512,7 @@ impl From<&Settings> for SettingsDto {
             restore_delay_secs: s.restore_delay_secs,
             auto_update: s.auto_update,
             telemetry: s.telemetry,
+            excluded_apps: s.excluded_apps.clone(),
             target: s.target_display.as_ref().map(|t| TargetDto {
                 native_id: t.native_id.clone(),
                 label: t.label.clone(),
@@ -477,6 +580,9 @@ pub fn save_settings(
     if let Some(telemetry) = request.telemetry {
         settings.telemetry = telemetry;
     }
+    if let Some(excluded_apps) = request.excluded_apps {
+        settings.excluded_apps = excluded_apps;
+    }
 
     settings.validate().map_err(|e| e.to_string())?;
     settings
@@ -513,6 +619,7 @@ pub fn save_settings(
         config.layout.margin = dto.margin;
         config.layout.gap = dto.gap;
         config.restore_delay_secs = dto.restore_delay_secs;
+        config.excluded_apps = dto.excluded_apps.clone();
         if let Err(e) = engine.update_config(config) {
             tracing::warn!(error = %e, "could not apply settings to the engine");
         }

@@ -56,6 +56,8 @@ pub struct EligibleWindow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkippedWindow {
     pub id: WindowId,
+    /// Application name for display purposes; empty when unknown.
+    pub app_name: String,
     pub reason: SkipReason,
 }
 
@@ -148,6 +150,12 @@ pub struct EngineConfig {
     pub min_reachable: conflux_domain::Size,
     /// Seconds to wait at the start of `restore()`.
     pub restore_delay_secs: u32,
+    /// Executable names that are never moved.
+    ///
+    /// Matched case-insensitively against `WindowSnapshot::app_name`. This is the
+    /// escape hatch for applications the user does not want rearranged: media
+    /// players, capture tools, games, a full-screen dashboard.
+    pub excluded_apps: Vec<String>,
 }
 
 impl Default for EngineConfig {
@@ -160,6 +168,7 @@ impl Default for EngineConfig {
             journal_dir: std::env::temp_dir().join("conflux-journal"),
             min_reachable: conflux_domain::Size::new(64, 32),
             restore_delay_secs: 0,
+            excluded_apps: Vec::new(),
         }
     }
 }
@@ -372,7 +381,12 @@ impl<B: Backend> Engine<B> {
             return Ok(None);
         };
 
-        let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+        // Only the newest journal can belong to the interrupted run; every
+        // earlier file is from a session that already ended or was superseded.
+        // Those are deleted here rather than accumulated: a user whose app
+        // crashed a few times would otherwise carry a growing pile of files that
+        // no code path ever reads again, and each startup would scan them.
+        let mut journals: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_none_or(|e| e != "journal") {
@@ -384,12 +398,23 @@ impl<B: Backend> Engine<B> {
             let Ok(modified) = meta.modified() else {
                 continue;
             };
-            if newest.as_ref().is_none_or(|(time, _)| modified > *time) {
-                newest = Some((modified, path));
+            journals.push((modified, path));
+        }
+        journals.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+
+        let newest = journals.first().cloned().map(|(_, path)| path);
+        for (_, stale) in journals.iter().skip(1) {
+            match std::fs::remove_file(stale) {
+                Ok(()) => tracing::info!(path = %stale.display(), "removed superseded journal"),
+                Err(e) => tracing::warn!(
+                    path = %stale.display(),
+                    error = %e,
+                    "could not remove superseded journal"
+                ),
             }
         }
 
-        let Some((_, path)) = newest else {
+        let Some(path) = newest else {
             return Ok(None);
         };
 
@@ -440,6 +465,7 @@ impl<B: Backend> Engine<B> {
                 Ok(None) => {}
                 Err(reason) => skipped.push(SkippedWindow {
                     id: window.id.clone(),
+                    app_name: window.app_name.clone(),
                     reason,
                 }),
             }
@@ -474,6 +500,9 @@ impl<B: Backend> Engine<B> {
         window: &WindowSnapshot,
         displays: &[DisplaySnapshot],
     ) -> Result<Option<(DisplaySnapshot, Option<conflux_domain::Size>)>, SkipReason> {
+        if self.is_excluded(window) {
+            return Err(SkipReason::ExcludedApp);
+        }
         if !window.is_migratable() {
             return Err(match window.mode {
                 WindowMode::Fullscreen => SkipReason::Fullscreen,
@@ -783,6 +812,19 @@ impl<B: Backend> Engine<B> {
         } else {
             EngineState::Active
         };
+        tracing::info!(
+            transaction = %transaction_id,
+            applied = applied.len(),
+            refused = self
+                .outcomes
+                .values()
+                .filter(|o| matches!(o, WindowOutcome::Rejected | WindowOutcome::Unknown))
+                .count(),
+            skipped = preview.skipped.len(),
+            cascaded = preview.plan.cascaded,
+            state = ?self.state,
+            "migration finished"
+        );
 
         let refused = self
             .outcomes
@@ -895,6 +937,17 @@ impl<B: Backend> Engine<B> {
         WindowOutcome::Unknown
     }
 
+    /// Whether the user asked us to leave this application alone.
+    fn is_excluded(&self, window: &WindowSnapshot) -> bool {
+        if window.app_name.is_empty() {
+            return false;
+        }
+        self.config
+            .excluded_apps
+            .iter()
+            .any(|rule| rule.eq_ignore_ascii_case(&window.app_name))
+    }
+
     fn display_of(&self, window: &WindowSnapshot) -> Result<DisplaySnapshot, EngineError> {
         let displays = self
             .backend
@@ -994,6 +1047,24 @@ impl<B: Backend> Engine<B> {
         } else {
             self.state = EngineState::Degraded;
         }
+        tracing::info!(
+            transaction = %transaction_id,
+            restored = outcomes
+                .values()
+                .filter(|o| **o == WindowOutcome::Restored)
+                .count(),
+            kept_user_change = outcomes
+                .values()
+                .filter(|o| **o == WindowOutcome::KeptUserChange)
+                .count(),
+            fallback = outcomes
+                .values()
+                .filter(|o| **o == WindowOutcome::FallbackVisible)
+                .count(),
+            pending = pending.len(),
+            state = ?self.state,
+            "restore finished"
+        );
 
         Ok(RestoreReport {
             transaction: Some(transaction_id),
