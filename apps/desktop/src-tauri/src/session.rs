@@ -166,55 +166,40 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
             "hotkey_restore" => {
                 let app = self.clone();
                 std::thread::spawn(move || {
-                    // Counters are filled inside the engine scope and read after
-                    // the locks are dropped, so the history write never happens
-                    // while holding the engine mutex.
-                    let affected = std::sync::atomic::AtomicUsize::new(0);
-                    let unsettled = std::sync::atomic::AtomicUsize::new(0);
-                    let result: std::result::Result<(), String> = (|| {
-                        let state = app.state::<AppState>();
-                        let mut engine =
-                            state.engine.lock().map_err(|_| "engine lock".to_string())?;
-                        engine
-                            .restore()
-                            .map(|report| {
-                                affected.store(
-                                    report
-                                        .outcomes
-                                        .values()
-                                        .filter(|o| {
-                                            **o == conflux_domain::WindowOutcome::Restored
-                                                || **o == conflux_domain::WindowOutcome::FallbackVisible
-                                        })
-                                        .count(),
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                                unsettled.store(
-                                    report.pending.len(),
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                            })
-                            .map_err(|e| e.to_string())
-                    })();
-                    if let Err(message) = &result {
-                        tracing::warn!(error = %message, "hotkey restore failed");
-                    }
-                    if result.is_ok() {
-                        crate::tray::record(
-                            &app,
-                            crate::activity::Kind::Restore,
-                            affected.load(std::sync::atomic::Ordering::Relaxed),
-                            unsettled.load(std::sync::atomic::Ordering::Relaxed),
-                            "hotkey",
-                        );
+                    // One restore path for all three surfaces. Calling
+                    // `engine.restore()` here bypassed the configured delay, so the
+                    // shortcut fired immediately while the tray and the button both
+                    // waited - the same action behaving differently depending on
+                    // how it was invoked.
+                    let state = app.state::<AppState>();
+                    let outcome = tauri::async_runtime::block_on(
+                        crate::commands::restore_after_delay(&app, &state, true),
+                    );
+                    match &outcome {
+                        Ok(report) => {
+                            crate::tray::record(
+                                &app,
+                                crate::activity::Kind::Restore,
+                                report.restored + report.fallback_visible,
+                                report.pending,
+                                "hotkey",
+                            );
+                        }
+                        Err(message) => {
+                            // `restore_cancelled` means a newer request took over;
+                            // that is not a failure worth alarming the user about.
+                            if message != "restore_cancelled" {
+                                tracing::warn!(error = %message, "hotkey restore failed");
+                            }
+                        }
                     }
                     crate::tray::refresh(&app);
                     let _ = app.emit(
                         "conflux://action",
                         serde_json::json!({
                             "action": "restore",
-                            "ok": result.is_ok(),
-                            "message": result.err(),
+                            "ok": outcome.is_ok(),
+                            "message": outcome.err(),
                         }),
                     );
                 });

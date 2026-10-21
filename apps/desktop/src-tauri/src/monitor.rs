@@ -185,6 +185,15 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
             );
 
             if !settings.auto_restore || paused {
+                // Remember that cleanup is owed. The detector reports `Deactivated`
+                // exactly once, so without this the session ends silently and the
+                // windows stay where the gather put them.
+                if paused && settings.auto_restore {
+                    state
+                        .deferred_restore
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    tracing::info!("remote session ended while paused; restore deferred");
+                }
                 tracing::info!(
                     auto_restore = settings.auto_restore,
                     paused,

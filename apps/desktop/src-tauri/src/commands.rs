@@ -1388,6 +1388,8 @@ pub fn activity_log(app: State<'_, AppState>) -> Vec<ActivityEntryDto> {
 pub struct PauseDto {
     pub paused: bool,
     pub state: &'static str,
+    /// True when resuming also ran the restore that the pause had deferred.
+    pub restored_deferred: bool,
 }
 
 /// Pause or resume automation while keeping the current layout.
@@ -1416,8 +1418,29 @@ pub fn set_paused(
         .map_err(|e| e.to_string())?;
     drop(settings);
 
+    // Resuming while a remote session ended during the pause owes the user a
+    // restore. The detector only reports the end once, so this is the only chance
+    // to run it; silently resuming would leave the windows gathered.
+    let mut restored_deferred = false;
+    if !paused
+        && app
+            .deferred_restore
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+    {
+        // `set_paused` is a synchronous command, so the async restore path is
+        // driven to completion here rather than awaited.
+        match tauri::async_runtime::block_on(restore_after_delay(&handle, &app, false)) {
+            Ok(_) => restored_deferred = true,
+            Err(e) => tracing::warn!(error = %e, "deferred restore failed on resume"),
+        }
+    }
+
     sync_tray(&handle);
-    Ok(PauseDto { paused, state })
+    Ok(PauseDto {
+        paused,
+        state,
+        restored_deferred,
+    })
 }
 
 /// Result of the last hotkey registration attempt, so the UI can tell the truth

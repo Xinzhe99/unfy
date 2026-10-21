@@ -154,6 +154,8 @@ export interface DiagnosticsDto {
 export interface PauseDto {
   paused: boolean;
   state: EngineStateName;
+  /** Resume also ran a restore that the pause had deferred. */
+  restored_deferred: boolean;
 }
 
 export interface HotkeyStatusDto {

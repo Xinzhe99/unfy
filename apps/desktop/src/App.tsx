@@ -340,7 +340,13 @@ export default function App() {
         if (message) flash(message);
         return value;
       } catch (e) {
-        flash({ tone: "danger", text: errorMessage(e) });
+        // Cancellation is the user's own doing, not a failure: a red banner for
+        // "you started a new gather" reads like something broke.
+        const cancelled = String(e).includes("restore_cancelled");
+        flash({
+          tone: cancelled ? "neutral" : "danger",
+          text: errorMessage(e),
+        });
         return null;
       } finally {
         setBusy(false);
@@ -618,7 +624,12 @@ export default function App() {
                       tone: "neutral",
                       text: result.paused
                         ? "已暂停自动整理，当前布局保留。"
-                        : "已恢复自动整理。",
+                        : result.restored_deferred
+                          ? // The session ended while paused, so resuming also
+                            // finished the cleanup. Saying only "resumed" would
+                            // leave the user wondering why their windows moved.
+                            "已恢复自动整理，并补做了暂停期间欠下的恢复。"
+                          : "已恢复自动整理。",
                     }),
                   )
                 }

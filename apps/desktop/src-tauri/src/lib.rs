@@ -49,6 +49,14 @@ pub struct AppState {
     pub schedule: Arc<std::sync::Mutex<schedule::Schedule>>,
     /// Append-only history of completed actions, shown on the overview.
     pub activity: Arc<std::sync::Mutex<activity::Activity>>,
+    /// A remote session ended while automation was paused, so its restore was
+    /// never performed.
+    ///
+    /// Without this, pausing during a session loses the cleanup entirely: the
+    /// detector only fires `Deactivated` once, the restore is skipped, and the
+    /// windows stay where the gather put them until the user notices. Resuming
+    /// consumes this flag and restores.
+    pub deferred_restore: Arc<std::sync::atomic::AtomicBool>,
     /// The most recent operational failure, cleared on the next success.
     ///
     /// Kept here rather than in the engine because not every failure originates
@@ -127,6 +135,7 @@ impl AppState {
             manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
             last_error: Arc::new(std::sync::Mutex::new(None)),
+            deferred_restore: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             activity: Arc::new(std::sync::Mutex::new(activity::Activity::load(
                 conflux_settings::config_dir().join("activity.jsonl"),
             ))),
