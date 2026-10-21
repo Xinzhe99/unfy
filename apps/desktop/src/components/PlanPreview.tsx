@@ -70,11 +70,16 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
                 y={placement.rect.top + placement.rect.height / 2}
                 textAnchor="middle"
                 dominantBaseline="central"
-                fontSize={Math.max(work.width * 0.03, 10)}
+                fontSize={Math.max(work.width * 0.028, 10)}
                 fill="var(--color-fg-soft)"
                 fontFamily="inherit"
               >
-                {index + 1}
+                {/* The application name is what makes the drawing useful: a grid
+                    of numbers tells the user nothing about where their work will
+                    land. Long names are truncated by characters rather than with
+                    SVG clipping, because a clipped word looks like a rendering
+                    bug. */}
+                {shortName(placement.app_name) || `窗口 ${index + 1}`}
               </text>
             </g>
           ))}
@@ -100,6 +105,19 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
       {preview.skipped.length > 0 ? <SkippedList skipped={preview.skipped} /> : null}
     </div>
   );
+}
+
+/**
+ * Executable name without its extension, trimmed to fit a small rectangle.
+ *
+ * `WindowsTerminal.exe` is the one the user recognises in the taskbar, but it
+ * does not fit inside a 60 px wide box at any readable size; `WindowsT…` does,
+ * and the numbered list underneath always carries the full name.
+ */
+function shortName(appName: string): string {
+  if (!appName) return "";
+  const base = appName.replace(/\.exe$/i, "");
+  return base.length > 10 ? `${base.slice(0, 9)}…` : base;
 }
 
 function SkippedList({ skipped }: { skipped: PreviewDto["skipped"] }) {

@@ -71,8 +71,17 @@ pub struct RectDto {
 #[derive(Debug, Serialize)]
 pub struct PlacementDto {
     pub window_id: String,
-    /// Short label for the UI: pid plus handle, never the window title.
-    pub label: String,
+    /// Executable name of the owning application, so a rectangle in the preview
+    /// can be matched to an app the user recognises. Empty when the platform
+    /// could not read it (elevated processes deny the query).
+    ///
+    /// Never the window title: titles carry document names, URLs and message
+    /// previews, and this value ends up in a screenshot-able UI.
+    pub app_name: String,
+    /// Index of the placement in the plan, 1-based. The preview numbers the
+    /// rectangles in the same order, so "窗口 3" always means the same thing in
+    /// the drawing and in the list.
+    pub order: usize,
     pub rect: RectDto,
     pub clamped: bool,
 }
@@ -261,15 +270,27 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
             height: 1080,
         });
 
+    // The plan carries window ids only; the names live on the window snapshots.
+    // Read them once, while the engine lock is still held.
+    let app_names: std::collections::HashMap<u32, String> = engine
+        .backend()
+        .enumerate()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|w| (w.id.process_id, w.app_name))
+        .collect();
+
     Ok(PreviewDto {
         target_present: true,
         placements: preview
             .plan
             .placements
             .iter()
-            .map(|p| PlacementDto {
+            .enumerate()
+            .map(|(index, p)| PlacementDto {
                 window_id: window_label(&p.id),
-                label: window_label(&p.id),
+                app_name: app_names.get(&p.id.process_id).cloned().unwrap_or_default(),
+                order: index + 1,
                 rect: rect_dto(p.rect),
                 clamped: p.clamped_to_min,
             })
@@ -933,6 +954,123 @@ pub struct DiagnosticsDto {
 
 /// Write a redacted diagnostics bundle: versions, topology shape, and setting
 /// names — never window titles, paths, or screen content.
+#[tauri::command]
+pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
+    let mut items: Vec<HealthItemDto> = Vec::new();
+
+    // 1. Window control permission. The one failure that makes the product a
+    //    no-op while the window still opens normally.
+    let permitted = platform::has_window_permission();
+    items.push(HealthItemDto {
+        id: "permission".into(),
+        label: "窗口控制权限".into(),
+        status: if permitted { "ok" } else { "problem" }.into(),
+        detail: if permitted {
+            "可以移动其他应用的窗口。".into()
+        } else {
+            format!(
+                "缺少「{}」授权，整理不会生效。",
+                platform::permission_name()
+            )
+        },
+    });
+
+    // 2. Displays. Zero is a real fault; one is a legitimate configuration that
+    //    makes gathering meaningless, which the user should hear as a fact.
+    let displays = app
+        .engine
+        .lock()
+        .ok()
+        .and_then(|engine| conflux_platform::DisplayProvider::topology(engine.backend()).ok())
+        .unwrap_or_default();
+    items.push(HealthItemDto {
+        id: "displays".into(),
+        label: "显示器".into(),
+        status: match displays.len() {
+            0 => "problem",
+            1 => "attention",
+            _ => "ok",
+        }
+        .into(),
+        detail: match displays.len() {
+            0 => "没有检测到显示器。".into(),
+            1 => "只有一块显示器，整理没有可移动的目标。".into(),
+            count => format!("检测到 {count} 块显示器。"),
+        },
+    });
+
+    // 3. Hotkeys. A combination that failed to register is invisible until the
+    //    user presses it and nothing happens.
+    if let Ok(status) = app.hotkey_status.lock() {
+        let failures: Vec<String> = [&status.gather_error, &status.restore_error]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect();
+        let configured = status.gather.is_some() || status.restore.is_some();
+        items.push(HealthItemDto {
+            id: "hotkeys".into(),
+            label: "全局快捷键".into(),
+            status: if failures.is_empty() { "ok" } else { "problem" }.into(),
+            detail: if !failures.is_empty() {
+                failures.join("；")
+            } else if configured {
+                "已注册，在其他应用中也生效。".into()
+            } else {
+                "未设置。可通过托盘或本窗口触发。".into()
+            },
+        });
+    }
+
+    // 4. Log directory. If it is unwritable, the next problem will leave no
+    //    evidence, and the support flow starts from nothing.
+    let dir = conflux_settings::config_dir();
+    let writable = std::fs::create_dir_all(&dir)
+        .and_then(|_| {
+            let probe = dir.join(".write-probe");
+            std::fs::write(&probe, b"ok")?;
+            std::fs::remove_file(&probe)
+        })
+        .is_ok();
+    items.push(HealthItemDto {
+        id: "storage".into(),
+        label: "配置目录".into(),
+        status: if writable { "ok" } else { "problem" }.into(),
+        detail: if writable {
+            format!("可写入 {}", dir.display())
+        } else {
+            format!("无法写入 {}：设置和日志都不会保存。", dir.display())
+        },
+    });
+
+    // 5. An unfinished transaction from a previous run. Not a fault, but the
+    //    single most important thing for the user to resolve.
+    if let Ok(engine) = app.engine.lock() {
+        if engine.state().has_pending_work() {
+            items.push(HealthItemDto {
+                id: "pending".into(),
+                label: "未完成的整理".into(),
+                status: "attention".into(),
+                detail: format!(
+                    "有 {} 个窗口的快照等待恢复。",
+                    engine.captured_window_count()
+                ),
+            });
+        }
+    }
+
+    items
+}
+
+#[derive(Debug, Serialize)]
+pub struct HealthItemDto {
+    pub id: String,
+    pub label: String,
+    /// `ok`, `attention`, or `problem`.
+    pub status: String,
+    pub detail: String,
+}
+
 #[tauri::command]
 pub fn export_diagnostics(app: State<'_, AppState>) -> Result<DiagnosticsDto, String> {
     let engine = app.engine.lock().map_err(|e| e.to_string())?;

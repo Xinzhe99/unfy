@@ -64,7 +64,10 @@ export interface RectDto {
 
 export interface PlacementDto {
   window_id: string;
-  label: string;
+  /** Executable name of the owning application, or empty when unreadable. */
+  app_name: string;
+  /** 1-based position in the plan; the preview numbers rectangles the same way. */
+  order: number;
   rect: RectDto;
   clamped: boolean;
 }
@@ -175,6 +178,13 @@ export interface UpdateCheckDto {
   detail: string;
 }
 
+export interface HealthItemDto {
+  id: string;
+  label: string;
+  status: "ok" | "attention" | "problem";
+  detail: string;
+}
+
 export interface ActivityEntryDto {
   at: number;
   kind: "gather" | "restore" | "rescue" | "auto_gather" | "auto_restore" | "pause";
@@ -225,6 +235,7 @@ export const api = {
     invoke<DisplayThumbnailDto[]>("display_thumbnails"),
   runningApplications: () => invoke<AppDto[]>("running_applications"),
   activityLog: () => invoke<ActivityEntryDto[]>("activity_log"),
+  healthCheck: () => invoke<HealthItemDto[]>("health_check"),
 };
 
 /** Human-readable Chinese labels for the engine states shown in the UI. */

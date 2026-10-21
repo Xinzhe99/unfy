@@ -5,6 +5,7 @@ import {
   api,
   errorMessage,
   type ActivityEntryDto,
+  type HealthItemDto,
   formatBytes,
   type AppDto,
   type DisplayDto,
@@ -84,6 +85,7 @@ export default function App() {
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [runningApps, setRunningApps] = useState<AppDto[]>([]);
   const [activity, setActivity] = useState<ActivityEntryDto[]>([]);
+  const [health, setHealth] = useState<HealthItemDto[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const noticeTimer = useRef<number | null>(null);
@@ -104,6 +106,7 @@ export default function App() {
         nextHotkeys,
         nextUpdate,
         nextActivity,
+        nextHealth,
       ] = await Promise.all([
         api.getStatus(),
         api.listDisplays(),
@@ -112,8 +115,10 @@ export default function App() {
         api.hotkeyStatus(),
         api.updateStatus(),
         api.activityLog(),
+        api.healthCheck(),
       ]);
       setActivity(nextActivity);
+      setHealth(nextHealth);
       setStatus(nextStatus);
       setDisplays(nextDisplays);
       setSettings(nextSettings);
@@ -662,6 +667,7 @@ export default function App() {
               <GeneralPage
                 settings={settings}
                 hotkeys={hotkeys}
+                health={health}
                 updateStatus={updateStatus}
                 busy={busy}
                 onSave={(patch) => void saveSettings(patch)}

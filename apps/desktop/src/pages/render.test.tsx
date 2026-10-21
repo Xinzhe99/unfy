@@ -29,6 +29,7 @@ import type {
   ActivityEntryDto,
   AppDto,
   DisplayDto,
+  HealthItemDto,
   HotkeyStatusDto,
   PreviewDto,
   SettingsDto,
@@ -107,8 +108,16 @@ const preview: PreviewDto = {
   placements: [
     {
       window_id: "1:1001",
-      label: "notepad.exe",
+      app_name: "notepad.exe",
+      order: 1,
       rect: { left: 0, top: 0, width: 960, height: 520 },
+      clamped: false,
+    },
+    {
+      window_id: "1:1002",
+      app_name: "WindowsTerminal.exe",
+      order: 2,
+      rect: { left: 960, top: 0, width: 960, height: 520 },
       clamped: false,
     },
   ],
@@ -143,6 +152,13 @@ const hotkeys: HotkeyStatusDto = {
   restore: null,
   restore_error: null,
 };
+
+const health: HealthItemDto[] = [
+  { id: "permission", label: "窗口控制权限", status: "ok", detail: "可以移动其他应用的窗口。" },
+  { id: "displays", label: "显示器", status: "ok", detail: "检测到 2 块显示器。" },
+  { id: "hotkeys", label: "全局快捷键", status: "problem", detail: "Ctrl+Alt+G 已被占用" },
+  { id: "storage", label: "配置目录", status: "ok", detail: "可写入" },
+];
 
 function noop() {}
 
@@ -262,6 +278,7 @@ describe("pages render", () => {
       <GeneralPage
         settings={settings}
         hotkeys={hotkeys}
+        health={health}
         updateStatus={{
           current_version: "0.1.0",
           auto_update: true,
@@ -276,12 +293,16 @@ describe("pages render", () => {
       />,
     );
     expect(configured).toContain("已配置更新源");
+    // A failed hotkey must be visible without pressing it and wondering.
+    expect(configured).toContain("Ctrl+Alt+G 已被占用");
+    expect(configured).toContain("检测到 2 块显示器");
     expect(configured).toContain("invalid updater binary format");
 
     const unconfigured = renderToStaticMarkup(
       <GeneralPage
         settings={settings}
         hotkeys={hotkeys}
+        health={health}
         updateStatus={{
           current_version: "0.1.0",
           auto_update: true,
@@ -330,10 +351,33 @@ describe("pages render", () => {
     expect(html).not.toContain("未设置");
   });
 
-  test("plan preview draws every placement", () => {
+  test("plan preview names the applications instead of only numbering them", () => {
     const html = renderToStaticMarkup(<PlanPreview preview={preview} />);
     expect(html).toContain("<svg");
-    expect(html).toContain("rect");
+    // A grid of numbers tells the user nothing about where their work lands.
+    expect(html).toContain("notepad");
+    // Long names are truncated to fit, not clipped.
+    expect(html).toContain("WindowsTe…");
+  });
+
+  test("plan preview falls back to a number when the app name is unreadable", () => {
+    const html = renderToStaticMarkup(
+      <PlanPreview
+        preview={{
+          ...preview,
+          placements: [
+            {
+              window_id: "1:9",
+              app_name: "",
+              order: 1,
+              rect: { left: 0, top: 0, width: 100, height: 100 },
+              clamped: false,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("窗口 1");
   });
 
   test("plan preview explains an empty plan", () => {

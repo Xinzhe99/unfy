@@ -1,4 +1,9 @@
-import type { HotkeyStatusDto, SettingsDto, UpdateStatusDto } from "../api";
+import type {
+  HealthItemDto,
+  HotkeyStatusDto,
+  SettingsDto,
+  UpdateStatusDto,
+} from "../api";
 import { Button, Card, Segmented, SettingRow, Status, Switch } from "../components/ui";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import { IconDownload } from "../components/icons";
@@ -13,6 +18,7 @@ import { IconDownload } from "../components/icons";
 export function GeneralPage({
   settings,
   hotkeys,
+  health,
   updateStatus,
   busy,
   onSave,
@@ -20,6 +26,7 @@ export function GeneralPage({
 }: {
   settings: SettingsDto | null;
   hotkeys: HotkeyStatusDto | null;
+  health: HealthItemDto[];
   updateStatus: UpdateStatusDto | null;
   busy: boolean;
   onSave: (patch: Partial<SettingsDto>) => void;
@@ -239,6 +246,43 @@ export function GeneralPage({
             检查更新
           </Button>
         </div>
+      </Card>
+
+      <Card
+        title="环境状态"
+        description="Conflux 当前能不能正常工作。遇到问题时先看这里。"
+      >
+        {health.length === 0 ? (
+          <p className="py-1 text-xs text-[var(--color-muted)]">正在检查…</p>
+        ) : (
+          <ul>
+            {health.map((item, index) => (
+              <li
+                key={item.id}
+                className={`flex items-start gap-2.5 py-2 ${
+                  index > 0 ? "border-t border-[var(--color-border)]" : ""
+                }`}
+              >
+                <span
+                  aria-hidden
+                  className={`mt-[5px] size-[6px] shrink-0 rounded-full ${
+                    item.status === "problem"
+                      ? "bg-[var(--color-danger)]"
+                      : item.status === "attention"
+                        ? "bg-[var(--color-warning)]"
+                        : "bg-[var(--color-success)]"
+                  }`}
+                />
+                <div className="min-w-0">
+                  <p className="text-[13px] leading-5">{item.label}</p>
+                  <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">
+                    {item.detail}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
 
       <Card title="隐私">
