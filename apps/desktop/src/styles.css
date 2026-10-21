@@ -21,6 +21,15 @@
   --color-surface-hover: oklch(0.975 0.002 265);
   --color-surface-sunken: oklch(0.955 0.002 265);
   --color-sidebar: oklch(0.962 0.002 265);
+  /* Selected navigation row. A raised surface in both themes: in dark mode
+     `--color-surface` is only a hair lighter than the sidebar, which made the
+     active row look unselected. */
+  --color-nav-active: oklch(1 0 0);
+  /* Overlay for text drawn on top of a screenshot, which can be any colour and
+     does not change with the theme. Deliberately identical in both themes: a
+     theme-following badge would be a light box on a light screenshot. */
+  --color-overlay: oklch(0.16 0 0 / 0.62);
+  --color-overlay-fg: oklch(0.99 0 0);
 
   /* Hairlines */
   --color-border: oklch(0.912 0.003 265);
@@ -57,14 +66,18 @@
   --conflux-dark-surface-hover: oklch(0.245 0.008 265);
   --conflux-dark-surface-sunken: oklch(0.16 0.006 265);
   --conflux-dark-sidebar: oklch(0.198 0.006 265);
+  --conflux-dark-nav-active: oklch(0.268 0.008 265);
   --conflux-dark-border: oklch(0.298 0.008 265);
   --conflux-dark-border-strong: oklch(0.38 0.009 265);
   --conflux-dark-fg: oklch(0.94 0.004 265);
   --conflux-dark-fg-soft: oklch(0.79 0.006 265);
   --conflux-dark-muted: oklch(0.63 0.008 265);
-  --conflux-dark-accent: oklch(0.93 0.004 265);
-  --conflux-dark-accent-hover: oklch(0.86 0.004 265);
-  --conflux-dark-accent-fg: oklch(0.17 0.006 265);
+  /* A near-white primary button in dark mode reads as "disabled" next to the
+     real disabled buttons, which are the same shape at 40 % opacity. A mid grey
+     keeps the fill distinct from the surface while staying monochrome. */
+  --conflux-dark-accent: oklch(0.80 0.004 265);
+  --conflux-dark-accent-hover: oklch(0.87 0.004 265);
+  --conflux-dark-accent-fg: oklch(0.16 0.006 265);
   --conflux-dark-accent-soft: oklch(0.30 0.006 265);
   --conflux-dark-success: oklch(0.7 0.11 155);
   --conflux-dark-warning: oklch(0.76 0.1 70);
@@ -79,6 +92,7 @@
   --color-surface-hover: var(--conflux-dark-surface-hover);
   --color-surface-sunken: var(--conflux-dark-surface-sunken);
   --color-sidebar: var(--conflux-dark-sidebar);
+  --color-nav-active: var(--conflux-dark-nav-active);
   --color-border: var(--conflux-dark-border);
   --color-border-strong: var(--conflux-dark-border-strong);
   --color-fg: var(--conflux-dark-fg);
@@ -101,6 +115,7 @@
     --color-surface-hover: var(--conflux-dark-surface-hover);
     --color-surface-sunken: var(--conflux-dark-surface-sunken);
     --color-sidebar: var(--conflux-dark-sidebar);
+    --color-nav-active: var(--conflux-dark-nav-active);
     --color-border: var(--conflux-dark-border);
     --color-border-strong: var(--conflux-dark-border-strong);
     --color-fg: var(--conflux-dark-fg);

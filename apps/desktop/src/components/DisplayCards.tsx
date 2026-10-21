@@ -67,12 +67,14 @@ export function DisplayCards({
                   无法截取画面
                 </div>
               )}
-              {/* The number matches the badge flashed on the physical screen. */}
+              {/* The number matches the badge flashed on the physical screen.
+                  Its colour is fixed rather than themed: it sits on a screenshot,
+                  whose brightness has nothing to do with the app theme. */}
               <span
                 className={`absolute left-1.5 top-1.5 flex size-5 items-center justify-center rounded-full text-[11px] font-semibold ${
                   selected
                     ? "bg-[var(--color-accent)] text-[var(--color-accent-fg)]"
-                    : "bg-black/55 text-white"
+                    : "bg-[var(--color-overlay)] text-[var(--color-overlay-fg)]"
                 }`}
               >
                 {index + 1}

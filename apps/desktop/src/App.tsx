@@ -451,7 +451,7 @@ export default function App() {
                       aria-current={active ? "page" : undefined}
                       className={`mb-0.5 flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-[13px] transition-colors ${
                         active
-                          ? "bg-[var(--color-surface)] font-medium text-[var(--color-fg)] shadow-[var(--shadow-card)]"
+                          ? "bg-[var(--color-nav-active)] font-medium text-[var(--color-fg)] shadow-[var(--shadow-card)]"
                           : "text-[var(--color-fg-soft)] hover:bg-[var(--color-surface)]/60"
                       }`}
                     >
