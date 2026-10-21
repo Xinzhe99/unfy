@@ -622,6 +622,20 @@ pub async fn restore_after_delay<R: tauri::Runtime>(
     app: &State<'_, AppState>,
     honour_delay: bool,
 ) -> Result<RestoreDto, String> {
+    restore_with_trigger(handle, app, honour_delay, "window").await
+}
+
+/// Restore, recording what invoked it.
+///
+/// The trigger used to be hardcoded while the shortcut and the tray each appended
+/// their own history entry afterwards: restoring from either produced two rows, and
+/// the shared one claimed the window had done it.
+pub async fn restore_with_trigger<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    app: &State<'_, AppState>,
+    honour_delay: bool,
+    trigger: &'static str,
+) -> Result<RestoreDto, String> {
     let delay = if honour_delay {
         let secs = {
             let settings = app.settings.lock().map_err(|e| e.to_string())?;
@@ -668,7 +682,7 @@ pub async fn restore_after_delay<R: tauri::Runtime>(
     let settings_path = app.settings_path.clone();
     let activity = app.activity.clone();
     let result = tokio::task::spawn_blocking(move || {
-        restore_blocking(engine_state, settings, settings_path, activity)
+        restore_blocking(engine_state, settings, settings_path, activity, trigger)
     })
     .await
     .map_err(|e| format!("restore task failed: {e}"))?;
@@ -682,6 +696,7 @@ fn restore_blocking(
     settings: Arc<std::sync::Mutex<Settings>>,
     settings_path: std::path::PathBuf,
     activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
+    trigger: &'static str,
 ) -> Result<RestoreDto, String> {
     let mut engine = engine.lock().map_err(|e| e.to_string())?;
     let report: RestoreReport = engine.restore().map_err(|e| e.to_string())?;
@@ -726,7 +741,7 @@ fn restore_blocking(
                 + report.count(conflux_domain::WindowOutcome::FallbackVisible),
             unsettled: report.pending.len(),
             note: None,
-            trigger: "window".into(),
+            trigger: trigger.into(),
         });
     }
 

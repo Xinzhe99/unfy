@@ -432,39 +432,23 @@ pub fn record<R: Runtime>(
 }
 
 fn run_gather<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    // Same implementation as the window button and the shortcut, told what invoked
+    // it. This used to be a third copy that resolved the target and called the
+    // engine itself, so a tray gather skipped everything the command does: the
+    // refused-application list, `last_error`, and the progress events.
     let state = app.state::<AppState>();
-    let settings = state.settings.lock().map_err(|e| e.to_string())?;
-    let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
-
-    let Some(target) = engine.resolve_target(
-        settings
-            .target_display
-            .as_ref()
-            .map(|t| t.native_id.as_str()),
-    ) else {
-        show_settings(app);
-        // A sentinel: the frontend maps it to a translated message.
-        return Err("no_displays".into());
-    };
-
-    // Same semantics as the main button: "gather to the target display" while a
-    // layout is active means retarget, not "refuse because something is open".
-    match engine.retarget(&target) {
-        Ok(retarget) => {
-            let applied = retarget.migration.applied_count();
-            let unsettled = retarget.migration.failed_count() + retarget.migration.unplaced.len();
-            drop(engine);
-            drop(settings);
-            record(
-                app,
-                crate::activity::Kind::Gather,
-                applied,
-                unsettled,
-                "tray",
-            );
-            Ok(())
+    let result =
+        tauri::async_runtime::block_on(crate::commands::migrate_with_trigger(app, &state, "tray"));
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            // No display to gather onto is the one failure the settings window can
+            // fix, so open it. Every other error is reported by the caller.
+            if error == "no_displays" {
+                show_settings(app);
+            }
+            Err(error)
         }
-        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -472,21 +456,12 @@ fn run_restore<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     // The tray must honour the same delay the window does, or the two entry
     // points would behave differently for the same button label. The wait runs
     // without holding the engine lock.
-    let handle = app.clone();
     let state = app.state::<AppState>();
-    let result = tauri::async_runtime::block_on(async {
-        // Tray restore is an explicit instruction, same as the button.
-        crate::commands::restore_after_delay(&handle, &state, false).await
-    });
-    if let Ok(dto) = &result {
-        record(
-            app,
-            crate::activity::Kind::Restore,
-            dto.restored + dto.fallback_visible,
-            dto.pending,
-            "tray",
-        );
-    }
+    // The shared path records the history entry with the trigger, so the tray does
+    // not append a second one.
+    let result = tauri::async_runtime::block_on(crate::commands::restore_with_trigger(
+        app, &state, false, "tray",
+    ));
     result.map(|_| ())
 }
 

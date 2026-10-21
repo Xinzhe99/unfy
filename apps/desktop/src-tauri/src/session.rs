@@ -105,17 +105,17 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
     fn emit_action(&self, action: &str) -> tauri::Result<()> {
         use tauri::Emitter;
         match action {
-            // Both actions run on a worker thread. The shortcut callback runs on
-            // the event loop, and a restore can legitimately sleep for the user's
-            // configured delay (up to 300 s) or block on a busy application's
-            // message pump. Doing that inline froze every subsequent shortcut.
+            // Both actions run on a worker thread: the shortcut callback runs on the
+            // event loop, and a gather can block on a busy application's message
+            // pump while a restore can wait out the configured delay. Doing that
+            // inline froze every subsequent shortcut.
             "hotkey_gather" => {
                 let app = self.clone();
                 std::thread::spawn(move || {
-                    // The same function the button and the tray item call, so a
-                    // shortcut gather records refused applications, reports progress
-                    // and leaves the same error behind.
                     let state = app.state::<AppState>();
+                    // The same function the button and the tray item call, so a
+                    // shortcut gather also records refused applications, reports
+                    // progress and leaves the same error behind.
                     let outcome = tauri::async_runtime::block_on(
                         crate::commands::migrate_with_trigger(&app, &state, "hotkey"),
                     );
@@ -136,35 +136,20 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
             "hotkey_restore" => {
                 let app = self.clone();
                 std::thread::spawn(move || {
-                    // One restore path for all three surfaces. Calling
-                    // `engine.restore()` here bypassed the configured delay, so the
-                    // shortcut fired immediately while the tray and the button both
-                    // waited - the same action behaving differently depending on
-                    // how it was invoked.
                     let state = app.state::<AppState>();
                     let outcome = tauri::async_runtime::block_on(
-                        // The shortcut is an explicit instruction; no delay.
-                        crate::commands::restore_after_delay(&app, &state, false),
+                        // The shortcut is an explicit instruction; no delay. The
+                        // shared path records the history entry, so this must not add
+                        // another one.
+                        crate::commands::restore_with_trigger(&app, &state, false, "hotkey"),
                     );
-                    match &outcome {
-                        Ok(report) => {
-                            crate::tray::record(
-                                &app,
-                                crate::activity::Kind::Restore,
-                                report.restored + report.fallback_visible,
-                                report.pending,
-                                "hotkey",
-                            );
-                        }
-                        Err(message) => {
-                            // `restore_cancelled` means a newer request took over;
-                            // that is not a failure worth alarming the user about.
-                            if message != "restore_cancelled" {
-                                tracing::warn!(error = %message, "hotkey restore failed");
-                            }
+                    if let Err(message) = &outcome {
+                        // `restore_cancelled` means a newer request took over; that is
+                        // not a failure worth alarming the user about.
+                        if message != "restore_cancelled" {
+                            tracing::warn!(error = %message, "hotkey restore failed");
                         }
                     }
-                    crate::tray::refresh(&app);
                     let _ = app.emit(
                         "conflux://action",
                         serde_json::json!({
