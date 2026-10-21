@@ -286,10 +286,7 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
 /// transient error: the caller must restore first, otherwise the new preimages
 /// would record the moved positions as the user's original layout.
 #[tauri::command]
-pub fn migrate(
-    handle: tauri::AppHandle,
-    app: State<'_, AppState>,
-) -> Result<MigrationDto, String> {
+pub fn migrate(handle: tauri::AppHandle, app: State<'_, AppState>) -> Result<MigrationDto, String> {
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
@@ -330,10 +327,7 @@ pub fn migrate(
 }
 
 #[tauri::command]
-pub fn restore(
-    handle: tauri::AppHandle,
-    app: State<'_, AppState>,
-) -> Result<RestoreDto, String> {
+pub fn restore(handle: tauri::AppHandle, app: State<'_, AppState>) -> Result<RestoreDto, String> {
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
     let report: RestoreReport = engine.restore().map_err(|e| e.to_string())?;
     let state = state_name(engine.state());
@@ -813,7 +807,9 @@ pub fn set_paused(
 
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
     settings.paused = paused;
-    settings.save(&app.settings_path).map_err(|e| e.to_string())?;
+    settings
+        .save(&app.settings_path)
+        .map_err(|e| e.to_string())?;
     drop(settings);
 
     sync_tray(&handle);

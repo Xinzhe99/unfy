@@ -225,14 +225,50 @@ fn grid(
             })
             .count() as i64;
         let empty = (rows * cols - n) as i64;
+        // A grid that wastes an entire row or column is qualitatively worse than
+        // one that merely has a ragged last row: 9 windows in 4x3 leaves a whole
+        // column unused and squeezes every cell, while 5 in 3x2 leaves one hole.
+        // Ratio-only scoring cannot tell these apart, which is why 9 windows used
+        // to land in 4 columns.
+        let wastes_a_track = empty > 0 && empty >= rows.min(cols) as i64;
 
-        // Prefer fewer minimum-size violations, then fewer empty cells, then a
-        // cell aspect ratio close to the original windows' average.
+        // Rank candidate grids by, in order of importance:
+        //
+        // 1. windows that would be squeezed below their minimum size,
+        // 2. how far each cell's aspect ratio is from the average window's,
+        // 3. empty cells.
+        //
+        // Aspect ratio outranks empty cells deliberately: 5 windows in 3x2 leaves
+        // one cell empty and gives usable ~640x510 cells, while 5x1 has no empty
+        // cells but produces 5 slivers. The earlier weighting (empty cells before
+        // aspect) chose the sliver layout, which the preview made obvious.
         let avg_ratio = average_aspect(ordered);
         let cell_ratio = f64::from(cell_w) / f64::from(cell_h);
-        let aspect_penalty = ((cell_ratio - avg_ratio).abs() * 100.0) as i64;
+        // Two aspect terms, because matching the average ratio alone is not
+        // enough: on a 1920x1032 target, five 1-row cells have ratio 1.86, which
+        // is *closer* to a landscape window's 1.5 than a 3x2 cell's 1.23. Ranking
+        // by closeness alone would therefore pick the five-sliver layout, which
+        // is exactly what the preview showed. The second term punishes cells far
+        // outside a normal window's range in absolute terms.
+        let ratio_deviation = (cell_ratio / avg_ratio.max(0.1) - 1.0).abs();
+        let absolute_squash = if cell_ratio > 2.5 {
+            cell_ratio - 2.5
+        } else if cell_ratio < 0.4 {
+            0.4 / cell_ratio.max(0.01)
+        } else {
+            0.0
+        };
+        let aspect_penalty =
+            ((ratio_deviation * 6_000.0) + (absolute_squash * 20_000.0)).min(999_000.0) as i64;
 
-        let score = violations * 1_000_000 + empty * 1_000 + aspect_penalty;
+        // Order of importance: squeeze below the minimum size, then unusable cell
+        // shape, then empty cells. The empty-cell weight is high enough to keep
+        // 2x2 for four windows (where 3x2 has only a marginally better aspect but
+        // two holes) and low enough that 5 windows still prefer 3x2 over 1x5.
+        let score = violations * 1_000_000_000
+            + i64::from(wastes_a_track) * 50_000_000
+            + aspect_penalty * 1_000
+            + empty * 400_000;
         let better = best.is_none_or(|(s, ..)| score < s);
         if better {
             best = Some((score, cols, cell_w, cell_h));
@@ -622,5 +658,71 @@ mod tests {
         for p in &plan.placements {
             assert!(p.rect.reachable_in(&portrait, 64, 32));
         }
+    }
+}
+
+#[cfg(test)]
+mod column_choice_tests {
+    //! The preview exposed a real defect: 5 windows in a 1920x1032 area were laid
+    //! out as 5 vertical slivers because "zero empty cells" outranked "usable
+    //! aspect ratio". These cases pin the intuitive result for the small counts
+    //! users actually hit.
+
+    use super::*;
+
+    const WORK: Rect = Rect::new(0, 0, 1920, 1032);
+
+    fn windows(count: usize) -> Vec<Candidate> {
+        (0..count)
+            .map(|i| Candidate {
+                id: WindowId {
+                    native_id: i as u64,
+                    process_id: 1,
+                    process_start: 1,
+                },
+                // A typical desktop window is landscape.
+                current: Rect::new(0, 0, 1200, 800),
+                min_size: None,
+                focused: false,
+            })
+            .collect()
+    }
+
+    fn columns(plan: &Plan) -> usize {
+        let mut lefts: Vec<i32> = plan.placements.iter().map(|p| p.rect.left).collect();
+        lefts.sort_unstable();
+        lefts.dedup();
+        lefts.len()
+    }
+
+    #[test]
+    fn five_windows_use_three_columns_not_five() {
+        let plan = plan(&windows(5), WORK, &LayoutConfig::default());
+        assert_eq!(columns(&plan), 3, "5 windows should tile 3x2, not 5x1");
+        for p in &plan.placements {
+            assert!(
+                p.rect.width() > p.rect.height() / 2,
+                "a cell {:?} is a sliver",
+                p.rect
+            );
+        }
+    }
+
+    #[test]
+    fn four_windows_stay_two_by_two() {
+        let plan = plan(&windows(4), WORK, &LayoutConfig::default());
+        assert_eq!(columns(&plan), 2);
+    }
+
+    #[test]
+    fn six_windows_use_three_columns() {
+        let plan = plan(&windows(6), WORK, &LayoutConfig::default());
+        assert_eq!(columns(&plan), 3);
+    }
+
+    #[test]
+    fn nine_windows_use_three_columns() {
+        let plan = plan(&windows(9), WORK, &LayoutConfig::default());
+        assert_eq!(columns(&plan), 3);
     }
 }

@@ -25,18 +25,16 @@ use std::sync::Arc;
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, DrawTextW, SetBkMode, SetTextColor,
-    DT_CENTER, DT_SINGLELINE, DT_VCENTER, HGDIOBJ, TRANSPARENT,
+    CreateSolidBrush, DeleteObject, DrawTextW, SetBkMode, SetTextColor, DT_CENTER, DT_SINGLELINE,
+    DT_VCENTER, HGDIOBJ, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
     MsgWaitForMultipleObjects, PeekMessageW, RegisterClassW, SetLayeredWindowAttributes,
-    ShowWindow, TranslateMessage,
-    CS_HREDRAW, CS_VREDRAW, LWA_ALPHA, MSG, PM_REMOVE, QS_ALLINPUT, SW_SHOWNOACTIVATE,
-    WM_PAINT, WM_TIMER,
-    WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, LWA_ALPHA, MSG, PM_REMOVE, QS_ALLINPUT,
+    SW_SHOWNOACTIVATE, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 /// Set once a flash is running so two rapid clicks do not stack badges.
@@ -86,12 +84,7 @@ pub fn flash(seconds: u64) -> bool {
     true
 }
 
-fn run_badge(
-    bounds: conflux_domain::Rect,
-    number: usize,
-    seconds: u64,
-    _active: Arc<AtomicBool>,
-) {
+fn run_badge(bounds: conflux_domain::Rect, number: usize, seconds: u64, _active: Arc<AtomicBool>) {
     unsafe {
         let instance = match GetModuleHandleW(None) {
             Ok(instance) => instance,

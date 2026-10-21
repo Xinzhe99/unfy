@@ -28,7 +28,7 @@
 | 全局热键 | `Ctrl+Alt+G` 移动 3 个窗口；`Ctrl+Alt+Shift+G` 让 11/11 个窗口精确回到原位 |
 | 识别屏幕编号 | 每块屏显示大号数字 4 秒后自动消失（双屏实测） |
 
-测试总数 **87**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
+测试总数 **91**，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
 
 完整记录（含未验证项与复现命令）见 [docs/verification.md](docs/verification.md)。
 

@@ -86,9 +86,7 @@ impl AppState {
             engine: Arc::new(std::sync::Mutex::new(engine)),
             settings: Arc::new(std::sync::Mutex::new(settings)),
             settings_path,
-            hotkey_status: Arc::new(std::sync::Mutex::new(
-                commands::HotkeyStatusDto::default(),
-            )),
+            hotkey_status: Arc::new(std::sync::Mutex::new(commands::HotkeyStatusDto::default())),
         }
     }
 }

@@ -27,8 +27,15 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
       <div className="relative overflow-hidden rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)]">
         <svg
           viewBox={`${work.left} ${work.top} ${work.width} ${work.height}`}
-          className="block h-auto w-full"
-          style={{ aspectRatio: `${work.width} / ${work.height}` }}
+          // Fill the card and let the intrinsic aspect ratio decide the height,
+          // capped so a tall target does not push the rest of the page below the
+          // fold. Fixed pixel dimensions made the drawing narrower than its
+          // container, which read as unexplained margins inside the work area.
+          className="mx-auto block h-auto w-full"
+          style={{
+            aspectRatio: `${work.width} / ${work.height}`,
+            maxHeight: 300,
+          }}
           role="img"
           aria-label={`布局预览：${placed} 个窗口排入 ${work.width}×${work.height} 的区域`}
           preserveAspectRatio="xMidYMid meet"
