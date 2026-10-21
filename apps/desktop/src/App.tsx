@@ -666,6 +666,9 @@ export default function App() {
                   )
                 }
                 onOpenDisplays={() => setPage("displays")}
+                onDismissError={() =>
+                  void run(() => api.dismissLastError())
+                }
                 onKeepLayout={() =>
                   void run(
                     () => api.keepCurrentLayout(),

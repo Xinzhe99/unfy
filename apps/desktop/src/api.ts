@@ -248,6 +248,7 @@ export const api = {
   activityLog: () => invoke<ActivityEntryDto[]>("activity_log"),
   healthCheck: () => invoke<HealthItemDto[]>("health_check"),
   keepCurrentLayout: () => invoke<void>("keep_current_layout"),
+  dismissLastError: () => invoke<void>("dismiss_last_error"),
 };
 
 /** Human-readable Chinese labels for the engine states shown in the UI. */

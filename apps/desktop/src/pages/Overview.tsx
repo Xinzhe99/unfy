@@ -38,6 +38,7 @@ export function OverviewPage({
   onOpenDisplays,
   onExclude,
   onKeepLayout,
+  onDismissError,
 }: {
   status: StatusDto | null;
   settings: SettingsDto | null;
@@ -65,6 +66,8 @@ export function OverviewPage({
   onExclude: (appNames: string[]) => void;
   /** Accept the current positions and drop the journal. */
   onKeepLayout: () => void;
+  /** Clear the "last operation failed" line. */
+  onDismissError: () => void;
 }) {
   const supported = status?.supported ?? false;
   const state = status?.state ?? "idle";
@@ -164,9 +167,18 @@ export function OverviewPage({
         ) : null}
 
         {status?.last_error ? (
-          <p className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-danger)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-            上次操作失败：{humanError(status.last_error)}
-          </p>
+          <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-danger)] px-3 py-2">
+            <p className="min-w-0 flex-1 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+              上次操作失败：{humanError(status.last_error)}
+            </p>
+            <button
+              type="button"
+              onClick={onDismissError}
+              className="shrink-0 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+            >
+              知道了
+            </button>
+          </div>
         ) : null}
 
         {needsAttention ? (

@@ -185,6 +185,7 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     expect(html.length).toBeGreaterThan(200);
@@ -216,6 +217,7 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     // A degraded state must offer restore, not a gather that can only fail.
@@ -244,6 +246,7 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     expect(html).toContain("只检测到一块显示器");
@@ -269,6 +272,7 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     // "working" alone is indistinguishable from "stuck" when one application
@@ -300,6 +304,7 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     // The refusing app is offered; the already-excluded one is not, because a
@@ -331,6 +336,7 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     // "ready" while five windows are displaced is the failure this row prevents.
@@ -358,11 +364,15 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     // The raw code is an implementation detail; the sentence is the product.
     expect(html).toContain("请先恢复");
     expect(html).not.toContain("already_active");
+    // A message about a past failure must be dismissable: once read, it is noise
+    // until the next success overwrites it.
+    expect(html).toContain("知道了");
   });
 
   test("overview offers a way out when restoring is impossible", () => {
@@ -385,6 +395,7 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     // Without this the exit barrier refuses to quit, forever, and the old copy
@@ -417,6 +428,7 @@ describe("pages render", () => {
         onOpenDisplays={noop}
         onExclude={noop}
         onKeepLayout={noop}
+        onDismissError={noop}
       />,
     );
     expect(html).toContain("全部排除");

@@ -278,6 +278,7 @@ pub fn run() {
             commands::activity_log,
             commands::health_check,
             commands::keep_current_layout,
+            commands::dismiss_last_error,
             commands::live_transaction,
         ])
         .setup(|app| {

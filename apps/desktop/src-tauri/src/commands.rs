@@ -1393,6 +1393,18 @@ pub fn activity_log(app: State<'_, AppState>) -> Vec<ActivityEntryDto> {
         .collect()
 }
 
+/// Dismiss the last error shown on the overview.
+///
+/// The message describes the most recent failure, not the current state: once the
+/// user has read it there is nothing to act on. Without a way to clear it, a fixed
+/// problem keeps producing a red line on every visit until the next success
+/// happens to overwrite it.
+#[tauri::command]
+pub fn dismiss_last_error(app: State<'_, AppState>) -> Result<(), String> {
+    note_result(&app, None);
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 pub struct PauseDto {
     pub paused: bool,
