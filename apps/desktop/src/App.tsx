@@ -17,6 +17,7 @@ import {
   type StatusDto,
   type UpdateStatusDto,
 } from "./api";
+import { applyLocale, rememberLocale, resolveLocale, t } from "./i18n";
 import { ExclusionsPage } from "./pages/Exclusions";
 import { GeneralPage } from "./pages/General";
 import { completeOnboarding, Onboarding } from "./pages/Onboarding";
@@ -141,6 +142,16 @@ export default function App() {
     }
   }, [flash]);
 
+  // Applied during render: `t()` reads a module-level value, and an effect ran too
+  // late - the first paint used the old locale and nothing re-rendered, so
+  // switching to English left the interface in Chinese. Safe to mutate here
+  // because the value derives from `settings.language` alone.
+  const locale = settings ? resolveLocale(settings.language) : null;
+  if (locale) applyLocale(locale);
+  useEffect(() => {
+    if (locale) rememberLocale(locale);
+  }, [locale]);
+
   useEffect(() => {
     const theme = settings?.theme ?? "system";
     const root = document.documentElement;
@@ -233,35 +244,35 @@ export default function App() {
         // happened. Say why, and say that the manual button still works.
         flash({
           tone: "neutral",
-          text: `检测到${evidence ?? "远程会话"}，但 30 秒内已经整理过一次，这次跳过。需要时可直接点「整理到目标屏」。`,
+          text: t("检测到{evidence}，但 30 秒内已经整理过一次，这次跳过。需要时可直接点「整理到目标屏」。", { evidence: evidence ?? t("远程会话") }),
         });
         return;
       }
       if (error) {
         flash({
           tone: "warning",
-          text: `自动处理失败：${error}`,
+          text: t("自动处理失败：{message}", { message: error }),
         });
         return;
       }
       if (active && acted) {
         flash({
           tone: "success",
-          text: `检测到${evidence ?? "远程会话"}，已整理 ${applied ?? 0} 个窗口。`,
+          text: t("检测到{evidence}，已整理 {count} 个窗口。", { evidence: evidence ?? t("远程会话"), count: applied ?? 0 }),
         });
         return;
       }
       if (active && evidence) {
         flash({
           tone: "neutral",
-          text: `检测到${evidence}。自动整理已关闭，可点「整理到目标屏」。`,
+          text: t("检测到{evidence}。自动整理已关闭，可点「整理到目标屏」。", { evidence: evidence ?? "" }),
         });
         return;
       }
       if (!active && acted) {
         flash({
           tone: "success",
-          text: `远程会话已结束，已恢复 ${restored ?? 0} 个窗口。`,
+          text: t("远程会话已结束，已恢复 {count} 个窗口。", { count: restored ?? 0 }),
         });
       }
     });
@@ -310,7 +321,7 @@ export default function App() {
               tone: "neutral",
               text:
                 remaining > 0
-                  ? `${remaining} 秒后恢复布局。现在点「整理到目标屏」可以取消。`
+                  ? t("{seconds} 秒后恢复布局。现在点「整理到目标屏」可以取消。", { seconds: remaining })
                   : "正在恢复布局…",
             });
           };
@@ -343,7 +354,7 @@ export default function App() {
         if (rescued > 0) {
           flash({
             tone: "warning",
-            text: `显示器连接发生变化，已把 ${rescued} 个窗口移回可见区域。`,
+            text: t("显示器连接发生变化，已把 {count} 个窗口移回可见区域。", { count: rescued }),
           });
           return;
         }
@@ -365,7 +376,7 @@ export default function App() {
         if (event.payload.outcome === "deferred") {
           flash({
             tone: "neutral",
-            text: `新版本 ${event.payload.version ?? ""} 已下载，将在窗口全部恢复后安装。`,
+            text: t("新版本 {version} 已下载，将在窗口全部恢复后安装。", { version: event.payload.version ?? "" }),
           });
         }
         if (event.payload.outcome === "installed") {
@@ -471,14 +482,14 @@ export default function App() {
         tone: report.pending > 0 ? "warning" : "success",
         text:
           [
-            `已恢复 ${report.restored} 个窗口`,
+            t("已恢复 {count} 个窗口", { count: report.restored }),
             report.kept_user_change > 0
-              ? `保留你的改动 ${report.kept_user_change} 个`
+              ? t("保留你的改动 {count} 个", { count: report.kept_user_change })
               : null,
             report.fallback_visible > 0
-              ? `原屏不可用，回退到可见区域 ${report.fallback_visible} 个`
+              ? t("原屏不可用，回退到可见区域 {count} 个", { count: report.fallback_visible })
               : null,
-            report.pending > 0 ? `仍有 ${report.pending} 个待处理` : null,
+            report.pending > 0 ? t("仍有 {count} 个待处理", { count: report.pending }) : null,
           ]
             .filter(Boolean)
             .join("，") + "。",
@@ -539,7 +550,7 @@ export default function App() {
 
         <nav
           className="flex-1 px-2"
-          aria-label="主导航"
+          aria-label={t("主导航")}
           // Arrow keys move between pages, the way a real sidebar behaves. Tab
           // alone would walk through every item to reach the content, which is
           // four extra stops on every visit.
@@ -562,7 +573,7 @@ export default function App() {
           {groups.map((group) => (
             <div key={group} className="mb-3">
               <p className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
-                {group}
+                {t(group)}
               </p>
               {navigation
                 .filter((item) => item.group === group)
@@ -584,7 +595,7 @@ export default function App() {
                       }`}
                     >
                       <Icon className="size-4 shrink-0 opacity-70" />
-                      {item.label}
+                      {t(item.label)}
                     </button>
                   );
                 })}
@@ -594,13 +605,11 @@ export default function App() {
 
         <div className="border-t border-[var(--color-border)] px-3 py-2.5">
           <Status tone={stateTone[state]}>
-            {stateLabel[state]}
+            {t(stateLabel[state])}
             {status?.paused ? " · 已暂停" : ""}
           </Status>
           {!supported ? (
-            <p className="mt-1 text-[11px] text-[var(--color-muted)]">
-              当前平台未实现窗口控制
-            </p>
+            <p className="mt-1 text-[11px] text-[var(--color-muted)]">{t("当前平台未实现窗口控制")}</p>
           ) : null}
         </div>
       </aside>
@@ -608,7 +617,7 @@ export default function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-5">
           <h1 className="text-[13px] font-semibold">
-            {navigation.find((item) => item.id === page)?.label}
+            {t(navigation.find((item) => item.id === page)?.label ?? "")}
           </h1>
           <div className="flex items-center gap-3">
             <span className="text-[11px] tabular-nums text-[var(--color-muted)]">
@@ -707,9 +716,9 @@ export default function App() {
                       return {
                         tone: result.rejected > 0 ? "warning" : "success",
                         text:
-                          `已整理 ${result.applied} 个窗口` +
-                          (result.gone > 0 ? `，${result.gone} 个已关闭` : "") +
-                          (result.skipped > 0 ? `，跳过 ${result.skipped} 个` : "") +
+                          t("已整理 {count} 个窗口", { count: result.applied }) +
+                          (result.gone > 0 ? t("{count} 个已关闭", { count: result.gone }) : "") +
+                          (result.skipped > 0 ? t("跳过 {count} 个", { count: result.skipped }) : "") +
                           `${refused}。`,
                       };
                     },
@@ -857,7 +866,7 @@ export default function App() {
                     },
                     (next) => ({
                       tone: "neutral",
-                      text: `已切换到显示器 ${next.number ?? "?"}，原有位置记录已保留。`,
+                      text: t("已切换到显示器 {number}，原有位置记录已保留。", { number: next.number ?? "?" }),
                     }),
                   )
                 }
@@ -912,7 +921,7 @@ export default function App() {
                             ? "更新已下载，将在窗口全部恢复后安装。"
                             : result.outcome === "installed"
                               ? "更新已安装，应用即将重启。"
-                              : `检查更新失败：${result.detail || "未知原因"}`,
+                              : t("检查更新失败：{detail}", { detail: result.detail || t("未知原因") }),
                     }),
                   )
                 }
@@ -943,33 +952,25 @@ function PermissionPrompt({
       <p className="text-[13px] font-medium">
         需要「{status.permission_name}」权限才能移动窗口
       </p>
-      <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-        预览、查看显示器与导出诊断仍可使用，只是不会移动窗口。
-      </p>
+      <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">{t("预览、查看显示器与导出诊断仍可使用，只是不会移动窗口。")}</p>
       <div className="mt-2.5 flex gap-1.5">
         <button
           type="button"
           onClick={onRequest}
           disabled={busy}
           className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-40"
-        >
-          请求授权
-        </button>
+        >{t("请求授权")}</button>
         <button
           type="button"
           onClick={onSettings}
           className="rounded-[var(--radius-control)] border border-[var(--color-border-strong)] px-2.5 py-1 text-xs font-medium"
-        >
-          前往系统设置
-        </button>
+        >{t("前往系统设置")}</button>
         <button
           type="button"
           onClick={onRecheck}
           disabled={busy}
           className="rounded-[var(--radius-control)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)]"
-        >
-          重新检查
-        </button>
+        >{t("重新检查")}</button>
       </div>
     </div>
   );
@@ -988,7 +989,7 @@ function PendingCard({
 }) {
   return (
     <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] bg-[var(--color-surface)] px-3.5 py-2.5">
-      <p className="text-[13px] font-medium">上次整理未完成</p>
+      <p className="text-[13px] font-medium">{t("上次整理未完成")}</p>
       <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">
         有 {pending.windows} 个窗口的快照仍待处理
         {pending.may_have_moved ? "，其中部分可能已被移动" : ""}。
@@ -999,17 +1000,13 @@ function PendingCard({
           onClick={onRestore}
           disabled={busy}
           className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-40"
-        >
-          尝试恢复
-        </button>
+        >{t("尝试恢复")}</button>
         <button
           type="button"
           onClick={onDismiss}
           disabled={busy}
           className="rounded-[var(--radius-control)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)]"
-        >
-          稍后处理
-        </button>
+        >{t("稍后处理")}</button>
       </div>
     </div>
   );

@@ -68,6 +68,8 @@ pub struct Settings {
     pub autostart: bool,
     /// Theme preference; `system` follows the OS.
     pub theme: ThemeName,
+    /// Interface language; `system` follows the OS.
+    pub language: LanguageName,
     /// Global shortcut to gather windows, in Tauri's accelerator syntax.
     pub hotkey_gather: Option<String>,
     /// Global shortcut to restore.
@@ -181,6 +183,15 @@ impl From<LayoutMode> for LayoutModeName {
     }
 }
 
+/// Interface language preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LanguageName {
+    System,
+    Zh,
+    En,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeName {
@@ -200,6 +211,7 @@ impl Default for Settings {
             remote_screens: RemoteScreens::Single,
             autostart: false,
             theme: ThemeName::System,
+            language: LanguageName::System,
             hotkey_gather: None,
             hotkey_restore: None,
             restore_delay_secs: 15,

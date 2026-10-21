@@ -55,8 +55,13 @@ describe("accessible names", () => {
 
   test("the navigation is a landmark with a name", async () => {
     const app = await Bun.file(`${ROOT}/src/App.tsx`).text();
-    expect(app).toContain("aria-label=\"主导航\"");
+    // The label is translated, so the literal moved into the catalogue. What must
+    // stay true is that the landmark *has* a name and marks the current page.
+    expect(app).toContain('aria-label={t("主导航")}');
     expect(app).toContain("aria-current");
+
+    const catalogue = await Bun.file(`${ROOT}/src/i18n.ts`).text();
+    expect(catalogue).toContain('"主导航":');
   });
 });
 

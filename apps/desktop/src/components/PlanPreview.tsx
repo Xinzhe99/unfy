@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { PreviewDto, RectDto } from "../api";
 import { skipLabel } from "../api";
 
@@ -26,7 +27,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
   if (placed === 0 && preview.skipped.length === 0) {
     return (
       <p className="rounded-[var(--radius-control)] border border-dashed border-[var(--color-border-strong)] px-4 py-6 text-center text-xs text-[var(--color-muted)]">
-        当前没有可整理的窗口。
+        {t("没有可整理的窗口")}
       </p>
     );
   }
@@ -97,22 +98,22 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
 
       {preview.target_present ? null : (
         <p className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-          你选择的显示器当前不可用，这次会整理到主显示器。
+          {t("你选择的显示器当前不可用，这次会整理到主显示器。")}
         </p>
       )}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--color-muted)]">
         <span>
-          将移动 <strong className="font-medium text-[var(--color-fg)]">{placed}</strong> 个窗口
+          {t("将移动 {count} 个窗口", { count: placed })}
         </span>
         {preview.cascaded ? (
           <span className="text-[var(--color-warning)]">
-            空间不足，窗口将叠放
+            {t("空间不足，窗口将叠放")}
           </span>
         ) : null}
         {preview.unplaced.length > 0 ? (
           <span className="text-[var(--color-warning)]">
-            {preview.unplaced.length} 个窗口放不下，保持原位
+            {t("{count} 个窗口放不下，保持原位", { count: preview.unplaced.length })}
           </span>
         ) : null}
       </div>
@@ -172,7 +173,7 @@ function SkippedList({ skipped }: { skipped: PreviewDto["skipped"] }) {
         <span className="inline-block transition-transform group-open:rotate-90">
           ›
         </span>{" "}
-        已跳过 {skipped.length} 个窗口
+        {t("已跳过 {count} 个窗口", { count: skipped.length })}
       </summary>
       <ul className="mt-1 space-y-1 pl-4">
         {entries.map(([reason, apps]) => (

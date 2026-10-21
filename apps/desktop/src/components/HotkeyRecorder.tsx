@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { toAccelerator } from "../lib/accelerator";
@@ -66,7 +67,7 @@ export function HotkeyRecorder({
       if (!accelerator) {
         // Modifier-only presses are not a shortcut; keep waiting. Saying so
         // avoids the impression that the keystroke was ignored.
-        setError("还需要一个非修饰键");
+        setError(t("还需要一个非修饰键"));
         return;
       }
       onChange(accelerator);
@@ -88,10 +89,10 @@ export function HotkeyRecorder({
   }, [recording, onChange, stop]);
 
   const label = recording
-    ? (error ?? "请按下组合键…")
+    ? (error ?? t("请按下组合键…"))
     : value
       ? formatAccelerator(value)
-      : "未设置";
+      : t("未设置");
 
   return (
     <div className="flex items-center gap-1.5">
@@ -121,7 +122,7 @@ export function HotkeyRecorder({
           onClick={() => onChange(null)}
           className="text-[11px] text-[var(--color-muted)] hover:text-[var(--color-fg)] disabled:opacity-40"
         >
-          清除
+          {t("清除")}
         </button>
       ) : null}
     </div>

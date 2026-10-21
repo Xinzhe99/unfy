@@ -150,6 +150,7 @@ pub struct SaveSettingsRequest {
     pub gap: Option<i32>,
     pub autostart: Option<bool>,
     pub theme: Option<String>,
+    pub language: Option<String>,
     pub hotkey_gather: Option<String>,
     pub hotkey_restore: Option<String>,
     pub restore_delay_secs: Option<u32>,
@@ -533,8 +534,12 @@ fn migrate_blocking(
             kind: crate::activity::Kind::Gather,
             affected: report.applied_count(),
             unsettled: report.failed_count() + report.unplaced.len(),
+            // A count, not prose: the UI renders the sentence in the user's
+            // language. A Chinese string written here would appear verbatim in an
+            // English interface, which is exactly the mixed-language bug this
+            // replaced.
             note: if restored_first > 0 {
-                format!("先恢复了 {restored_first} 个窗口")
+                format!("restored_first={restored_first}")
             } else {
                 String::new()
             },
@@ -805,6 +810,7 @@ pub struct SettingsDto {
     pub gap: i32,
     pub autostart: bool,
     pub theme: String,
+    pub language: String,
     pub hotkey_gather: Option<String>,
     pub hotkey_restore: Option<String>,
     pub restore_delay_secs: u32,
@@ -839,6 +845,12 @@ impl From<&Settings> for SettingsDto {
             margin: s.margin,
             gap: s.gap,
             autostart: s.autostart,
+            language: match s.language {
+                conflux_settings::LanguageName::System => "system",
+                conflux_settings::LanguageName::Zh => "zh",
+                conflux_settings::LanguageName::En => "en",
+            }
+            .into(),
             theme: match s.theme {
                 conflux_settings::ThemeName::System => "system",
                 conflux_settings::ThemeName::Light => "light",
@@ -914,6 +926,14 @@ pub fn save_settings(
     }
     let autostart_changed = request.autostart;
     let hotkeys_changed = request.hotkey_gather.is_some() || request.hotkey_restore.is_some();
+    if let Some(language) = request.language {
+        settings.language = match language.as_str() {
+            "system" => conflux_settings::LanguageName::System,
+            "zh" => conflux_settings::LanguageName::Zh,
+            "en" => conflux_settings::LanguageName::En,
+            other => return Err(format!("unknown language: {other}")),
+        };
+    }
     if let Some(theme) = request.theme {
         settings.theme = match theme.as_str() {
             "system" => conflux_settings::ThemeName::System,

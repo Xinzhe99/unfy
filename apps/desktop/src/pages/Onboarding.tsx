@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useState } from "react";
 
 import { api, type DisplayDto, type SettingsDto } from "../api";
@@ -58,15 +59,9 @@ export function Onboarding({
       title: "这个工具做什么",
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>
-            当你在只有一块屏的设备上远程回这台电脑时，其他屏幕上的窗口是看不见的。
-          </p>
-          <p>
-            Conflux 把这些窗口收拢到你指定的那块屏；远程结束后，再按之前的快照放回去。
-          </p>
-          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">
-            它不传输画面，也不建立远程连接。远程软件照常使用。
-          </p>
+          <p>{t("当你在只有一块屏的设备上远程回这台电脑时，其他屏幕上的窗口是看不见的。")}</p>
+          <p>{t("Conflux 把这些窗口收拢到你指定的那块屏；远程结束后，再按之前的快照放回去。")}</p>
+          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("它不传输画面，也不建立远程连接。远程软件照常使用。")}</p>
         </div>
       ),
     },
@@ -74,9 +69,7 @@ export function Onboarding({
       title: "指定远程端能看到的那块屏",
       body: (
         <div className="space-y-3">
-          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-            下面的画面就是每块屏现在的真实内容。如果分不清是哪一块，先在屏幕上显示编号，再对照远程画面。
-          </p>
+          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">{t("下面的画面就是每块屏现在的真实内容。如果分不清是哪一块，先在屏幕上显示编号，再对照远程画面。")}</p>
           <DisplayCards
             displays={displays}
             target={
@@ -96,7 +89,7 @@ export function Onboarding({
             disabled={busy}
           />
           <Button size="sm" onClick={onIdentify} disabled={busy}>
-            在每块屏幕上显示编号
+            {t("在屏幕上显示编号")}
           </Button>
         </div>
       ),
@@ -105,29 +98,24 @@ export function Onboarding({
       title: "让它自动开始和结束",
       body: (
         <div className="space-y-3">
-          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-            Conflux 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，
-            级别越高覆盖越多，但也越容易误判。
-          </p>
+          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">Conflux 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。</p>
           <div className="rounded-[var(--radius-control)] border border-[var(--color-border)]">
             <DetectChoice
-              title="手动"
-              description="只用快捷键与托盘，检测保持关闭"
+              title={t("手动")}
+              description={t("只用快捷键与托盘，检测保持关闭")}
               selected={settings.auto_detect === "off"}
               disabled={busy}
               onSelect={() => onSetDetect("off", false)}
             />
             <DetectChoice
-              title="自动（推荐）"
-              description="识别远程桌面会话与虚拟显示器，开始时整理、结束时恢复"
+              title={t("自动（推荐）")}
+              description={t("识别远程桌面会话与虚拟显示器，开始时整理、结束时恢复")}
               selected={settings.auto_detect !== "off" && settings.auto_gather}
               disabled={busy}
               onSelect={() => onSetDetect("balanced", true)}
             />
           </div>
-          <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">
-            随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。
-          </p>
+          <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">{t("随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。")}</p>
         </div>
       ),
     },
@@ -135,20 +123,14 @@ export function Onboarding({
       title: "随时可以纠正",
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>
-            整理之后，如果发现远程端看到的不是那块屏，用这两个入口立即纠正：
-          </p>
+          <p>{t("整理之后，如果发现远程端看到的不是那块屏，用这两个入口立即纠正：")}</p>
           <ul className="space-y-1.5 pl-4">
             <li className="list-disc">
-              <strong className="font-medium">托盘菜单</strong>：右键托盘图标，选择「识别屏幕编号」或「重新整理到目标屏」。
-            </li>
+              <strong className="font-medium">{t("托盘菜单")}</strong>{t("：右键托盘图标，选择「识别屏幕编号」或「重新整理到目标屏」。")}</li>
             <li className="list-disc">
-              <strong className="font-medium">快捷键</strong>：在「设置」页录制。默认不占用任何组合键。
-            </li>
+              <strong className="font-medium">{t("快捷键")}</strong>{t("：在「设置」页录制。默认不占用任何组合键。")}</li>
           </ul>
-          <p className="text-[var(--color-muted)]">
-            恢复入口永远免费可用，不需要任何账号。
-          </p>
+          <p className="text-[var(--color-muted)]">{t("恢复入口永远免费可用，不需要任何账号。")}</p>
         </div>
       ),
     },
@@ -156,16 +138,9 @@ export function Onboarding({
       title: "有些窗口不会被移动",
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>
-            少数应用会自己纠正窗口位置，整理时它们留在原处。这不是失败：Conflux
-            会把它们的名字列出来，并给一个「排除」按钮。
-          </p>
-          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">
-            排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。
-          </p>
-          <p className="text-xs text-[var(--color-muted)]">
-            全屏应用、最小化的窗口和系统外壳本来就会跳过。
-          </p>
+          <p>少数应用会自己纠正窗口位置，整理时它们留在原处。这不是失败：Conflux会把它们的名字列出来，并给一个「排除」按钮。</p>
+          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。")}</p>
+          <p className="text-xs text-[var(--color-muted)]">{t("全屏应用、最小化的窗口和系统外壳本来就会跳过。")}</p>
         </div>
       ),
     },
@@ -194,9 +169,7 @@ export function Onboarding({
           type="button"
           onClick={onFinish}
           className="text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"
-        >
-          跳过引导
-        </button>
+        >{t("跳过引导")}</button>
       </div>
 
       <div className="flex flex-1 flex-col justify-center overflow-y-auto px-8 py-6">
@@ -214,9 +187,7 @@ export function Onboarding({
               variant="quiet"
               onClick={() => setStep(Math.max(0, step - 1))}
               disabled={step === 0 || busy}
-            >
-              上一步
-            </Button>
+            >{t("上一步")}</Button>
             <Button
               variant="primary"
               onClick={() => void next()}
@@ -226,9 +197,7 @@ export function Onboarding({
             </Button>
           </div>
           {step === 1 && chosen === null ? (
-            <p className="mt-3 text-center text-xs text-[var(--color-muted)]">
-              请先选择目标显示器。
-            </p>
+            <p className="mt-3 text-center text-xs text-[var(--color-muted)]">{t("请先选择目标显示器。")}</p>
           ) : null}
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { stateLabels } from "../api";
 import type {
   ActivityEntryDto,
@@ -118,14 +119,14 @@ export function OverviewPage({
   return (
     <>
       <Card
-        title="当前状态"
+        title={t("当前状态")}
         aside={
           paused ? (
-            <Status tone="warning">已暂停</Status>
+            <Status tone="warning">{t("已暂停")}</Status>
           ) : state === "error" ? (
-            <Status tone="danger">需要处理</Status>
+            <Status tone="danger">{t("需要处理")}</Status>
           ) : state === "degraded" ? (
-            <Status tone="warning">部分待恢复</Status>
+            <Status tone="warning">{t("部分待恢复")}</Status>
           ) : busyState || busy ? (
             // `busy` covers the window between the click and the engine's first
             // state change, which on a busy desktop can be a second of silence.
@@ -133,32 +134,32 @@ export function OverviewPage({
               {stateLabels[state === "idle" ? "migrating" : state]}
             </Status>
           ) : hasWork ? (
-            <Status tone="live">布局已启用</Status>
+            <Status tone="live">{t("布局已启用")}</Status>
           ) : (
-            <Status tone="success">就绪</Status>
+            <Status tone="success">{t("就绪")}</Status>
           )
         }
       >
         <div className="space-y-0.5">
           <Detail
-            label="目标显示器"
+            label={t("目标显示器")}
             value={targetDisplayName(displays, target)}
             muted={!target}
           />
           <Detail
-            label="已收拢窗口"
+            label={t("已收拢窗口")}
             value={captured > 0 ? captured : "—"}
             muted={captured === 0}
           />
           {pending > 0 ? (
             <Detail
-              label="待恢复窗口"
+              label={t("待恢复窗口")}
               value={`${pending} 个`}
             />
           ) : null}
-          <Detail label="布局" value={layoutLabel(settings?.layout_mode)} />
+          <Detail label={t("布局")} value={layoutLabel(settings?.layout_mode)} />
           <Detail
-            label="远程检测"
+            label={t("远程检测")}
             value={
               settings?.remote_active
                 ? (settings.remote_evidence ?? "已检测到")
@@ -177,24 +178,24 @@ export function OverviewPage({
           disabled={busy}
           className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-[var(--color-fg-soft)] hover:text-[var(--color-fg)] disabled:opacity-40"
         >
-          {settings?.remote_active ? "结束远程会话标记" : "标记为远程会话"}
+          {t(settings?.remote_active ? "结束远程会话标记" : "标记为远程会话")}
           <IconArrowRight className="size-3" />
         </button>
 
         {target && !target.present ? (
           <div className="mt-2.5 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
             <p className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
-              保存的目标显示器（
-              {target.number ? `显示器 ${target.number}` : "已保存的显示器"}
-              ）已断开，整理时会改用主显示器。
+              {t("保存的目标显示器（{display}）已断开，整理时会改用主显示器。", {
+                display: target.number
+                  ? t("显示器 {number}", { number: target.number })
+                  : t("已保存的显示器"),
+              })}
             </p>
             <button
               type="button"
               onClick={onOpenDisplays}
               className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-[var(--color-fg)] hover:underline"
-            >
-              重新选择目标显示器
-              <IconArrowRight className="size-3" />
+            >{t("重新选择目标显示器")}<IconArrowRight className="size-3" />
             </button>
           </div>
         ) : null}
@@ -208,9 +209,7 @@ export function OverviewPage({
               type="button"
               onClick={onDismissError}
               className="shrink-0 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-fg)]"
-            >
-              知道了
-            </button>
+            >{t("知道了")}</button>
           </div>
         ) : null}
 
@@ -225,34 +224,24 @@ export function OverviewPage({
         {!settings?.hotkey_gather &&
         settings?.auto_detect === "off" &&
         !hasWork ? (
-          <p className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-border-strong)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-            现在只能从本窗口或托盘触发整理。设置一个快捷键、或打开远程检测，之后就不必先切回这个窗口。
-          </p>
+          <p className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-border-strong)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">{t("现在只能从本窗口或托盘触发整理。设置一个快捷键、或打开远程检测，之后就不必先切回这个窗口。")}</p>
         ) : null}
 
         {singleDisplay && !hasWork ? (
-          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-            当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。
-          </p>
+          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。</p>
         ) : null}
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {blocked ? (
             <>
-              <Button onClick={onRestore} disabled={busy}>
-                尝试恢复
-              </Button>
-              <Button onClick={onRescue} disabled={busy || !supported}>
-                救援越界窗口
-              </Button>
+              <Button onClick={onRestore} disabled={busy}>{t("尝试恢复")}</Button>
+              <Button onClick={onRescue} disabled={busy || !supported}>{t("救援越界窗口")}</Button>
               <Button
                 variant="quiet"
                 size="sm"
                 onClick={onExport}
                 disabled={busy}
-              >
-                导出诊断包
-              </Button>
+              >{t("导出诊断包")}</Button>
             </>
           ) : hasWork ? (
             <>
@@ -278,9 +267,7 @@ export function OverviewPage({
                 size="sm"
                 onClick={onKeepLayout}
                 disabled={busy || busyState}
-              >
-                保留当前布局
-              </Button>
+              >{t("保留当前布局")}</Button>
             </>
           ) : (
             <>
@@ -291,18 +278,16 @@ export function OverviewPage({
                 loading={busy}
               >
                 {progress
-                  ? `正在整理 ${progress.done}/${progress.total}…`
+                  ? t("正在整理 {done}/{total}…", { done: progress.done, total: progress.total })
                   : busy
-                    ? "正在整理…"
-                    : "整理到目标屏"}
+                    ? t("正在整理…")
+                    : t("整理到目标屏")}
               </Button>
               <Button
                 onClick={onPreview}
                 disabled={busy || !supported}
                 icon={<IconEye className="size-3.5" />}
-              >
-                预览
-              </Button>
+              >{t("预览")}</Button>
             </>
           )}
           <Button
@@ -310,19 +295,15 @@ export function OverviewPage({
             size="sm"
             onClick={onIdentify}
             disabled={busy}
-          >
-            识别屏幕编号
-          </Button>
+          >{t("识别屏幕编号")}</Button>
         </div>
-        <p className="mt-1.5 text-[11px] text-[var(--color-muted)]">
-          识别编号会在每块屏幕中央短暂显示数字，用来对照远程画面确认是哪一块。
-        </p>
+        <p className="mt-1.5 text-[11px] text-[var(--color-muted)]">{t("识别编号会在每块屏幕中央短暂显示数字，用来对照远程画面确认是哪一块。")}</p>
       </Card>
 
       {preview ? (
         <Card
-          title="布局预览"
-          description="预览不会移动任何窗口。这是点击预览那一刻的快照；离开本页后会重新计算。"
+          title={t("布局预览")}
+          description={t("预览不会移动任何窗口。这是点击预览那一刻的快照；离开本页后会重新计算。")}
           aside={
             // A plain count, not a `Status`: the dot in that component means "state
             // of the engine", and a grey dot next to a window count reads as
@@ -339,8 +320,8 @@ export function OverviewPage({
 
       {lastRefused.length > 0 ? (
         <Card
-          title="没有接受位置调整的应用"
-          description="这些应用会自己纠正窗口位置。排除它们可以避免每次都重试。"
+          title={t("没有接受位置调整的应用")}
+          description={t("这些应用会自己纠正窗口位置。排除它们可以避免每次都重试。")}
           aside={
             lastRefused.length > 1 ? (
               <Button
@@ -348,9 +329,7 @@ export function OverviewPage({
                 variant="quiet"
                 disabled={busy}
                 onClick={() => onExclude(lastRefused)}
-              >
-                全部排除
-              </Button>
+              >{t("全部排除")}</Button>
             ) : null
           }
         >
@@ -368,9 +347,7 @@ export function OverviewPage({
                   variant="quiet"
                   disabled={busy}
                   onClick={() => onExclude([app])}
-                >
-                  排除
-                </Button>
+                >{t("排除")}</Button>
               </li>
             ))}
           </ul>
@@ -378,19 +355,17 @@ export function OverviewPage({
       ) : null}
 
       <Card
-        title="最近活动"
+        title={t("最近活动")}
         aside={
           activity.length > 0 ? (
             <span className="text-[11px] tabular-nums text-[var(--color-muted)]">
-              最近 {activity.length} 次
+              {t("最近 {count} 次", { count: activity.length })}
             </span>
           ) : null
         }
       >
         {activity.length === 0 ? (
-          <p className="py-1 text-xs text-[var(--color-muted)]">
-            还没有执行过操作。整理或恢复之后，这里会记录每次的结果。
-          </p>
+          <p className="py-1 text-xs text-[var(--color-muted)]">{t("还没有执行过操作。整理或恢复之后，这里会记录每次的结果。")}</p>
         ) : (
           <ul>
             {activity.slice(0, 8).map((entry) => (
@@ -407,7 +382,7 @@ export function OverviewPage({
                   ) : null}
                   {entry.note ? (
                     <span className="ml-1.5 text-[11px] text-[var(--color-muted)]">
-                      {entry.note}
+                      {renderNote(entry.note)}
                     </span>
                   ) : null}
                 </div>
@@ -420,37 +395,24 @@ export function OverviewPage({
         )}
       </Card>
 
-      <Card title="工具">
+      <Card title={t("工具")}>
         {supported ? null : (
-          <EmptyState title="当前平台尚未实现窗口控制">
-            界面可以浏览，但不会移动任何窗口。
-          </EmptyState>
+          <EmptyState title="当前平台尚未实现窗口控制">界面可以浏览，但不会移动任何窗口。</EmptyState>
         )}
         <div className="flex flex-wrap gap-1.5">
-          <Button size="sm" onClick={onRescue} disabled={busy || !supported}>
-            救援越界窗口
-          </Button>
-          <Button size="sm" variant="quiet" onClick={onPreviewDiagnostics} disabled={busy}>
-            查看诊断内容
-          </Button>
-          <Button size="sm" onClick={onExport} disabled={busy}>
-            导出诊断包
-          </Button>
-          <Button size="sm" variant="quiet" onClick={onOpenConfigDir} disabled={busy}>
-            打开配置目录
-          </Button>
+          <Button size="sm" onClick={onRescue} disabled={busy || !supported}>{t("救援越界窗口")}</Button>
+          <Button size="sm" variant="quiet" onClick={onPreviewDiagnostics} disabled={busy}>{t("查看诊断内容")}</Button>
+          <Button size="sm" onClick={onExport} disabled={busy}>{t("导出诊断包")}</Button>
+          <Button size="sm" variant="quiet" onClick={onOpenConfigDir} disabled={busy}>{t("打开配置目录")}</Button>
         </div>
         <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-[var(--color-muted)]">
           <IconInfo className="mt-px size-3 shrink-0" />
-          「救援」把停留在不存在坐标上的窗口移回可见区域。诊断包只含版本、显示器分辨率与设置项，
-          不含窗口标题、文件路径或屏幕画面。
+          {t("「救援」把停留在不存在坐标上的窗口移回可见区域。诊断包只含版本、显示器分辨率与设置项，不含窗口标题、文件路径或屏幕画面。")}
         </p>
 
         {diagnosticsPreview ? (
           <details className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)]">
-            <summary className="cursor-pointer select-none px-3 py-2 text-xs text-[var(--color-fg-soft)]">
-              诊断包内容（导出时就是这个文件）
-            </summary>
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs text-[var(--color-fg-soft)]">{t("诊断包内容（导出时就是这个文件）")}</summary>
             <pre className="max-h-64 overflow-auto border-t border-[var(--color-border)] px-3 py-2 font-mono text-[11px] leading-relaxed text-[var(--color-fg-soft)]">
               {diagnosticsPreview}
             </pre>
@@ -473,21 +435,21 @@ export function targetDisplayName(
   displays: DisplayDto[],
   target: TargetDto | null | undefined,
 ): string {
-  if (!target) return "跟随主显示器";
+  if (!target) return t("跟随主显示器");
   // Prefer the backend's number for the target itself: it is the live value when
   // the display is present and the saved one when it is not, so the name does not
   // change depending on whether the monitor is plugged in.
   if (target.number) {
     const display = displays.find((d) => d.native_id === target.native_id);
-    return display?.primary
-      ? `显示器 ${target.number}（主）`
-      : `显示器 ${target.number}`;
+    return t(display?.primary ? "显示器 {number}（主）" : "显示器 {number}", {
+      number: target.number,
+    });
   }
   const display = displays.find((d) => d.native_id === target.native_id);
-  if (!display) return target.present ? "已选择" : "不可用";
-  return display.primary
-    ? `显示器 ${display.number}（主）`
-    : `显示器 ${display.number}`;
+  if (!display) return t(target.present ? "已选择" : "不可用");
+  return t(display.primary ? "显示器 {number}（主）" : "显示器 {number}", {
+    number: display.number,
+  });
 }
 
 /**
@@ -524,25 +486,27 @@ function humanError(raw: string): string {
 
 /** One line per history entry: what happened and how many windows it touched. */
 function activityLabel(entry: ActivityEntryDto): string {
-  const name = {
-    gather: "整理",
-    restore: "恢复",
-    rescue: "救援越界窗口",
-    auto_gather: "自动整理",
-    auto_restore: "自动恢复",
-    pause: "暂停状态变更",
-    keep_layout: "保留当前布局",
-  }[entry.kind];
+  const name = t(
+    {
+      gather: "整理",
+      restore: "恢复",
+      rescue: "救援越界窗口",
+      auto_gather: "自动整理",
+      auto_restore: "自动恢复",
+      pause: "暂停状态变更",
+      keep_layout: "保留当前布局",
+    }[entry.kind],
+  );
   const trigger =
     entry.trigger === "hotkey"
-      ? "（快捷键）"
+      ? t("（快捷键）")
       : entry.trigger === "tray"
-        ? "（托盘）"
+        ? t("（托盘）")
         : "";
   if (entry.kind === "pause" || entry.kind === "keep_layout") {
     return `${name}${trigger}`;
   }
-  return `${name}${trigger} · ${entry.affected} 个窗口`;
+  return t("{name}{trigger} · {count} 个窗口", { name, trigger, count: entry.affected });
 }
 
 /**
@@ -552,6 +516,23 @@ function activityLabel(entry: ActivityEntryDto): string {
  * happened yesterday is worse: the user cannot tell whether a restore happened
  * before or after they last touched the machine.
  */
+/**
+ * Render a structured note in the current language.
+ *
+ * The backend records counts (`restored_first=2`) rather than prose, so the
+ * sentence can be translated. A Chinese sentence written on the Rust side appeared
+ * verbatim in the English interface.
+ */
+function renderNote(note: string): string {
+  if (!note) return "";
+  const match = note.match(/^restored_first=(\d+)$/);
+  if (match) {
+    return t("先恢复了 {count} 个窗口", { count: Number(match[1]) });
+  }
+  // Anything else is a note from an older build; show it rather than drop it.
+  return note;
+}
+
 function relativeTime(at: number): string {
   const then = new Date(at * 1000);
   const now = new Date();
@@ -562,30 +543,36 @@ function relativeTime(at: number): string {
   const time = `${String(then.getHours()).padStart(2, "0")}:${String(
     then.getMinutes(),
   ).padStart(2, "0")}`;
-  if (sameDay) return `今天 ${time}`;
-  return `${then.getMonth() + 1}月${then.getDate()}日 ${time}`;
+  if (sameDay) return t("今天 {time}", { time });
+  return t("{month}月{day}日 {time}", {
+    month: then.getMonth() + 1,
+    day: then.getDate(),
+    time,
+  });
 }
 
 function detectStatusLabel(settings: SettingsDto | null): string {
   if (!settings) return "—";
-  if (settings.auto_detect === "off") return "已关闭";
-  const level =
+  if (settings.auto_detect === "off") return t("已关闭");
+  const level = t(
     settings.auto_detect === "conservative"
       ? "保守"
       : settings.auto_detect === "aggressive"
         ? "激进"
-        : "均衡";
-  if (!settings.auto_gather && !settings.auto_restore) return `监视中（${level}，未启用自动操作）`;
-  return `监视中（${level}）`;
+        : "均衡",
+  );
+  if (!settings.auto_gather && !settings.auto_restore)
+    return t("监视中（{level}，未启用自动操作）", { level });
+  return t("监视中（{level}）", { level });
 }
 
 function layoutLabel(mode: SettingsDto["layout_mode"] | undefined): string {
   switch (mode) {
     case "primary_side":
-      return "主次分区";
+      return t("主次");
     case "preserve_order":
-      return "保持顺序";
+      return t("顺序");
     default:
-      return "网格";
+      return t("网格");
   }
 }

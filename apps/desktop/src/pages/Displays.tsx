@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { DisplayDto, SettingsDto, TargetDto } from "../api";
 import { DisplayCards } from "../components/DisplayCards";
 import { Button, Card, Segmented, SettingRow } from "../components/ui";
@@ -33,7 +34,7 @@ export function DisplaysPage({
   onSave: (patch: Partial<SettingsDto>) => void;
 }) {
   if (!settings) {
-    return <p className="text-xs text-[var(--color-muted)]">正在读取设置…</p>;
+    return <p className="text-xs text-[var(--color-muted)]">{t("正在读取设置…")}</p>;
   }
 
   const weak = displays.find(
@@ -43,18 +44,14 @@ export function DisplaysPage({
   return (
     <>
       <Card
-        title="目标显示器"
-        description="选择远程端能看到的那块屏。更换屏幕后需要重新选择。"
+        title={t("目标显示器")}
+        description={t("选择远程端能看到的那块屏。更换屏幕后需要重新选择。")}
         aside={
           <div className="flex gap-1.5">
             {displays.length > 1 ? (
-              <Button size="sm" onClick={onCycle} disabled={busy}>
-                切换到下一块屏
-              </Button>
+              <Button size="sm" onClick={onCycle} disabled={busy}>{t("切换到下一块屏")}</Button>
             ) : null}
-            <Button size="sm" onClick={onIdentify} disabled={busy}>
-              在屏幕上显示编号
-            </Button>
+            <Button size="sm" onClick={onIdentify} disabled={busy}>{t("在屏幕上显示编号")}</Button>
           </div>
         }
       >
@@ -65,23 +62,19 @@ export function DisplaysPage({
           onSelect={onSelect}
           disabled={busy}
         />
-        <p className="mt-2.5 text-[11px] leading-relaxed text-[var(--color-muted)]">
-          卡片上的数字与「在屏幕上显示编号」时出现的一致，用远程画面里的数字对照即可。
-        </p>
+        <p className="mt-2.5 text-[11px] leading-relaxed text-[var(--color-muted)]">{t("卡片上的数字与「在屏幕上显示编号」时出现的一致，用远程画面里的数字对照即可。")}</p>
         {weak ? (
-          <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-warning)]">
-            这块显示器的身份只能靠分辨率识别，恢复时会放回可见区域，而不是精确的原位置。
-          </p>
+          <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-warning)]">{t("这块显示器的身份只能靠分辨率识别，恢复时会放回可见区域，而不是精确的原位置。")}</p>
         ) : null}
       </Card>
 
       <Card
-        title="布局"
-        description="窗口如何排列在目标屏上。空间不足时自动降级，不会压成不可用的小格。"
+        title={t("布局")}
+        description={t("窗口如何排列在目标屏上。空间不足时自动降级，不会压成不可用的小格。")}
       >
-        <SettingRow label="排列方式" hint={layoutDescription(settings.layout_mode)}>
+        <SettingRow label={t("排列方式")} hint={layoutDescription(settings.layout_mode)}>
           <Segmented
-            label="布局方式"
+            label={t("布局方式")}
             value={settings.layout_mode}
             disabled={busy}
             onChange={(layout_mode) => onSave({ layout_mode })}
@@ -95,7 +88,7 @@ export function DisplaysPage({
 
         <div className="border-t border-[var(--color-border)]" />
 
-        <SettingRow label="边距" hint="窗口与屏幕边缘的距离">
+        <SettingRow label={t("边距")} hint={t("窗口与屏幕边缘的距离")}>
           <NumberInput
             value={settings.margin}
             min={0}
@@ -108,7 +101,7 @@ export function DisplaysPage({
 
         <div className="border-t border-[var(--color-border)]" />
 
-        <SettingRow label="窗口间距" hint="相邻窗口之间的距离">
+        <SettingRow label={t("窗口间距")} hint={t("相邻窗口之间的距离")}>
           <NumberInput
             value={settings.gap}
             min={0}

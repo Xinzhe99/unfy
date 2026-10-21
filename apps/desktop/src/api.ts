@@ -123,6 +123,8 @@ export interface SettingsDto {
   gap: number;
   autostart: boolean;
   theme: "system" | "light" | "dark";
+  /** Interface language; `system` follows the OS. */
+  language: "system" | "zh" | "en";
   hotkey_gather: string | null;
   hotkey_restore: string | null;
   restore_delay_secs: number;

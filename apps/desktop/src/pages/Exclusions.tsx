@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useState } from "react";
 
 import type { AppDto, SettingsDto } from "../api";
@@ -28,7 +29,7 @@ export function ExclusionsPage({
   const [draft, setDraft] = useState("");
 
   if (!settings) {
-    return <p className="text-xs text-[var(--color-muted)]">正在读取设置…</p>;
+    return <p className="text-xs text-[var(--color-muted)]">{t("正在读取设置…")}</p>;
   }
 
   const rules = settings.excluded_apps;
@@ -48,14 +49,12 @@ export function ExclusionsPage({
   return (
     <>
       <Card
-        title="排除的应用"
-        description="这些应用的窗口不会在整理时被移动，也不会在恢复时被处理。"
+        title={t("排除的应用")}
+        description={t("这些应用的窗口不会在整理时被移动，也不会在恢复时被处理。")}
         aside={<span className="text-[11px] tabular-nums text-[var(--color-muted)]">{rules.length} 条规则</span>}
       >
         {rules.length === 0 ? (
-          <p className="py-1 text-xs text-[var(--color-muted)]">
-            还没有排除任何应用。
-          </p>
+          <p className="py-1 text-xs text-[var(--color-muted)]">{t("还没有排除任何应用。")}</p>
         ) : (
           <ul className="space-y-1">
             {rules.map((rule) => (
@@ -69,9 +68,7 @@ export function ExclusionsPage({
                   disabled={busy}
                   onClick={() => setRules(rules.filter((r) => r !== rule))}
                   className="shrink-0 text-[11px] text-[var(--color-muted)] transition-colors hover:text-[var(--color-danger)] disabled:opacity-40"
-                >
-                  移除
-                </button>
+                >{t("移除")}</button>
               </li>
             ))}
           </ul>
@@ -87,38 +84,30 @@ export function ExclusionsPage({
           <input
             value={draft}
             onChange={(event) => setDraft(event.currentTarget.value)}
-            placeholder="例如 game.exe"
+            placeholder={t("例如 game.exe")}
             spellCheck={false}
             disabled={busy}
             className="h-7 min-w-0 flex-1 rounded-[var(--radius-control)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 font-mono text-xs outline-none placeholder:font-sans placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)]"
           />
-          <Button size="sm" type="submit" disabled={busy || draft.trim() === ""}>
-            添加
-          </Button>
+          <Button size="sm" type="submit" disabled={busy || draft.trim() === ""}>{t("添加")}</Button>
         </form>
-        <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--color-muted)]">
-          匹配可执行文件名，不区分大小写。全屏应用与工具窗口本来就不会被移动。
-        </p>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--color-muted)]">{t("匹配可执行文件名，不区分大小写。全屏应用与工具窗口本来就不会被移动。")}</p>
       </Card>
 
       <Card
-        title="正在运行"
-        description="从当前有窗口的应用中选择，避免手写文件名出错。"
+        title={t("正在运行")}
+        description={t("从当前有窗口的应用中选择，避免手写文件名出错。")}
         aside={
           <Button
             size="sm"
             variant="quiet"
             disabled={busy || rules.length === 0}
             onClick={() => onSave({ excluded_apps: [] })}
-          >
-            清空规则
-          </Button>
+          >{t("清空规则")}</Button>
         }
       >
         {runningApps.length === 0 ? (
-          <p className="py-1 text-xs text-[var(--color-muted)]">
-            没有检测到有窗口的应用。应用打开后回到这一页会自动刷新。
-          </p>
+          <p className="py-1 text-xs text-[var(--color-muted)]">{t("没有检测到有窗口的应用。应用打开后回到这一页会自动刷新。")}</p>
         ) : (
           <ul>
             {runningApps.map((app, index) => (

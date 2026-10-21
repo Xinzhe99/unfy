@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { DisplayDto, TargetDto } from "../api";
 
 /**
@@ -33,7 +34,7 @@ export function DisplayCards({
   if (displays.length === 0) {
     return (
       <p className="px-1 py-6 text-center text-xs text-[var(--color-muted)]">
-        未检测到显示器。
+        {t("未检测到显示器。")}
       </p>
     );
   }
@@ -78,7 +79,7 @@ export function DisplayCards({
               onClick={() => onSelect(display.native_id)}
               disabled={disabled}
               aria-pressed={selected}
-              aria-label={`显示器 ${display.number}${display.primary ? "，主显示器" : ""}，${display.width}×${display.height}`}
+              aria-label={`${t(display.primary ? "显示器 {number}（主）" : "显示器 {number}", { number: display.number })}，${display.width}×${display.height}`}
               className={`flex size-full flex-col overflow-hidden rounded-[var(--radius-control)] border text-left transition-colors disabled:cursor-not-allowed ${
                 selected
                   ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"
@@ -95,7 +96,7 @@ export function DisplayCards({
                   />
                 ) : (
                   <div className="flex size-full items-center justify-center text-[11px] text-[var(--color-muted)]">
-                    无法截取画面
+                    {t("无法截取画面")}
                   </div>
                 )}
                 {/* The number matches the badge flashed on the physical screen.
@@ -115,7 +116,7 @@ export function DisplayCards({
               <div className="flex shrink-0 items-center justify-between gap-2 px-2.5 py-1.5">
                 <div className="min-w-0">
                   <p className="truncate text-xs font-medium">
-                    {display.primary ? `显示器 ${display.number}（主）` : `显示器 ${display.number}`}
+                    {t(display.primary ? "显示器 {number}（主）" : "显示器 {number}", { number: display.number })}
                   </p>
                   <p className="truncate text-[11px] tabular-nums text-[var(--color-muted)]">
                     {display.width}×{display.height}
@@ -126,7 +127,7 @@ export function DisplayCards({
                 </div>
                 {selected ? (
                   <span className="shrink-0 text-[11px] font-medium text-[var(--color-fg-soft)]">
-                    使用中
+                    {t("使用中")}
                   </span>
                 ) : null}
               </div>
