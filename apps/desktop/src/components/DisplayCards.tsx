@@ -49,26 +49,16 @@ export function DisplayCards({
   );
   const layout = relativeLayout(ordered);
 
+  // Each row gets a fixed height, and the box is that many rows tall. Deriving
+  // the height from a percentage of the arrangement's aspect ratio produced a
+  // 40 px card for a side-by-side pair, because two 16:9 monitors in one box
+  // leave only a quarter of the height each. A pixel budget per row cannot
+  // collapse: the layout above it decides only horizontal placement.
+  const ROW_HEIGHT_REM = 9;
   return (
     <div
       className="relative w-full"
-      style={{
-        // Fixed height rather than an aspect ratio: the cards must stay tall
-        // enough to read the screenshot, and an aspect ratio derived from the
-        // arrangement collapses to a thin strip for a wide side-by-side pair
-        // (two 1920-wide monitors in a 2:1 box is 40 px tall in this column).
-        //
-        // A single row of tall displays would otherwise leave the top half of a
-        // 14 rem box empty, so the height follows the tallest card actually
-        // drawn: cell height is a fraction of the container, so the container has
-        // to be tall enough for the tallest fraction to read as a screenshot.
-        // Sized for the tallest card actually drawn: cell heights are fractions
-        // of this box, so a side-by-side pair (cells at 50 %) needs half the
-        // height of a stacked pair (cells at 100 %). The lower clamp keeps a
-        // 3-wide arrangement readable; the upper one stops a vertical pair from
-        // pushing the rest of the page below the fold.
-        height: `${Math.min(16, Math.max(8, 8 / Math.max(...layout.cells.map((c) => c.height))))}rem`,
-      }}
+      style={{ height: `${ROW_HEIGHT_REM * layout.rows}rem` }}
     >
       {ordered.map((display, index) => {
         const selected = target?.native_id === display.native_id;
@@ -83,7 +73,9 @@ export function DisplayCards({
               left: `${cell.left * 100}%`,
               top: `${cell.top * 100}%`,
               width: `${cell.width * 100}%`,
-              height: `${cell.height * 100}%`,
+              // Height stays proportional to the real display when there is more
+              // than one row, but never below a readable minimum.
+              height: `${Math.max(78, cell.height * 100)}%`,
             }}
           >
             <button
@@ -176,6 +168,8 @@ function relativeLayout(displays: DisplayDto[]) {
 
   return {
     rows,
+    boxWidth: (maxX - minX) / extent,
+    boxHeight: (maxY - minY) / extent,
     cells: displays.map((d) => ({
       left: (d.origin_x - minX) / extent,
       top: (d.origin_y - minY) / extent,
