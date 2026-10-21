@@ -31,6 +31,13 @@ pub struct DisplayThumbnail {
     pub native_id: String,
     /// `data:image/png;base64,...`, ready for an `<img src>`.
     pub data_url: String,
+    /// True when the capture came back entirely black.
+    ///
+    /// A monitor that is powered off, on another input, or a disconnected virtual
+    /// display still enumerates and captures - as solid black. The picker shows a
+    /// black card with a number on it, which reads as a broken preview unless it
+    /// says what it is.
+    pub blank: bool,
 }
 
 /// Longest edge of the returned thumbnail, in pixels.
@@ -57,20 +64,28 @@ pub fn display_thumbnails() -> Vec<DisplayThumbnail> {
         .into_iter()
         .filter_map(|display| {
             let bounds = display.bounds;
-            let png = capture_region(bounds.left, bounds.top, bounds.width(), bounds.height())?;
+            let captured =
+                capture_region(bounds.left, bounds.top, bounds.width(), bounds.height())?;
             Some(DisplayThumbnail {
                 native_id: display.key.native_id,
                 data_url: format!(
                     "data:image/png;base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(png)
+                    base64::engine::general_purpose::STANDARD.encode(captured.png)
                 ),
+                blank: captured.blank,
             })
         })
         .collect()
 }
 
+/// A captured frame, scaled down, with the verdict on whether it holds anything.
+struct Captured {
+    png: Vec<u8>,
+    blank: bool,
+}
+
 /// Capture `width x height` at `(x, y)` and scale it down to [`MAX_EDGE`].
-fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Option<Vec<u8>> {
+fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Option<Captured> {
     if width <= 0 || height <= 0 {
         return None;
     }
@@ -138,27 +153,59 @@ fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Option<Vec<u8>> {
         }
 
         // BGRA -> RGBA, then downscale by integer step and encode as PNG.
-        let (out_w, out_h) = scaled_size(width, height);
-        let step_x = width as f32 / out_w as f32;
-        let step_y = height as f32 / out_h as f32;
-        let mut rgba = Vec::with_capacity((out_w * out_h * 4) as usize);
-        for row in 0..out_h {
-            let source_row = ((row as f32 * step_y) as i32).min(height - 1);
-            for col in 0..out_w {
-                let source_col = ((col as f32 * step_x) as i32).min(width - 1);
-                let index = ((source_row * width + source_col) * 4) as usize;
-                rgba.extend_from_slice(&[pixels[index + 2], pixels[index + 1], pixels[index], 255]);
-            }
-        }
-
+        let (rgba, out_w, out_h, blank) = downscale_bgra(&pixels, width, height);
         let image = rayless::Rgba {
             width: out_w as u32,
             height: out_h as u32,
             data: rgba,
         };
-        image.to_png()
+        Some(Captured {
+            png: image.to_png()?,
+            blank,
+        })
     }
 }
+
+/// Downscale a top-down BGRA frame to RGBA, and report whether it shows anything.
+///
+/// Separate from the capture so the "is this display showing nothing" rule can be
+/// tested without a screen: it decides whether the picker explains a black card or
+/// leaves the user wondering.
+fn downscale_bgra(bgra: &[u8], width: i32, height: i32) -> (Vec<u8>, i32, i32, bool) {
+    let (out_w, out_h) = scaled_size(width, height);
+    let step_x = width as f32 / out_w as f32;
+    let step_y = height as f32 / out_h as f32;
+    let mut rgba = Vec::with_capacity((out_w * out_h * 4) as usize);
+    // Every sampled pixel being black means the display is showing nothing.
+    // Anything at all - a taskbar, a wallpaper, a window - clears the flag, so a
+    // dark theme is never mistaken for a dead monitor.
+    let mut blank = true;
+    for row in 0..out_h {
+        let source_row = ((row as f32 * step_y) as i32).min(height - 1);
+        for col in 0..out_w {
+            let source_col = ((col as f32 * step_x) as i32).min(width - 1);
+            let index = ((source_row * width + source_col) * 4) as usize;
+            let (b, g, r) = (bgra[index], bgra[index + 1], bgra[index + 2]);
+            if blank && pixel_shows_content(r, g, b) {
+                blank = false;
+            }
+            rgba.extend_from_slice(&[r, g, b, 255]);
+        }
+    }
+    (rgba, out_w, out_h, blank)
+}
+
+/// Whether one pixel shows anything at all.
+fn pixel_shows_content(r: u8, g: u8, b: u8) -> bool {
+    r >= NEAR_BLACK || g >= NEAR_BLACK || b >= NEAR_BLACK
+}
+
+/// Channel value at or above which a pixel counts as displaying something.
+///
+/// Eight, not zero: a powered-off panel and a Virtual Display Driver with no
+/// streaming client both capture as 0, while video compression artefacts around
+/// black text sit above this.
+const NEAR_BLACK: u8 = 8;
 
 /// Fit within [`MAX_EDGE`] while preserving the aspect ratio.
 fn scaled_size(width: i32, height: i32) -> (i32, i32) {
@@ -280,5 +327,74 @@ mod rayless {
         fn finish(&self) -> u32 {
             self.value ^ 0xffff_ffff
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A top-down BGRA frame from a list of RGB triples.
+    fn frame(pixels: &[(u8, u8, u8)], width: i32, height: i32) -> Vec<u8> {
+        assert_eq!(pixels.len() as i32, width * height);
+        let mut out = Vec::new();
+        for (r, g, b) in pixels {
+            out.extend_from_slice(&[*b, *g, *r, 255]);
+        }
+        out
+    }
+
+    #[test]
+    fn a_black_frame_is_reported_as_blank() {
+        let bgra = frame(&[(0, 0, 0); 4], 2, 2);
+        let (rgba, w, h, blank) = downscale_bgra(&bgra, 2, 2);
+        assert!(blank);
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(rgba.len(), 2 * 2 * 4);
+        // Alpha is forced opaque: a fully transparent thumbnail renders as a hole.
+        assert_eq!(&rgba[3..4], &[255]);
+    }
+
+    #[test]
+    fn one_lit_pixel_is_enough_to_disqualify_blank() {
+        let mut pixels = vec![(0u8, 0u8, 0u8); 4];
+        pixels[3] = (255, 255, 255);
+        let (_, _, _, blank) = downscale_bgra(&frame(&pixels, 2, 2), 2, 2);
+        assert!(!blank, "a taskbar or a cursor means the display is on");
+    }
+
+    #[test]
+    fn a_single_channel_above_the_threshold_counts_as_content() {
+        // Video compression leaves near-black pixels around dark text; only a
+        // truly dark frame is treated as "nothing is showing".
+        let (_, _, _, just_under) = downscale_bgra(&frame(&[(7, 7, 7); 4], 2, 2), 2, 2);
+        assert!(just_under, "below the threshold is still blank");
+        let (_, _, _, at_threshold) = downscale_bgra(&frame(&[(8, 0, 0); 4], 2, 2), 2, 2);
+        assert!(!at_threshold, "at the threshold is content");
+    }
+
+    #[test]
+    fn channels_are_reordered_from_bgra_to_rgba() {
+        // Getting this backwards tints every thumbnail blue, which is subtle enough
+        // to ship.
+        let (rgba, _, _, _) = downscale_bgra(&frame(&[(10, 20, 30)], 1, 1), 1, 1);
+        assert_eq!(rgba, vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn a_large_frame_is_scaled_to_the_max_edge() {
+        let bgra = frame(&[(200, 100, 50); 1920 * 1080], 1920, 1080);
+        let (rgba, w, h, blank) = downscale_bgra(&bgra, 1920, 1080);
+        assert!(!blank);
+        // The longest edge is fitted, so a 16:9 frame is 256 wide and 144 tall.
+        assert_eq!(w, MAX_EDGE);
+        assert_eq!(h, 144);
+        assert_eq!(rgba.len() as i32, w * h * 4);
+    }
+
+    #[test]
+    fn a_small_frame_keeps_its_size() {
+        let (_, w, h, _) = downscale_bgra(&frame(&[(1, 2, 3)], 1, 1), 1, 1);
+        assert_eq!((w, h), (1, 1));
     }
 }

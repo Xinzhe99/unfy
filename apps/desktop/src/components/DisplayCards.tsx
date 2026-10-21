@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { DisplayDto, TargetDto } from "../api";
+import type { DisplayDto, DisplayThumbnailDto, TargetDto } from "../api";
 
 /**
  * Display picker with a real screenshot per monitor.
@@ -27,7 +27,7 @@ export function DisplayCards({
 }: {
   displays: DisplayDto[];
   target: TargetDto | null;
-  thumbnails: Record<string, string>;
+  thumbnails: Record<string, DisplayThumbnailDto>;
   onSelect: (nativeId: string) => void;
   disabled?: boolean;
 }) {
@@ -91,12 +91,22 @@ export function DisplayCards({
             >
               <div className="relative min-h-0 flex-1 bg-[var(--color-surface-sunken)]">
                 {shot ? (
-                  <img
-                    src={shot}
-                    alt=""
-                    className="size-full object-cover"
-                    draggable={false}
-                  />
+                  <>
+                    <img
+                      src={shot.data_url}
+                      alt=""
+                      className="size-full object-cover"
+                      draggable={false}
+                    />
+                    {/* A black capture is a monitor that is off, on another input,
+                        or a virtual display with no client attached. Saying so
+                        distinguishes "nothing is there" from a broken preview. */}
+                    {shot.blank ? (
+                      <span className="absolute inset-x-0 bottom-0 bg-[var(--color-overlay)] px-1.5 py-0.5 text-center text-[10px] leading-tight text-[var(--color-overlay-fg)]">
+                        {t("没有画面")}
+                      </span>
+                    ) : null}
+                  </>
                 ) : (
                   <div className="flex size-full items-center justify-center text-[11px] text-[var(--color-muted)]">
                     {t("无法截取画面")}

@@ -1977,6 +1977,9 @@ pub fn identify_displays(seconds: Option<u64>) -> bool {
 pub struct DisplayThumbnailDto {
     pub native_id: String,
     pub data_url: String,
+    /// True when the display captured as solid black: powered off, on another
+    /// input, or a virtual display with nothing attached.
+    pub blank: bool,
 }
 
 /// Screenshot of each display, for the picker.
@@ -1991,6 +1994,7 @@ pub fn display_thumbnails() -> Vec<DisplayThumbnailDto> {
         .map(|t| DisplayThumbnailDto {
             native_id: t.native_id,
             data_url: t.data_url,
+            blank: t.blank,
         })
         .collect()
 }

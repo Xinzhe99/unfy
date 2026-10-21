@@ -1,5 +1,6 @@
 import { t } from "../i18n";
-import type { DisplayDto, SettingsDto, TargetDto } from "../api";
+import type {
+  DisplayThumbnailDto, DisplayDto, SettingsDto, TargetDto } from "../api";
 import { DisplayCards } from "../components/DisplayCards";
 import { Button, Card, Segmented, SettingRow } from "../components/ui";
 
@@ -25,7 +26,7 @@ export function DisplaysPage({
   displays: DisplayDto[];
   settings: SettingsDto | null;
   target: TargetDto | null;
-  thumbnails: Record<string, string>;
+  thumbnails: Record<string, DisplayThumbnailDto>;
   busy: boolean;
   onSelect: (nativeId: string) => void;
   onIdentify: () => void;

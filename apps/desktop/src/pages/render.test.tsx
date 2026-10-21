@@ -787,7 +787,9 @@ describe("pages render", () => {
         displays={displays}
         settings={settings}
         target={status.target}
-        thumbnails={{ DISPLAY1: "data:image/png;base64,AA==" }}
+        thumbnails={{
+          DISPLAY1: { data_url: "data:image/png;base64,AA==", blank: false },
+        }}
         busy={false}
         onSelect={noop}
         onIdentify={noop}
@@ -1027,7 +1029,14 @@ describe("English mode", () => {
           <DisplaysPage
             displays={displays}
             settings={settings}
-            thumbnails={{}}
+            // One live capture and one black one, so the "no picture" note is part
+            // of what this test checks.
+            thumbnails={{
+              [displays[0]!.native_id]: {
+                data_url: "data:image/png;base64,AA==",
+                blank: true,
+              },
+            }}
             busy={false}
             onSelect={noop}
             onIdentify={noop}

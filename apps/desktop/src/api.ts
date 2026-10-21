@@ -232,6 +232,8 @@ export interface ActivityEntryDto {
 }
 
 export interface DisplayThumbnailDto {
+  /** True when the capture is solid black: the display is showing nothing. */
+  blank: boolean;
   native_id: string;
   /** `data:image/png;base64,...` ready for an `<img src>`. */
   data_url: string;

@@ -9,6 +9,7 @@ import {
   formatBytes,
   type AppDto,
   type DisplayDto,
+  type DisplayThumbnailDto,
   type EngineStateName,
   type HotkeyStatusDto,
   type PendingWorkDto,
@@ -85,7 +86,7 @@ export default function App() {
   const [pending, setPending] = useState<PendingWorkDto | null>(null);
   const [hotkeys, setHotkeys] = useState<HotkeyStatusDto | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);
-  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [thumbnails, setThumbnails] = useState<Record<string, DisplayThumbnailDto>>({});
   const [runningApps, setRunningApps] = useState<AppDto[]>([]);
   const [activity, setActivity] = useState<ActivityEntryDto[]>([]);
   const [health, setHealth] = useState<HealthItemDto[]>([]);
@@ -175,9 +176,7 @@ export default function App() {
     void (async () => {
       const shots = await api.displayThumbnails();
       if (cancelled) return;
-      setThumbnails(
-        Object.fromEntries(shots.map((s) => [s.native_id, s.data_url])),
-      );
+      setThumbnails(Object.fromEntries(shots.map((s) => [s.native_id, s])));
     })();
     return () => {
       cancelled = true;

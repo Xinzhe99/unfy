@@ -1,7 +1,12 @@
 import { t } from "../i18n";
 import { useState } from "react";
 
-import { api, type DisplayDto, type SettingsDto } from "../api";
+import {
+  api,
+  type DisplayDto,
+  type DisplayThumbnailDto,
+  type SettingsDto,
+} from "../api";
 import { DisplayCards } from "../components/DisplayCards";
 import { Button } from "../components/ui";
 
@@ -30,7 +35,7 @@ export function Onboarding({
 }: {
   displays: DisplayDto[];
   settings: SettingsDto;
-  thumbnails: Record<string, string>;
+  thumbnails: Record<string, DisplayThumbnailDto>;
   busy: boolean;
   onSelectTarget: (nativeId: string) => Promise<void>;
   onIdentify: () => void;

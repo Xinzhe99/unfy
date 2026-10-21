@@ -133,6 +133,9 @@ pub fn flash_display_labels(seconds: u64) -> bool {
 pub struct Thumbnail {
     pub native_id: String,
     pub data_url: String,
+    /// True when the display captured as solid black, which means it is off, on
+    /// another input, or a virtual display with no client attached.
+    pub blank: bool,
 }
 
 /// Screenshot of every display, or an empty list when unsupported.
@@ -144,6 +147,7 @@ pub fn display_thumbnails() -> Vec<Thumbnail> {
             .map(|t| Thumbnail {
                 native_id: t.native_id,
                 data_url: t.data_url,
+                blank: t.blank,
             })
             .collect()
     }
