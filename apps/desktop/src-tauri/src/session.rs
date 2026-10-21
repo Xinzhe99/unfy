@@ -9,7 +9,6 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::AppState;
-use conflux_platform::DisplayProvider;
 
 /// Register the shortcuts from settings. Called from `setup` and again whenever
 /// settings change.
@@ -77,17 +76,14 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
                         .lock()
                         .map_err(|_| "settings lock".to_string())?;
                     let mut engine = state.engine.lock().map_err(|_| "engine lock".to_string())?;
-                    let displays = engine.backend().topology().map_err(|e| e.to_string())?;
-                    let target = settings
-                        .target_display
-                        .as_ref()
-                        .and_then(|t| displays.iter().find(|d| t.matches(&d.key)))
-                        .or_else(|| displays.iter().find(|d| d.primary))
-                        .or_else(|| displays.first())
-                        .map(|d| d.key.clone());
-                    match target {
+                    match engine.resolve_target(
+                        settings
+                            .target_display
+                            .as_ref()
+                            .map(|t| t.native_id.as_str()),
+                    ) {
                         Some(key) => engine.migrate(&key).map(|_| ()).map_err(|e| e.to_string()),
-                        None => Err("no target display".to_string()),
+                        None => Err("no displays".to_string()),
                     }
                 })();
                 if let Err(message) = &result {

@@ -9,7 +9,6 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::AppState;
-use conflux_platform::DisplayProvider;
 
 /// Menu item ids. Kept as constants so the handler and the builder cannot drift.
 pub const ID_GATHER: &str = "gather";
@@ -103,13 +102,14 @@ fn run_gather<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
 
-    let displays = engine.backend().topology().map_err(|e| e.to_string())?;
-    let target = match resolve_target(&settings, &displays) {
-        Some(key) => key,
-        None => {
-            show_settings(app);
-            return Err("请先在设置中选择目标显示器".into());
-        }
+    let Some(target) = engine.resolve_target(
+        settings
+            .target_display
+            .as_ref()
+            .map(|t| t.native_id.as_str()),
+    ) else {
+        show_settings(app);
+        return Err("没有可用显示器".into());
     };
 
     engine
@@ -131,22 +131,6 @@ fn run_rescue<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .rescue_offscreen()
         .map(|_| ())
         .map_err(|e| e.to_string())
-}
-
-fn resolve_target(
-    settings: &conflux_settings::Settings,
-    displays: &[conflux_domain::DisplaySnapshot],
-) -> Option<conflux_domain::DisplayKey> {
-    if let Some(target) = &settings.target_display {
-        if let Some(found) = displays.iter().find(|d| target.matches(&d.key)) {
-            return Some(found.key.clone());
-        }
-    }
-    displays
-        .iter()
-        .find(|d| d.primary)
-        .or_else(|| displays.first())
-        .map(|d| d.key.clone())
 }
 
 fn show_settings<R: Runtime>(app: &AppHandle<R>) {

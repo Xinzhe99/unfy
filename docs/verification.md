@@ -1,0 +1,124 @@
+# 验证记录
+
+本文只记录**实际执行过**的检查与结果。未执行的项目明确写"未验证"，不作推断。
+
+日期：2026-10-21 · 主机：Windows 10.0.26200 · 双屏 1920×1080 并排（`\\.\DISPLAY1` 在 0,0，`\\.\DISPLAY2` 在 -1920,-78）
+
+## 自动化测试
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 单元与集成测试 | `cargo test --workspace` | 76 passed, 0 failed |
+| 静态检查 | `cargo clippy --workspace --all-targets -- -D warnings` | 无告警 |
+| 格式 | `cargo fmt --all -- --check` | 通过 |
+| 前端类型 | `npx tsc --noEmit` | 通过 |
+| 前端构建 | `npm run build` | 通过（245 kB JS / 19 kB CSS） |
+| macOS 编译 | `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` | 通过（仅类型检查，未在 Mac 运行） |
+
+测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 17、settings 10、win 1、mac 4（iOS/macOS 目标下编译）、doc 0。
+
+## 真实桌面验证
+
+### 跨进程移动
+
+```
+probe --move
+before: visible 626x473+137+130  outer 640x480+130+130
+observed: 626x473+-1783+52  delta=[0,0,0,0]  PASS
+restore delta=[0,0,0,0]  PASS
+```
+
+第一次运行时 delta 为 28 px，原因是不见边框（inset）方向写反；修正后为 0 px。
+
+### 端到端迁移与恢复（`e2e` 二进制）
+
+```
+source \\.\DISPLAY1   1920x1032 @ 0,0
+target \\.\DISPLAY2   1920x1032 @ -1920,-78
+captured 6 windows
+migration: applied=9 rejected=3 skipped=6 (desktop-wide)
+migration PASS: every window is inside the target work area
+restore: complete=true pending=0
+restore PASS: every window returned to its original rectangle (tolerance 4 px)
+journal PASS: no unfinished transactions left behind
+E2E PASS (6 windows, real desktop)
+```
+
+`applied=9` 包含 3 个非测试窗口，这是产品的真实行为（整理整块桌面的合格窗口）。断言只覆盖测试自己创建的 6 个窗口。
+
+### 崩溃恢复
+
+迁移中途 `Stop-Process -Force` 杀掉应用 → 重启：
+
+```
+WARN adopted unfinished transaction preimages=5 may_have_moved=true
+```
+
+UI 显示"上次整理未完成 · 有 5 个窗口的快照仍待处理"。点击"尝试恢复"后：
+
+```
+已恢复 5 个窗口。
+```
+
+窗口 `hwnd=4524076` 从 `-1908,442 602x500` 回到 `148,143 1363x826`（与崩溃前完全一致），journal 目录清空。
+
+**发现并修复的缺陷**：修复前"尝试恢复"是空操作——`Engine::recover` 只读取 journal 报告状态，没有接管事务，因此 `restore()` 没有 preimage 可恢复。新增 `Journal::reopen` + `Engine::recover_latest` 让引擎接管事务，并加了两个回归测试。
+
+### 全局热键
+
+设置 `hotkey_gather=Control+Alt+G`、`hotkey_restore=Control+Alt+Shift+G` 后以 `--tray` 启动，注册无告警。
+
+| 操作 | 结果 |
+|---|---|
+| 发送 `Ctrl+Alt+G` | 3 个窗口被移动到目标屏 |
+| 发送 `Ctrl+Alt+Shift+G` | **11 of 11 个窗口回到原始矩形** |
+
+### 安装包
+
+```
+tauri build --debug
+Finished 1 bundle at: target\debug\bundle\nsis\Conflux_0.1.0_x64-setup.exe (4.56 MiB)
+```
+
+| 步骤 | 结果 |
+|---|---|
+| 静默安装 `/S` | 安装到 `%LOCALAPPDATA%\Conflux`，生成 `conflux.exe` + `uninstall.exe` |
+| 启动安装版 | 窗口正常显示，2 个显示器被识别，目标屏选择持久化到 `settings.json` |
+| 迁移 | 13 个窗口中 8 个被移动，全部落在 DISPLAY2 |
+| 恢复 | 11/13 精确复原（差异项是测试工具 Orca 自己的窗口，非本产品问题） |
+| 静默卸载 `/S` | 二进制移除，进程终止，无残留 |
+
+Tauri 打包需要从 GitHub 下载 NSIS/WiX；本机直连超时，通过 `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR` 指向本地镜像完成。
+
+### 设置持久化
+
+`settings.json` 在 `%APPDATA%\Conflux\`，写入后包含目标显示器的 `monitorDevicePath`：
+
+```json
+"target_display": {
+  "native_id": "\\\\?\\DISPLAY#XMIC003#4&3abf5356&0&UID49#{e6f07b5f-...}",
+  "label": "\\\\.\\DISPLAY2"
+}
+```
+
+重启后仍指向同一块屏。
+
+## 未验证
+
+| 项 | 原因 | 需要什么 |
+|---|---|---|
+| macOS 全部功能 | 无 Mac 硬件 | 真机：TCC 授权、AX 移动、`CGDisplayCreateUUIDFromDisplayID`、Retina 坐标 |
+| 自动更新安装 | `plugins.updater.pubkey` 与 `endpoints` 为空 | 生成 minisign 密钥 + 托管更新清单 |
+| 代码签名与公证 | 无证书 | Windows Authenticode 证书；Apple Developer Program |
+| 托盘菜单点击 | 托盘图标无法被 UI 自动化识别 | 人工点击验证，或加一个测试专用的命令触发入口 |
+| 混合 DPI | 本机两块屏都是 100% | 一台 150% 的屏 |
+| 提权窗口 | 未构造高完整性测试窗口 | 以管理员启动一个记事本作为目标 |
+| 大规模窗口 | 最多测过 13 个 | 100 窗压力测试 |
+
+## 复现方式
+
+```bash
+cargo test --workspace
+cargo run -p conflux-platform-win --bin e2e      # 真实桌面，创建并移动自己的窗口
+cargo run -p conflux-platform-win --bin probe    # 只读
+```

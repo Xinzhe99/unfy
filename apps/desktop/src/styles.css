@@ -13,19 +13,62 @@
   --color-danger: oklch(0.56 0.19 25);
 }
 
+/*
+ * Dark palette. Applied two ways:
+ *
+ *  * `.theme-dark` — the user explicitly chose dark in settings;
+ *  * `@media (prefers-color-scheme: dark)` with `.theme-system` — follow the OS.
+ *
+ * Both are expressed as the same custom properties so no component needs to
+ * know which one is active.
+ */
+@theme {
+  --conflux-dark-surface: oklch(0.17 0.006 250);
+  --conflux-dark-surface-2: oklch(0.22 0.008 250);
+  --conflux-dark-border: oklch(0.3 0.008 250);
+  --conflux-dark-fg: oklch(0.94 0.003 250);
+  --conflux-dark-muted: oklch(0.66 0.008 250);
+  --conflux-dark-accent: oklch(0.7 0.14 258);
+  --conflux-dark-accent-soft: oklch(0.3 0.04 258);
+  --conflux-dark-success: oklch(0.7 0.13 150);
+  --conflux-dark-warning: oklch(0.78 0.13 75);
+  --conflux-dark-danger: oklch(0.68 0.18 25);
+}
+
+:root.theme-dark {
+  --color-surface: var(--conflux-dark-surface);
+  --color-surface-2: var(--conflux-dark-surface-2);
+  --color-border: var(--conflux-dark-border);
+  --color-fg: var(--conflux-dark-fg);
+  --color-muted: var(--conflux-dark-muted);
+  --color-accent: var(--conflux-dark-accent);
+  --color-accent-soft: var(--conflux-dark-accent-soft);
+  --color-success: var(--conflux-dark-success);
+  --color-warning: var(--conflux-dark-warning);
+  --color-danger: var(--conflux-dark-danger);
+}
+
 @media (prefers-color-scheme: dark) {
-  @theme {
-    --color-surface: oklch(0.17 0.006 250);
-    --color-surface-2: oklch(0.22 0.008 250);
-    --color-border: oklch(0.3 0.008 250);
-    --color-fg: oklch(0.94 0.003 250);
-    --color-muted: oklch(0.66 0.008 250);
-    --color-accent: oklch(0.7 0.14 258);
-    --color-accent-soft: oklch(0.3 0.04 258);
-    --color-success: oklch(0.7 0.13 150);
-    --color-warning: oklch(0.78 0.13 75);
-    --color-danger: oklch(0.68 0.18 25);
+  :root.theme-system {
+    --color-surface: var(--conflux-dark-surface);
+    --color-surface-2: var(--conflux-dark-surface-2);
+    --color-border: var(--conflux-dark-border);
+    --color-fg: var(--conflux-dark-fg);
+    --color-muted: var(--conflux-dark-muted);
+    --color-accent: var(--conflux-dark-accent);
+    --color-accent-soft: var(--conflux-dark-accent-soft);
+    --color-success: var(--conflux-dark-success);
+    --color-warning: var(--conflux-dark-warning);
+    --color-danger: var(--conflux-dark-danger);
   }
+}
+
+:root.theme-light {
+  color-scheme: light;
+}
+
+:root.theme-dark {
+  color-scheme: dark;
 }
 
 :root {

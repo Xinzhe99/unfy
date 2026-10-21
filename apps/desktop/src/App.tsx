@@ -67,6 +67,15 @@ export default function App() {
     }
   }, []);
 
+  // The theme is a class on <html> so it applies before React paints a new
+  // colour and so the CSS can use plain custom properties.
+  useEffect(() => {
+    const theme = settings?.theme ?? "system";
+    const root = document.documentElement;
+    root.classList.remove("theme-system", "theme-light", "theme-dark");
+    root.classList.add(`theme-${theme}`);
+  }, [settings?.theme]);
+
   useEffect(() => {
     void refresh();
     // Tray and hotkey actions happen outside this window; every one of them

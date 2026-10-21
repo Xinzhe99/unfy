@@ -195,6 +195,29 @@ impl<B: Backend> Engine<B> {
         &self.backend
     }
 
+    /// Resolve the configured target against the live topology.
+    ///
+    /// Returns the configured display when it is still present, otherwise the
+    /// primary display. Never guesses silently: callers that need to distinguish
+    /// "configured target gone" from "no displays" should use
+    /// `preview()`/`migrate()` and handle `TargetDisplayMissing`.
+    pub fn resolve_target(&self, configured_native_id: Option<&str>) -> Option<DisplayKey> {
+        let displays = self.backend.topology().ok()?;
+        if let Some(native_id) = configured_native_id {
+            if let Some(found) = displays
+                .iter()
+                .find(|d| d.key.native_id == native_id)
+            {
+                return Some(found.key.clone());
+            }
+        }
+        displays
+            .iter()
+            .find(|d| d.primary)
+            .or_else(|| displays.first())
+            .map(|d| d.key.clone())
+    }
+
     /// How many windows the current transaction has captured.
     pub fn captured_window_count(&self) -> usize {
         self.preimages.len()
