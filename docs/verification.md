@@ -15,7 +15,7 @@
 | 前端构建 | `npm run build` | 通过（245 kB JS / 19 kB CSS） |
 | macOS 编译 | `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` | 通过（仅类型检查，未在 Mac 运行） |
 
-测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 18、settings 13、win 1、mac 4（iOS/macOS 目标下编译）、doc 0。
+测试分布：domain 14、platform(fake) 4、journal 11、layout 14、engine 18、settings 12、win 1、mac 4（macOS 目标下编译）、doc 0。
 
 ## 真实桌面验证
 
