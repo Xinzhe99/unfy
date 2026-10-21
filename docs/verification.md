@@ -504,6 +504,36 @@ rules after: 4
 语义是明确的：关闭 journal 并丢弃 preimage，从这一刻起当前布局就是新的基准，下次整理会把它
 当作"原位"。这条也写进了活动历史（`keep_layout`）。
 
+### 各窗口的最小尺寸
+
+真实桌面上八个窗口自报的最小值差异很大：
+
+```
+Orca.exe                  616x408
+magpie-windows-amd64.exe  616x462
+msedge.exe                516x90
+Weixin.exe                440x452
+clash-verge.exe           536x559
+Notepad.exe               332x202
+explorer.exe              161x243  (两个资源管理器窗口)
+```
+
+此前引擎对所有窗口传 `None`，布局层回退到统一 320×200——大应用的窗口会被压进自己的
+标题栏都放不下的格子，表现为与邻居重叠。
+
+**性能教训**：第一版在枚举时探测，八个窗口的枚举从 94ms 涨到 **213ms**，因为它对每个窗口
+做一次跨进程 `SendMessageTimeout`。改为在 `capabilities()` 中惰性探测（引擎只对将要放置的
+窗口调用），并保留 33ms 超时与 `SMTO_ABORTIFHUNG`：
+
+```
+enumerate 15 ms, preview 17 ms, migrate 211 ms (6 host windows)
+```
+
+比探测前的 94ms 更快，因为枚举不再读取任何跨进程信息。
+
+一个引擎测试固定这条连线：窗口声明 900×700 最小值时必须得到不小于该值的格子，并被标记为
+`clamped_to_min`。把引擎改回传 `None` 时该测试失败。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

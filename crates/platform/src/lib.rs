@@ -14,7 +14,7 @@
 //!    `PlatformError::WindowGone` instead.
 
 use conflux_domain::{
-    DisplayKey, DisplaySnapshot, Rect, Scale, WindowId, WindowMode, WindowSnapshot,
+    DisplayKey, DisplaySnapshot, Rect, Scale, Size, WindowId, WindowMode, WindowSnapshot,
 };
 
 pub mod fake;
@@ -48,6 +48,13 @@ pub struct Capabilities {
     pub can_read_state: bool,
     /// Whether the platform can restore the window's original placement blob.
     pub can_restore_native: bool,
+    /// The smallest size the window accepts, when the platform can report it.
+    ///
+    /// Probed here rather than during enumeration because the answer costs a
+    /// cross-process round trip: answering it for every window on every preview
+    /// added ~120 ms to an eight-window enumeration. The engine asks only for the
+    /// windows it is about to place.
+    pub min_size: Option<Size>,
 }
 
 /// The rectangle and state a backend observes for a window.

@@ -907,3 +907,38 @@ fn primary_side_puts_the_focused_window_in_the_main_pane() {
         "the main pane must be inside the work area"
     );
 }
+
+/// A window's own minimum size must reach the planner.
+///
+/// Verified against a live desktop, the values differ enormously per application
+/// (Notepad reports 332x202, an IDE-class window 616x408). A single global
+/// fallback let large applications be shrunk into a slot their chrome cannot fit
+/// in, which shows up as overlapping windows.
+#[test]
+fn a_large_window_minimum_is_respected() {
+    let mut backend = scenario();
+    // Make one window insist on a size that a narrow slot cannot provide.
+    backend.set_min_size(1, conflux_domain::Size::new(900, 700));
+
+    let mut engine = Engine::new(backend, config("min-size"));
+    let preview = engine.preview(&target_key()).expect("preview");
+
+    let placement = preview
+        .plan
+        .placements
+        .iter()
+        .find(|p| p.id.native_id == 1)
+        .expect("window 1 is planned");
+    assert!(
+        placement.rect.width() >= 900 && placement.rect.height() >= 700,
+        "the slot must satisfy the window's minimum, got {}x{}",
+        placement.rect.width(),
+        placement.rect.height()
+    );
+    // `clamped_to_min` means the planner had to give up on a tidy grid to honour
+    // the minimum, which is what the preview surfaces as dashed rectangles.
+    assert!(
+        placement.clamped_to_min,
+        "a minimum that dominates the layout must be reported as clamped"
+    );
+}

@@ -126,6 +126,15 @@ pub struct WindowSnapshot {
     /// the display topology it was captured on.
     pub native_placement: Option<Vec<u8>>,
     pub topmost: bool,
+    /// The window's own minimum size, when the platform can report it.
+    ///
+    /// Windows answers this via `WM_GETMINMAXINFO`. The layout uses it so a large
+    /// application (an IDE, a video editor) is not shrunk below the size its own
+    /// chrome needs; without it every window falls back to one global minimum,
+    /// which makes big applications overlap their neighbours.
+    ///
+    /// `None` means "unknown", not "no minimum".
+    pub min_size: Option<Size>,
     /// Whether this window had keyboard focus when it was enumerated.
     ///
     /// The `PrimarySide` layout gives the focused window the large pane, which is
@@ -173,6 +182,7 @@ mod tests {
             mode,
             native_placement: None,
             topmost: false,
+            min_size: None,
             focused: false,
         }
     }

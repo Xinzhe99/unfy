@@ -16,7 +16,7 @@ use conflux_platform::{
     Capabilities, ObservedWindow, PlatformError, Result, WindowBackend, WindowPlan,
 };
 use windows::core::{BOOL, PWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
@@ -158,6 +158,12 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
                 mode,
                 native_placement: None,
                 topmost: ex_style & WS_EX_TOPMOST.0 != 0,
+                // Deliberately left unknown here. Asking every window costs a
+                // cross-process `SendMessageTimeout`, and enumeration runs on
+                // every preview and every migration: measured at +119 ms for eight
+                // windows. The engine asks only for the windows it is about to
+                // place, through `capabilities`.
+                min_size: None,
                 focused: FOREGROUND.load(std::sync::atomic::Ordering::Relaxed) == hwnd.0 as usize,
             },
             owner: owner.map(|h| h.0 as isize),
@@ -225,6 +231,11 @@ impl WindowBackend for WinWindows {
             can_resize: true,
             can_read_state: true,
             can_restore_native: ex_style & WS_EX_TOOLWINDOW.0 == 0,
+            // Asked here, not during enumeration: the engine calls `capabilities`
+            // once per window it is about to place, while enumeration runs on
+            // every preview and would pay the round trip for every window on the
+            // desktop.
+            min_size: track_min_size(hwnd),
         }
     }
 
@@ -382,6 +393,56 @@ pub fn nudge_window(id: &WindowId) -> Result<()> {
         )
     }
     .map_err(map_win_error)
+}
+
+/// The smallest size a window accepts, as it reports to the window manager.
+///
+/// Windows applications answer `WM_GETMINMAXINFO` with their own limits; asking
+/// is the only way to learn them, since the value lives in application code and
+/// not in any style bit.
+///
+/// Two details make this safe:
+///
+/// * `SendMessageTimeout` with a short timeout. A hung application must not block
+///   enumeration - the enumeration runs on every migration and every preview.
+/// * `SMTO_ABORTIFHUNG` so a window that is not pumping messages is skipped rather
+///   than waited on.
+///
+/// A zero or absurd answer is reported as `None`: some applications answer with
+/// zeros because they only fill the fields they care about, and treating 0x0 as a
+/// real minimum would collapse every slot to nothing.
+fn track_min_size(hwnd: HWND) -> Option<conflux_domain::Size> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, MINMAXINFO, SMTO_ABORTIFHUNG, WM_GETMINMAXINFO,
+    };
+
+    let mut info = MINMAXINFO::default();
+    let mut result: usize = 0;
+    let ok = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            WM_GETMINMAXINFO,
+            WPARAM(0),
+            LPARAM(&mut info as *mut MINMAXINFO as isize),
+            SMTO_ABORTIFHUNG,
+            // Two frames at 60 Hz. Long enough for a healthy application to reply,
+            // short enough that a busy one cannot stall a hundred-window gather.
+            33,
+            Some(&mut result),
+        )
+    };
+    if ok.0 == 0 {
+        return None;
+    }
+
+    let width = info.ptMinTrackSize.x;
+    let height = info.ptMinTrackSize.y;
+    // 1..=16384: anything outside that is a placeholder or a sentinel, not a size
+    // a user could work with.
+    if !(1..=16384).contains(&width) || !(1..=16384).contains(&height) {
+        return None;
+    }
+    Some(conflux_domain::Size::new(width, height))
 }
 
 /// File name of the executable running in `pid`.

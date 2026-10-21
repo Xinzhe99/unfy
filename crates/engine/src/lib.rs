@@ -602,7 +602,10 @@ impl<B: Backend> Engine<B> {
             })
             .ok_or(SkipReason::Invisible)?;
 
-        Ok(Some((display.clone(), None)))
+        // The window's own minimum. Asking `capabilities` costs a cross-process
+        // round trip, so it happens here - once per window that will actually be
+        // placed - rather than during enumeration.
+        Ok(Some((display.clone(), capabilities.min_size)))
     }
 
     /// Move every eligible window onto `target`.

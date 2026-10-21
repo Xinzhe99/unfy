@@ -107,6 +107,13 @@ impl FakeBackend {
         }
     }
 
+    /// Record the minimum size a window claims for itself.
+    pub fn set_min_size(&mut self, id: u64, size: conflux_domain::Size) {
+        if let Some(window) = self.windows.borrow_mut().get_mut(&id) {
+            window.snapshot.min_size = Some(size);
+        }
+    }
+
     pub fn add_window(
         &mut self,
         id: u64,
@@ -131,6 +138,7 @@ impl FakeBackend {
             mode,
             native_placement: None,
             topmost: false,
+            min_size: None,
             // The fake backend has no concept of focus; a test that needs one
             // sets it explicitly.
             focused: false,
@@ -197,11 +205,12 @@ impl WindowBackend for FakeBackend {
         match windows.get(&id.native_id) {
             None => Capabilities::default(),
             Some(w) if w.behaviour == FakeBehaviour::Denied => Capabilities::default(),
-            Some(_) => Capabilities {
+            Some(w) => Capabilities {
                 can_move: true,
                 can_resize: true,
                 can_read_state: true,
                 can_restore_native: false,
+                min_size: w.snapshot.min_size,
             },
         }
     }
