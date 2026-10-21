@@ -97,7 +97,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// A tiny trait so the shortcut closures do not need to know about the tray.
-trait ActionEmitter {
+pub(crate) trait ActionEmitter {
     fn emit_action(&self, action: &str) -> tauri::Result<()>;
 }
 
@@ -112,74 +112,22 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
             "hotkey_gather" => {
                 let app = self.clone();
                 std::thread::spawn(move || {
-                    // A gather supersedes a pending delayed restore, exactly as the
-                    // window button does. Without this, pressing the shortcut
-                    // during the wait let the timer fire afterwards and undo the
-                    // layout the user just asked for.
-                    if let Some(hotkey_state) = app.try_state::<AppState>() {
-                        if let Ok(mut schedule) = hotkey_state.schedule.lock() {
-                            schedule.cancel();
-                        }
-                    }
-
-                    // Counters are filled inside the engine scope and read after
-                    // the locks are dropped, so the history write never happens
-                    // while holding the engine mutex.
-                    let applied_count = std::sync::atomic::AtomicUsize::new(0);
-                    let unsettled_count = std::sync::atomic::AtomicUsize::new(0);
-                    let result: std::result::Result<(), String> = (|| {
-                        let state = app.state::<AppState>();
-                        let settings = state
-                            .settings
-                            .lock()
-                            .map_err(|_| "settings lock".to_string())?;
-                        let mut engine =
-                            state.engine.lock().map_err(|_| "engine lock".to_string())?;
-                        match engine.resolve_target(
-                            settings
-                                .target_display
-                                .as_ref()
-                                .map(|t| t.native_id.as_str()),
-                        ) {
-                            // Retarget, not migrate: pressing the shortcut while a
-                            // layout is active means "redo it here", which is what
-                            // the user sees happen when it works.
-                            Some(key) => engine
-                                .retarget(&key)
-                                .map(|retarget| {
-                                    let applied = retarget.migration.applied_count();
-                                    let unsettled = retarget.migration.failed_count()
-                                        + retarget.migration.unplaced.len();
-                                    // Record inside the closure so the counts are
-                                    // available; the guard is released right after.
-                                    applied_count
-                                        .store(applied, std::sync::atomic::Ordering::Relaxed);
-                                    unsettled_count
-                                        .store(unsettled, std::sync::atomic::Ordering::Relaxed);
-                                })
-                                .map_err(|e| e.to_string()),
-                            None => Err("no displays".to_string()),
-                        }
-                    })();
-                    if let Err(message) = &result {
+                    // The same function the button and the tray item call, so a
+                    // shortcut gather records refused applications, reports progress
+                    // and leaves the same error behind.
+                    let state = app.state::<AppState>();
+                    let outcome = tauri::async_runtime::block_on(
+                        crate::commands::migrate_with_trigger(&app, &state, "hotkey"),
+                    );
+                    if let Err(message) = &outcome {
                         tracing::warn!(error = %message, "hotkey gather failed");
                     }
-                    if result.is_ok() {
-                        crate::tray::record(
-                            &app,
-                            crate::activity::Kind::Gather,
-                            applied_count.load(std::sync::atomic::Ordering::Relaxed),
-                            unsettled_count.load(std::sync::atomic::Ordering::Relaxed),
-                            "hotkey",
-                        );
-                    }
-                    crate::tray::refresh(&app);
                     let _ = app.emit(
                         "conflux://action",
                         serde_json::json!({
                             "action": "gather",
-                            "ok": result.is_ok(),
-                            "message": result.err(),
+                            "ok": outcome.is_ok(),
+                            "message": outcome.err(),
                         }),
                     );
                 });

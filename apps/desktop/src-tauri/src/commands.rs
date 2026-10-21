@@ -168,7 +168,7 @@ pub struct SaveSettingsRequest {
 
 /// Refresh the tray after a state change so its labels, enabled set and tooltip
 /// never disagree with the engine.
-fn sync_tray(handle: &tauri::AppHandle) {
+fn sync_tray<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) {
     crate::tray::refresh(handle);
 }
 
@@ -418,6 +418,21 @@ pub async fn migrate(
     handle: tauri::AppHandle,
     app: State<'_, AppState>,
 ) -> Result<MigrationDto, String> {
+    migrate_with_trigger(&handle, &app, "window").await
+}
+
+/// Gather, recording what invoked it.
+///
+/// The shortcut used to run its own gather: resolve the target, call the engine,
+/// write the activity entry. That copy drifted - it never persisted which
+/// applications refused to move, so the overview's "exclude this application"
+/// offer was missing after a shortcut gather, and a failure reached the log but
+/// not `last_error`. One implementation, told what triggered it, cannot drift.
+pub async fn migrate_with_trigger<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    app: &State<'_, AppState>,
+    trigger: &'static str,
+) -> Result<MigrationDto, String> {
     // Window moves block on each target application's message pump. Running that
     // on the command thread freezes the WebView for the duration, which looks
     // like a hang on a busy desktop. The engine stays behind the same mutex, so
@@ -454,7 +469,7 @@ pub async fn migrate(
     });
 
     let result = tokio::task::spawn_blocking(move || {
-        let report = migrate_blocking(engine_state, settings, activity, emit)?;
+        let report = migrate_blocking(engine_state, settings, activity, emit, trigger)?;
         // Remember which applications refused, so the overview can offer to
         // exclude them without the user typing a file name from a toast that has
         // already disappeared.
@@ -476,8 +491,8 @@ pub async fn migrate(
         "conflux://progress",
         serde_json::json!({ "phase": "done" }),
     );
-    note_result(&app, result.as_ref().err().cloned().map(Message::new));
-    sync_tray(&handle);
+    note_result(app, result.as_ref().err().cloned().map(Message::new));
+    sync_tray(handle);
     result
 }
 
@@ -486,6 +501,7 @@ fn migrate_blocking(
     settings: Arc<std::sync::Mutex<Settings>>,
     activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
     emit: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    trigger: &'static str,
 ) -> Result<MigrationDto, String> {
     let mut engine = engine.lock().map_err(|e| e.to_string())?;
     let settings = settings.lock().map_err(|e| e.to_string())?;
@@ -544,7 +560,7 @@ fn migrate_blocking(
             } else {
                 None
             },
-            trigger: "window".into(),
+            trigger: trigger.into(),
         });
     }
     Ok(MigrationDto {
@@ -1727,7 +1743,7 @@ pub async fn cycle_target<R: tauri::Runtime>(
         );
     });
     let _ = tokio::task::spawn_blocking(move || {
-        migrate_blocking(engine_state, settings_state, activity, emit)
+        migrate_blocking(engine_state, settings_state, activity, emit, "window")
     })
     .await;
 

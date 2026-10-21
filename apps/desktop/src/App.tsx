@@ -1,5 +1,6 @@
 import { type ReactElement, useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
   api,
@@ -160,6 +161,13 @@ export default function App() {
     const root = document.documentElement;
     root.classList.remove("theme-system", "theme-light", "theme-dark");
     root.classList.add(`theme-${theme}`);
+    // The window frame is drawn by the operating system, not by the stylesheet, so
+    // it stays light over a dark page unless it is told which theme to use. `null`
+    // hands the decision back to the system, which is what "follow the system"
+    // means at this level.
+    void getCurrentWindow()
+      .setTheme(theme === "system" ? null : theme)
+      .catch(() => undefined);
   }, [settings?.theme]);
 
   // Screenshots are only fetched when a surface that shows them is visible: each
