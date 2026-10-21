@@ -216,6 +216,14 @@ export function OverviewPage({
           </p>
         ) : null}
 
+        {!settings?.hotkey_gather &&
+        settings?.auto_detect === "off" &&
+        !hasWork ? (
+          <p className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-border-strong)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+            现在只能从本窗口或托盘触发整理。设置一个快捷键、或打开远程检测，之后就不必先切回这个窗口。
+          </p>
+        ) : null}
+
         {singleDisplay && !hasWork ? (
           <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
             当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。

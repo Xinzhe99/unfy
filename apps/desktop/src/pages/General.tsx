@@ -150,7 +150,30 @@ export function GeneralPage({
         </SettingRow>
       </Card>
 
-      <Card title="快捷键">
+      <Card
+        title="快捷键"
+        aside={
+          !settings.hotkey_gather && !settings.hotkey_restore ? (
+            <Button
+              size="sm"
+              variant="quiet"
+              disabled={busy}
+              onClick={() =>
+                // The shipped default is "no shortcut" so the app never takes a
+                // combination the user already relies on. That is right, but it
+                // also means a new user never discovers the feature. This offers
+                // the pair without forcing it.
+                onSave({
+                  hotkey_gather: "CmdOrCtrl+Alt+G",
+                  hotkey_restore: "CmdOrCtrl+Alt+R",
+                })
+              }
+            >
+              使用建议组合
+            </Button>
+          ) : null
+        }
+      >
         <SettingRow
           label="整理窗口"
           hint={

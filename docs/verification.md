@@ -799,6 +799,26 @@ clean: 'title'   clean: '.exe'   clean: 'C:\'   clean: 'DISPLAY#'   clean: '\\?\
 
 探针实测：`dir exists: true` → `open_directory -> true`。
 
+### 快捷键的发现性
+
+产品默认不设快捷键（避免占用用户已有的组合键），但这意味着**新用户永远不知道有一键整理**——
+而"一键"正是核心卖点。实测这台机器上两个快捷键一直为空。
+
+设置页在两者都为空时提供「使用建议组合」，一次写入 `CmdOrCtrl+Alt+G` 与 `CmdOrCtrl+Alt+R`。
+实测：
+
+```
+hotkey_gather: CmdOrCtrl+Alt+G
+hotkey_restore: CmdOrCtrl+Alt+R
+日志：无注册冲突
+界面：Ctrl + Alt + G / Ctrl + Alt + R，无"未生效"提示
+```
+
+概览页另有提示：既没设快捷键、检测也关闭时，说明"现在只能从本窗口或托盘触发"。
+
+**为什么不是默认值**：默认占用系统组合键会在用户已有快捷键的应用里静默抢键，这是更糟的体验。
+建议按钮把选择权留给用户，同时让功能可被发现。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

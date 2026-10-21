@@ -359,6 +359,36 @@ describe("pages render", () => {
     expect(html).toContain("5 个");
   });
 
+  test("overview explains how to trigger a gather without the window", () => {
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={{ ...settings, hotkey_gather: null, auto_detect: "off" }}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenConfigDir={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+      />,
+    );
+    // Without a shortcut and without detection, the feature is only reachable from
+    // this window - which defeats the point of a one-key action.
+    expect(html).toContain("设置一个快捷键");
+  });
+
   test("the preview is labelled as a snapshot", () => {
     // It stays on screen while the user may have changed the desktop underneath
     // it, so the copy has to say what it is rather than imply a live view.
