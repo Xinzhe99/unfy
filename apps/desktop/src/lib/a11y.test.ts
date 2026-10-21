@@ -60,6 +60,20 @@ describe("accessible names", () => {
   });
 });
 
+describe("background work", () => {
+  test("polling stops while the window is hidden", async () => {
+    // Closing the window only hides it; the process stays in the tray. An
+    // unconditional interval polled eight commands every four seconds for the whole
+    // life of the machine, including a journal scan and a disk write probe.
+    const app = await Bun.file(`${ROOT}/src/App.tsx`).text();
+    expect(app).toContain("visibilitychange");
+    expect(app).toContain("visibilityState");
+    expect(app).toContain("stopPolling");
+    // And the initial load must not happen twice.
+    expect(app).not.toContain("useEffect(() => {\n    void refresh();\n\n    const unlistenAction");
+  });
+});
+
 describe("focus and motion", () => {
   test("focus is never removed without a visible replacement", async () => {
     const css = await Bun.file(`${ROOT}/src/styles.css`).text();

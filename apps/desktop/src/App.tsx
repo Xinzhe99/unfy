@@ -202,7 +202,9 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
-    void refresh();
+    // The first load is done by `startPolling` below, which runs only when the
+    // window is visible; calling `refresh` here as well would double the eight
+    // commands on every mount.
 
     const unlistenAction = listen<{ action: string; ok: boolean; message?: string }>(
       "conflux://action",
@@ -360,7 +362,41 @@ export default function App() {
       },
     );
 
-    const timer = window.setInterval(() => void refresh(), 4000);
+    // Poll only while the window is visible. Closing the window hides it and the
+    // process keeps running in the tray, so an unconditional interval meant eight
+    // commands - including a journal-directory scan and a disk write probe - every
+    // four seconds for the entire life of the machine.
+    //
+    // Hidden is not stale: the tray shows the same facts from the same engine, and
+    // showing the window refreshes immediately.
+    let timer: number | null = null;
+    const startPolling = () => {
+      if (timer !== null) return;
+      void refresh();
+      timer = window.setInterval(() => void refresh(), 4000);
+    };
+    const stopPolling = () => {
+      if (timer === null) return;
+      window.clearInterval(timer);
+      timer = null;
+    };
+    // Tauri hiding the window does not change `document.visibilityState`, so the
+    // backend sends an explicit event. Polling resumes on the first focus or when
+    // the window is shown again.
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") startPolling();
+      else stopPolling();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    const onWindow = () => {
+      // Any focus after being hidden means the window is back on screen.
+      startPolling();
+    };
+    window.addEventListener("focus", onWindow);
+    const unlistenHidden = listen("conflux://window-hidden", () => {
+      stopPolling();
+    });
+    if (document.visibilityState === "visible") startPolling();
 
     return () => {
       void unlistenAction.then((fn) => fn());
@@ -369,7 +405,10 @@ export default function App() {
       void unlistenProgress.then((fn) => fn());
       void unlistenTopology.then((fn) => fn());
       void unlistenUpdate.then((fn) => fn());
-      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onWindow);
+      void unlistenHidden.then((fn) => fn());
+      stopPolling();
       if (countdownTimer.current !== null) {
         window.clearInterval(countdownTimer.current);
       }

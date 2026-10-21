@@ -306,7 +306,7 @@ pub fn run() {
             let launched_at_login = std::env::args().any(|arg| arg == "--tray");
             if launched_at_login {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
+                    hide_window(&window);
                 }
             }
             // Apply the persisted autostart preference on every launch: the
@@ -326,11 +326,26 @@ pub fn run() {
                 // Capture geometry before hiding: the window still has its real
                 // size here, and hiding it is what the user just asked for.
                 persist_window_geometry(window.app_handle());
+                // `window` here is a `Window`, not a `WebviewWindow`; hide and
+                // notify inline.
                 let _ = window.hide();
+                use tauri::Emitter;
+                let _ = window.app_handle().emit("conflux://window-hidden", ());
             }
         })
         .run(tauri::generate_context!())
         .expect("error while running Conflux");
+}
+
+/// Hide the window and tell the UI, so it can stop polling.
+///
+/// `document.visibilityState` does not change when Tauri hides a window: measuring
+/// CPU while hidden showed the polling rate unchanged. The frontend therefore
+/// cannot rely on the web `visibilitychange` event and needs an explicit signal.
+pub fn hide_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use tauri::Emitter;
+    let _ = window.hide();
+    let _ = window.app_handle().emit("conflux://window-hidden", ());
 }
 
 /// Apply the persisted window geometry, if it still lands on a visible display.

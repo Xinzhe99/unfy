@@ -474,7 +474,7 @@ fn toggle_settings<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(false);
         if visible {
-            let _ = window.hide();
+            crate::hide_window(&window);
         } else {
             let _ = window.show();
             let _ = window.unminimize();

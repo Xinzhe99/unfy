@@ -761,6 +761,26 @@ clean: 'title'   clean: '.exe'   clean: 'C:\'   clean: 'DISPLAY#'   clean: '\\?\
 对新引擎 `recover_latest` 接管未完成事务 → 断言状态为 `Degraded` → 暂停 → 取消暂停 →
 仍为 `Degraded`。去掉修复后测试报 `left: Active, right: Degraded`。
 
+### 窗口隐藏时停止轮询
+
+关闭窗口只是隐藏它，进程继续在托盘运行。原来每 4 秒无条件刷新一次，每次 **8 个命令**：
+`get_status`、`list_displays`、`get_settings`、`pending_work`（扫描 journal 目录）、
+`hotkey_status`、`update_status`、`activity_log`（读整个历史文件）、`health_check`（写盘探测）。
+
+`document.visibilityState` 在 Tauri 隐藏窗口时**不会变化**——先按 Web 标准加了
+`visibilitychange` 监听，实测隐藏后 CPU 仍以可见速率增长。改用后端在隐藏时发
+`conflux://window-hidden` 事件，前端停表；窗口重新获得焦点时恢复。
+
+计数验证（临时探针，验证后移除）：
+
+```
+可见 12 秒：轮询 5 次
+隐藏 12 秒：轮询 0 次
+```
+
+**CPU 测量不可靠**：可见 0.094s / 隐藏 0.078s（10 秒），差异小于采样噪声，因为 WebView
+自身的空闲开销占主导。轮询次数的直接计数才是有效证据。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
