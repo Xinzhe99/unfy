@@ -272,7 +272,10 @@ export function Status({
     <span
       className={`inline-flex items-center gap-1.5 text-xs font-medium ${text[tone]}`}
     >
-      <span aria-hidden className={`size-[6px] rounded-full ${dot[tone]}`} />
+      {/* 8 px rather than 6: at 6 the dot is legible in a zoomed screenshot but
+          reads as a smudge at normal viewing size, which is how "ready" kept
+          looking grey to a user even after it became green. */}
+      <span aria-hidden className={`size-2 rounded-full ${dot[tone]}`} />
       {children}
     </span>
   );

@@ -50,7 +50,9 @@
   --color-accent-soft: oklch(0.955 0.002 265);
 
   /* Semantic, rendered as text/dot only */
-  --color-success: oklch(0.52 0.11 155);
+  /* A little more chroma than a "safe" green: at 8 px on white the previous
+     value (0.11) read as sage grey to a user looking at a normal window. */
+  --color-success: oklch(0.55 0.14 152);
   --color-warning: oklch(0.55 0.1 70);
   --color-danger: oklch(0.51 0.16 25);
   /* Live state: a layout is currently gathering windows. Distinct from the
@@ -83,7 +85,7 @@
   --conflux-dark-accent-hover: oklch(0.87 0.004 265);
   --conflux-dark-accent-fg: oklch(0.16 0.006 265);
   --conflux-dark-accent-soft: oklch(0.30 0.006 265);
-  --conflux-dark-success: oklch(0.7 0.11 155);
+  --conflux-dark-success: oklch(0.74 0.15 152);
   --conflux-dark-warning: oklch(0.76 0.1 70);
   --conflux-dark-danger: oklch(0.68 0.15 25);
   --conflux-dark-active: oklch(0.68 0.13 250);

@@ -412,6 +412,38 @@ describe("pages render", () => {
     expect(html).toContain("知道了");
   });
 
+  test("an idle engine shows a green dot, not a grey one", () => {
+    // Reported directly by the user: "就绪" had a grey dot, which in this palette
+    // is the colour of a disabled control. Asserting the class is the only way to
+    // see it from a test - the colour lives in CSS, not in the markup.
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={{ ...status, state: "idle" }}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+      />,
+    );
+    const idleBlock = html.slice(html.indexOf("就绪") - 400, html.indexOf("就绪"));
+    expect(idleBlock).toContain("bg-[var(--color-success)]");
+    expect(idleBlock).not.toContain("bg-[var(--color-muted)]");
+  });
+
   test("overview names the target display exactly as the picker does", () => {
     // The reported bug: the overview said "显示器 1" while the picker highlighted
     // "显示器 2" for the same monitor. They disagreed because each derived the
