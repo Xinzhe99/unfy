@@ -25,13 +25,33 @@ use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow
 
 use crate::dpi::PerMonitorV2;
 
+/// How long a cached topology is trusted.
+///
+/// The list has to expire on its own, because nothing in this crate can be told that
+/// it changed: there is no window here to receive `WM_DISPLAYCHANGE`, and the app
+/// polls `topology()` instead. With a cache that never expired, that poll compared
+/// the same value forever - the topology watcher never fired, the rescue for windows
+/// stranded by an unplugged monitor never ran, and layouts were planned against a
+/// work area that no longer existed.
+///
+/// Enumeration costs a few hundred microseconds, and the watcher runs every two
+/// seconds, so a second of staleness is invisible while still being fresh enough to
+/// react before a person notices.
+const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Cached display topology.
 ///
-/// `HMONITOR` values are only valid until the next topology change, so the cache
-/// is keyed by the raw value and rebuilt wholesale on [`WinDisplays::invalidate`].
+/// `HMONITOR` values stop being valid at the next topology change, so entries are
+/// dropped wholesale rather than updated.
 #[derive(Debug, Default)]
 pub struct WinDisplays {
-    cache: std::sync::Mutex<Vec<(isize, DisplaySnapshot)>>,
+    cache: std::sync::Mutex<Option<Cached>>,
+}
+
+#[derive(Debug)]
+struct Cached {
+    at: std::time::Instant,
+    displays: Vec<(isize, DisplaySnapshot)>,
 }
 
 impl WinDisplays {
@@ -39,22 +59,46 @@ impl WinDisplays {
         Self::default()
     }
 
-    /// Drop the cached topology. Call on `WM_DISPLAYCHANGE` or `WM_DPICHANGED`.
+    /// Drop the cached topology.
+    ///
+    /// For a caller that knows a change happened, to skip the remaining staleness.
+    /// Correctness does not depend on anyone calling this.
     pub fn invalidate(&self) {
         if let Ok(mut cache) = self.cache.lock() {
-            cache.clear();
+            *cache = None;
         }
     }
 
     fn snapshot(&self) -> Result<Vec<(isize, DisplaySnapshot)>> {
+        self.snapshot_at(std::time::Instant::now(), enumerate_monitors)
+    }
+
+    /// The cache rule, with the clock and the enumeration injected.
+    ///
+    /// Testable without displays and without waiting: the bug this replaced was a
+    /// cache that never expired, and a test that needs a monitor to be unplugged
+    /// would not have been written.
+    fn snapshot_at<F>(
+        &self,
+        now: std::time::Instant,
+        enumerate: F,
+    ) -> Result<Vec<(isize, DisplaySnapshot)>>
+    where
+        F: FnOnce() -> Result<Vec<(isize, DisplaySnapshot)>>,
+    {
         if let Ok(cache) = self.cache.lock() {
-            if !cache.is_empty() {
-                return Ok(cache.clone());
+            if let Some(cached) = cache.as_ref() {
+                if now.duration_since(cached.at) < CACHE_TTL {
+                    return Ok(cached.displays.clone());
+                }
             }
         }
-        let fresh = enumerate_monitors()?;
+        let fresh = enumerate()?;
         if let Ok(mut cache) = self.cache.lock() {
-            *cache = fresh.clone();
+            *cache = Some(Cached {
+                at: now,
+                displays: fresh.clone(),
+            });
         }
         Ok(fresh)
     }
@@ -269,4 +313,132 @@ pub fn display_at(displays: &WinDisplays, point: POINT) -> Result<DisplayKey> {
         .find(|(raw, _)| *raw == hmon.0 as isize)
         .map(|(_, d)| d.key)
         .ok_or(PlatformError::DisplayGone)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
+
+    fn display(name: &str, width: i32) -> (isize, DisplaySnapshot) {
+        (
+            0,
+            DisplaySnapshot {
+                key: DisplayKey {
+                    native_id: name.to_string(),
+                    quality: IdentityQuality::Strong,
+                },
+                label: name.to_string(),
+                bounds: Rect {
+                    left: 0,
+                    top: 0,
+                    right: width,
+                    bottom: 1080,
+                },
+                work_area: Rect {
+                    left: 0,
+                    top: 0,
+                    right: width,
+                    bottom: 1040,
+                },
+                scale: Scale { x: 1.0, y: 1.0 },
+                physical_size_mm: None,
+                primary: true,
+            },
+        )
+    }
+
+    #[test]
+    fn a_fresh_entry_is_reused_without_enumerating_again() {
+        let displays = WinDisplays::new();
+        let calls = Cell::new(0);
+        let now = Instant::now();
+
+        let first = displays
+            .snapshot_at(now, || {
+                calls.set(calls.get() + 1);
+                Ok(vec![display("A", 1920)])
+            })
+            .expect("first");
+        let second = displays
+            .snapshot_at(now + Duration::from_millis(500), || {
+                calls.set(calls.get() + 1);
+                Ok(vec![display("B", 1280)])
+            })
+            .expect("second");
+
+        assert_eq!(calls.get(), 1, "inside the TTL the list is reused");
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].1.key.native_id, first[0].1.key.native_id);
+    }
+
+    #[test]
+    fn a_stale_entry_is_replaced() {
+        // The bug this pins: the cache was only filled when empty, so a monitor
+        // that changed resolution - or went away - was reported the same way for the
+        // life of the process. The topology watcher polls this value, so it could
+        // never see a change, and the rescue for stranded windows never ran.
+        let displays = WinDisplays::new();
+        let calls = Cell::new(0);
+        let now = Instant::now();
+
+        displays
+            .snapshot_at(now, || {
+                calls.set(calls.get() + 1);
+                Ok(vec![display("A", 1920)])
+            })
+            .expect("first");
+        let after_ttl = displays
+            .snapshot_at(now + CACHE_TTL + Duration::from_millis(1), || {
+                calls.set(calls.get() + 1);
+                Ok(vec![display("B", 1280)])
+            })
+            .expect("second");
+
+        assert_eq!(calls.get(), 2, "past the TTL the list is re-read");
+        assert_eq!(after_ttl[0].1.key.native_id, "B");
+        assert_eq!(after_ttl[0].1.bounds.width(), 1280);
+    }
+
+    #[test]
+    fn invalidate_forces_a_re_read() {
+        let displays = WinDisplays::new();
+        let calls = Cell::new(0);
+        let now = Instant::now();
+        displays
+            .snapshot_at(now, || {
+                calls.set(calls.get() + 1);
+                Ok(vec![display("A", 1920)])
+            })
+            .expect("first");
+        displays.invalidate();
+        displays
+            .snapshot_at(now, || {
+                calls.set(calls.get() + 1);
+                Ok(vec![display("B", 1280)])
+            })
+            .expect("second");
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn a_failed_read_keeps_the_previous_list() {
+        let displays = WinDisplays::new();
+        let now = Instant::now();
+        displays
+            .snapshot_at(now, || Ok(vec![display("A", 1920)]))
+            .expect("first");
+        let failed = displays.snapshot_at(now + CACHE_TTL + Duration::from_millis(1), || {
+            Err(PlatformError::Os("enumeration failed".to_string()))
+        });
+        assert!(failed.is_err());
+        // The next read still works rather than replaying the failure.
+        let recovered = displays
+            .snapshot_at(now + CACHE_TTL + Duration::from_millis(2), || {
+                Ok(vec![display("B", 1280)])
+            })
+            .expect("third");
+        assert_eq!(recovered[0].1.key.native_id, "B");
+    }
 }
