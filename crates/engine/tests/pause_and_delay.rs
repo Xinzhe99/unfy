@@ -176,3 +176,47 @@ fn topology_change_leaves_visible_windows_alone() {
     assert!(rescued.is_empty());
     assert_eq!(engine.backend().enumerate().unwrap(), before);
 }
+
+/// Resuming must not claim a partial layout is complete.
+///
+/// `resume` used to set `Active` whenever a transaction existed, including when the
+/// engine was `Degraded` - the state that says "windows are still displaced". The
+/// overview chooses between "restore" and "keep current layout" from that state, so
+/// overwriting it hid the work that was left.
+///
+/// The `Degraded` used here is the one the app actually produces: a journal adopted
+/// from a previous run that ended mid-transaction.
+#[test]
+fn resuming_a_degraded_layout_stays_degraded() {
+    let dir = config("resume-degraded").journal_dir;
+    let mut engine = Engine::new(backend(), config("resume-degraded"));
+    engine.migrate(&target()).expect("migrate");
+    let transaction = engine.current_transaction().expect("open transaction");
+
+    // Simulate a crash: write a journal with preimages but no resolution, then
+    // adopt it as a fresh process would.
+    let path = dir.join(format!("{transaction}.journal"));
+    drop(engine);
+
+    let mut engine = Engine::new(backend(), config("resume-degraded"));
+    match engine.recover_latest(&dir) {
+        Ok(Some(_)) => {}
+        other => panic!("expected an adopted transaction, got {other:?}"),
+    }
+    assert_eq!(
+        engine.state(),
+        conflux_domain::EngineState::Degraded,
+        "an adopted unresolved transaction is degraded"
+    );
+
+    engine.pause().expect("pause a degraded layout");
+    engine.resume().expect("resume");
+    assert_eq!(
+        engine.state(),
+        conflux_domain::EngineState::Degraded,
+        "resuming must not upgrade a partial layout to Active"
+    );
+
+    // Cleanup: the adopted journal is still on disk.
+    let _ = std::fs::remove_file(&path);
+}

@@ -746,6 +746,21 @@ clean: 'title'   clean: '.exe'   clean: 'C:\'   clean: 'DISPLAY#'   clean: '\\?\
 测试用"不存在的显示器"触发失败，断言状态回到 `Idle` 且后续整理仍然成功。把修复去掉后
 测试报 `left: Planning, right: Idle`。
 
+### 取消暂停不能把"部分完成"说成"全部完成"
+
+`resume` 原本只在有事务时直接把状态设为 `Active`。`Degraded` 的三种来源都被它覆盖：
+
+- 接管了上次崩溃留下的事务；
+- 迁移中途平台失败；
+- 计划里一个窗口都没放进去。
+
+`Degraded` 的含义是"还有窗口没处理"。概览页据此在"恢复"与"保留当前布局"之间选择，覆盖它等于
+告诉用户布局已完成，而实际还有残留。
+
+现在只在原本不是 `Degraded` 时才恢复为 `Active`。测试用真实路径构造：整理 → 丢弃引擎 →
+对新引擎 `recover_latest` 接管未完成事务 → 断言状态为 `Degraded` → 暂停 → 取消暂停 →
+仍为 `Degraded`。去掉修复后测试报 `left: Active, right: Degraded`。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

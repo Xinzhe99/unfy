@@ -382,10 +382,18 @@ impl<B: Backend> Engine<B> {
             return Ok(());
         }
         self.paused = false;
-        if self.transaction.is_some() {
+        // Only a layout that was fully applied becomes `Active` again. Overwriting
+        // `Degraded` would claim the layout is complete while windows are still
+        // unplaced or a crash-adopted transaction is unresolved - and the overview
+        // offers "restore" or "keep" based on that claim.
+        // Only a layout that was fully applied becomes `Active` again. Overwriting
+        // `Degraded` would claim the layout is complete while windows are still
+        // unplaced or a crash-adopted transaction is unresolved - and the overview
+        // offers "restore" or "keep" based on that claim.
+        if self.transaction.is_some() && self.state != EngineState::Degraded {
             self.state = EngineState::Active;
         }
-        tracing::info!("engine resumed");
+        tracing::info!(state = ?self.state, "engine resumed");
         Ok(())
     }
 
