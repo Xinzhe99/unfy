@@ -27,6 +27,8 @@ pub struct AppState {
     pub settings_path: std::path::PathBuf,
     /// Which global shortcuts actually registered, and why any failed.
     pub hotkey_status: Arc<std::sync::Mutex<commands::HotkeyStatusDto>>,
+    /// Outcome of the most recent update check, as (outcome, version).
+    pub last_update: Arc<std::sync::Mutex<Option<(String, String)>>>,
 }
 
 impl Default for AppState {
@@ -88,6 +90,7 @@ impl AppState {
             settings: Arc::new(std::sync::Mutex::new(settings)),
             settings_path,
             hotkey_status: Arc::new(std::sync::Mutex::new(commands::HotkeyStatusDto::default())),
+            last_update: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -137,6 +140,28 @@ fn init_logging() {
         .init();
 }
 
+/// Record a panic before the process dies.
+///
+/// A panic inside the engine leaves a journal mid-transaction. On the next
+/// launch the recovery banner appears, but without this hook nothing explains
+/// *why* it appeared: the log would simply stop. The hook writes the location and
+/// message, then defers to the default hook so the process still aborts the way
+/// the developer expects.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(
+            location = %info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()))
+                .unwrap_or_else(|| "<unknown>".into()),
+            message = %info.payload().downcast_ref::<&str>().copied().unwrap_or("<non-string>"),
+            "panic; any open window transaction is left for recovery on next launch"
+        );
+        previous(info);
+    }));
+}
+
 fn log_filter() -> tracing_subscriber::EnvFilter {
     // `conflux=info` only matches a target literally named `conflux`. Every
     // crate here is named `conflux_*` (engine, journal, platform_win...), so that
@@ -154,6 +179,7 @@ fn log_filter() -> tracing_subscriber::EnvFilter {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_logging();
+    install_panic_hook();
 
     tauri::Builder::default()
         // Must be the first plugin: a second instance has to hand off and exit
@@ -198,6 +224,8 @@ pub fn run() {
             commands::check_update,
             commands::set_paused,
             commands::hotkey_status,
+            commands::display_thumbnails,
+            commands::running_applications,
             commands::identify_displays,
             commands::live_transaction,
         ])
@@ -221,6 +249,7 @@ pub fn run() {
             // registration lives outside the settings file, so the two can drift
             // if the user removes it from Task Manager.
             session::apply_saved_autostart(app.handle());
+            session::watch_topology(&app.handle().clone());
             update::check_in_background(app.handle().clone());
             Ok(())
         })

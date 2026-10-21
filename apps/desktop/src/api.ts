@@ -122,6 +122,8 @@ export interface SettingsDto {
   auto_update: boolean;
   telemetry: boolean;
   excluded_apps: string[];
+  onboarding_done: boolean;
+  onboarding_step: number;
   target: TargetDto | null;
 }
 
@@ -152,8 +154,22 @@ export interface HotkeyStatusDto {
 export interface UpdateStatusDto {
   current_version: string;
   auto_update: boolean;
+  /** False when this build has no updater endpoint or signing key. */
+  configured: boolean;
   last_outcome: string | null;
   last_version: string | null;
+}
+
+export interface DisplayThumbnailDto {
+  native_id: string;
+  /** `data:image/png;base64,...` ready for an `<img src>`. */
+  data_url: string;
+}
+
+export interface AppDto {
+  name: string;
+  /** True when an exclusion rule already covers this application. */
+  excluded: boolean;
 }
 
 export const api = {
@@ -181,6 +197,9 @@ export const api = {
   hotkeyStatus: () => invoke<HotkeyStatusDto>("hotkey_status"),
   identifyDisplays: (seconds?: number) =>
     invoke<boolean>("identify_displays", { seconds }),
+  displayThumbnails: () =>
+    invoke<DisplayThumbnailDto[]>("display_thumbnails"),
+  runningApplications: () => invoke<AppDto[]>("running_applications"),
 };
 
 /** Human-readable Chinese labels for the engine states shown in the UI. */

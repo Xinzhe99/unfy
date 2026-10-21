@@ -113,3 +113,60 @@ fn zero_delay_restores_immediately() {
         "the default delay is zero and must not sleep"
     );
 }
+
+#[test]
+fn topology_signature_changes_with_geometry_not_with_time() {
+    // The watcher compares this string every two seconds. It must be stable while
+    // nothing changes (or the rescue would fire constantly) and must differ once
+    // the topology does.
+    let engine = Engine::new(backend(), config("signature"));
+    let first = engine.topology_signature().expect("signature");
+    let second = engine.topology_signature().expect("signature");
+    assert_eq!(
+        first, second,
+        "an unchanged topology must produce the same fingerprint"
+    );
+    assert!(
+        first.contains("fake-display-b"),
+        "identity must be part of the key"
+    );
+}
+
+#[test]
+fn topology_change_rescues_windows_left_outside_every_display() {
+    let mut backend = FakeBackend::with_two_displays();
+    // A window parked on a display that is about to disappear.
+    backend.add_window(
+        9,
+        Rect::new(6000, 4000, 6600, 4400),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+
+    let mut engine = Engine::new(backend, config("hotplug"));
+    let rescued = engine.on_topology_changed().expect("topology change");
+    assert_eq!(
+        rescued.len(),
+        1,
+        "the unreachable window must be moved back"
+    );
+
+    let window = engine.backend().enumerate().unwrap().pop().unwrap();
+    let displays = conflux_platform::DisplayProvider::topology(engine.backend()).unwrap();
+    assert!(
+        displays
+            .iter()
+            .any(|d| window.visible_rect.reachable_in(&d.work_area, 64, 32)),
+        "rescued window must be reachable on some display"
+    );
+}
+
+#[test]
+fn topology_change_leaves_visible_windows_alone() {
+    let mut engine = Engine::new(backend(), config("hotplug-noop"));
+    let before = engine.backend().enumerate().unwrap();
+    let rescued = engine.on_topology_changed().expect("topology change");
+    assert!(rescued.is_empty());
+    assert_eq!(engine.backend().enumerate().unwrap(), before);
+}

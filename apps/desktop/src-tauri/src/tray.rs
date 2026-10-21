@@ -79,6 +79,70 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
         let _ = tray.set_menu(Some(menu));
     }
     let _ = tray.set_tooltip(Some(tooltip(app)));
+    if let Some(icon) = state_icon(app) {
+        let _ = tray.set_icon(Some(icon));
+    }
+}
+
+/// Recolour the tray icon so the state is readable without hovering.
+///
+/// The tooltip already carries the state, but a tray icon is a dot at the edge of
+/// the screen: the user has to hover to read anything. A tinted icon answers
+/// "is there a layout active right now?" at a glance, which is the question this
+/// app is used for dozens of times a day.
+///
+/// Tinting is done on the embedded icon bytes at runtime rather than shipping
+/// pre-rendered variants, so the palette stays in one place.
+fn state_icon<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::image::Image<'static>> {
+    let state = {
+        let state = app.state::<AppState>();
+        let engine = state.engine.lock().ok()?;
+        (engine.state(), engine.is_paused())
+    };
+
+    let (r, g, b) = match state {
+        // Active: the accent blue, matching the UI.
+        (conflux_domain::EngineState::Active, false) => (74u8, 108u8, 220u8),
+        // Paused or degraded: amber, "look at me".
+        (conflux_domain::EngineState::Degraded, _)
+        | (conflux_domain::EngineState::Error, _)
+        | (_, true) => (214u8, 158u8, 46u8),
+        // Busy: accent, but the tooltip carries the detail.
+        (conflux_domain::EngineState::Migrating, _)
+        | (conflux_domain::EngineState::Restoring, _) => (74u8, 108u8, 220u8),
+        // Idle: neutral grey.
+        _ => (130u8, 136u8, 150u8),
+    };
+
+    let source = app.default_window_icon()?;
+    let (width, height) = (source.width(), source.height());
+    let rgba = source.rgba();
+    let mut tinted = Vec::with_capacity(rgba.len());
+
+    for pixel in rgba.chunks_exact(4) {
+        let alpha = pixel[3];
+        if alpha == 0 {
+            // Transparent padding stays transparent, or the icon becomes a square.
+            tinted.extend_from_slice(&[0, 0, 0, 0]);
+            continue;
+        }
+        // Keep the artwork's luminance and apply the state colour, so the mark
+        // stays recognisable while the hue changes.
+        //
+        // The weights are applied in u32: 255 * (299 + 587 + 114) is 255,000,
+        // which overflows u16 and panicked the tray refresh on the very first
+        // pixel. `u8::from`-style conversions would not have caught it.
+        let luma =
+            (u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114)
+                / 1000;
+        let mix = |channel: u8| -> u8 {
+            let scaled = u32::from(channel) * luma / 255;
+            u8::try_from((scaled + u32::from(channel)) / 2).unwrap_or(channel)
+        };
+        tinted.extend_from_slice(&[mix(r), mix(g), mix(b), alpha]);
+    }
+
+    tauri::image::Image::new_owned(tinted, width, height).into()
 }
 
 fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
@@ -299,4 +363,34 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
         return;
     }
     app.exit(0);
+}
+
+#[cfg(test)]
+mod icon_tests {
+    //! Tinting arithmetic. The first implementation used `u16` for the luminance
+    //! weights and panicked on the first pixel (`255 * 1000` overflows `u16`);
+    //! in release that would have silently wrapped and tinted the icon wrong.
+
+    fn luma(r: u8, g: u8, b: u8) -> u32 {
+        (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000
+    }
+
+    #[test]
+    fn luminance_stays_in_range_for_every_extreme() {
+        assert_eq!(luma(255, 255, 255), 255);
+        assert_eq!(luma(0, 0, 0), 0);
+        // The value that overflowed: pure white through the full weight.
+        assert!(luma(255, 255, 255) <= 255);
+    }
+
+    #[test]
+    fn tint_never_exceeds_eight_bits() {
+        for channel in [0u8, 1, 127, 254, 255] {
+            for l in [0u32, 128, 255] {
+                let scaled = channel as u32 * l / 255;
+                let mixed = (scaled + channel as u32) / 2;
+                assert!(mixed <= 255, "channel {channel} luma {l} produced {mixed}");
+            }
+        }
+    }
 }

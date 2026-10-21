@@ -192,3 +192,66 @@ pub fn apply_saved_autostart<R: Runtime>(app: &AppHandle<R>) {
     };
     set_autostart(app, desired);
 }
+
+/// Watch for display topology changes and rescue unreachable windows.
+///
+/// A window sitting on a monitor that was just unplugged is invisible and
+/// unreachable: the user cannot drag it back because they cannot see it. That is
+/// the worst failure this product can leave behind, so it is detected and
+/// repaired without waiting for the user to notice.
+///
+/// Polling is used rather than a window message because the tray-only process has
+/// no window of its own to receive `WM_DISPLAYCHANGE`, and the message would not
+/// be delivered to a hidden window on every platform. Two seconds costs one
+/// topology query — a handful of microseconds — and keeps the reaction time below
+/// what a user would notice.
+pub fn watch_topology<R: Runtime>(app: &AppHandle<R>) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let mut last = {
+            let state = handle.state::<AppState>();
+            let engine = state.engine.lock();
+            match engine {
+                Ok(engine) => engine.topology_signature(),
+                Err(_) => None,
+            }
+        };
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            let state = handle.state::<AppState>();
+            let Ok(mut engine) = state.engine.lock() else {
+                continue;
+            };
+            let current = engine.topology_signature();
+            if current.is_none() || current == last {
+                continue;
+            }
+            // First observation after startup: nothing to compare against yet.
+            if last.is_none() {
+                last = current;
+                continue;
+            }
+            last = current;
+
+            match engine.on_topology_changed() {
+                Ok(rescued) if rescued.is_empty() => {
+                    tracing::info!("display topology changed; nothing needed rescuing");
+                }
+                Ok(rescued) => {
+                    let count = rescued.len();
+                    drop(engine);
+                    tracing::warn!(count, "display topology changed; rescued windows");
+                    use tauri::Emitter;
+                    let _ = handle.emit(
+                        "conflux://topology-changed",
+                        serde_json::json!({ "rescued": count }),
+                    );
+                    crate::tray::refresh(&handle);
+                }
+                Err(e) => tracing::error!(error = %e, "topology rescue failed"),
+            }
+        }
+    });
+}

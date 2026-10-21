@@ -36,6 +36,16 @@ pub enum UpdateOutcome {
 }
 
 impl UpdateOutcome {
+    /// Version involved in the outcome, or the running version for a no-op.
+    pub fn version(&self) -> String {
+        match self {
+            UpdateOutcome::UpToDate { current } => current.clone(),
+            UpdateOutcome::Installed { version } => version.clone(),
+            UpdateOutcome::Deferred { version, .. } => version.clone(),
+            UpdateOutcome::Failed { .. } => String::new(),
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             UpdateOutcome::UpToDate { .. } => "up_to_date",
@@ -44,6 +54,30 @@ impl UpdateOutcome {
             UpdateOutcome::Failed { .. } => "failed",
         }
     }
+}
+
+/// Whether this build has an updater endpoint and signing key.
+///
+/// Both live in `tauri.conf.json` and are compiled into the binary. Until a
+/// release workflow fills them in, every check fails at the transport layer;
+/// reporting that as "更新失败" would look like a bug rather than a build that
+/// was never configured. The check is derived from the same generated context the
+/// plugin reads, so it cannot drift from the real configuration.
+pub fn is_configured<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    let config = app.config();
+    let updater = &config.plugins.0;
+    let Some(settings) = updater.get("updater") else {
+        return false;
+    };
+    let has_key = settings
+        .get("pubkey")
+        .and_then(|v| v.as_str())
+        .is_some_and(|key| !key.trim().is_empty());
+    let has_endpoint = settings
+        .get("endpoints")
+        .and_then(|v| v.as_array())
+        .is_some_and(|list| !list.is_empty());
+    has_key && has_endpoint
 }
 
 /// Check for an update and install it if it is safe to do so.

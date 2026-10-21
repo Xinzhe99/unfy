@@ -76,6 +76,15 @@ pub struct Settings {
     /// means the user dismisses one banner and never sees another crash warning
     /// for the rest of the installation's life.
     pub recovery_dismissed_until: u64,
+    /// Whether the first-run guide has been completed.
+    ///
+    /// Distinct from "a target is set": a user may deliberately keep the primary
+    /// display as the target, so the guide must not reappear just because the
+    /// choice matches the default.
+    pub onboarding_done: bool,
+    /// Current step of the first-run guide, so hiding and re-showing the window
+    /// resumes where the user was instead of restarting the explanation.
+    pub onboarding_step: u8,
     /// Executable names never moved. Case-insensitive, file name only.
     pub excluded_apps: Vec<String>,
     /// Check for updates automatically. Default on; security updates are never
@@ -140,6 +149,8 @@ impl Default for Settings {
             restore_delay_secs: 0,
             paused: false,
             recovery_dismissed_until: 0,
+            onboarding_done: false,
+            onboarding_step: 0,
             excluded_apps: Vec::new(),
             auto_update: true,
             telemetry: false,

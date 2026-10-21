@@ -3,40 +3,43 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 /**
  * Control primitives.
  *
- * Each one exists because the same shape appears in at least three places; none
- * of them is a one-line wrapper around a DOM element. Variants are exhaustive so
- * a new tone cannot be invented ad hoc and break the palette.
+ * Visual rules enforced here, so no page has to repeat them:
+ *
+ *  * only the primary button is filled; everything else is a hairline outline or
+ *    plain text;
+ *  * semantic colour is text or a dot, never a filled background — a UI full of
+ *    amber and green panels reads as an alarm console;
+ *  * one radius and one control height scale.
  */
 
-type Tone = "accent" | "neutral" | "quiet" | "danger";
+type Variant = "primary" | "secondary" | "quiet" | "danger";
 type Size = "sm" | "md";
 
-const toneClass: Record<Tone, string> = {
-  accent:
-    "bg-[var(--color-accent)] text-[var(--color-accent-fg)] hover:bg-[var(--color-accent-hover)] shadow-sm",
-  neutral:
-    "bg-[var(--color-surface-2)] text-[var(--color-fg)] border border-[var(--color-border)] hover:bg-[var(--color-surface-3)]",
-  quiet:
-    "text-[var(--color-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-2)]",
+const variantClass: Record<Variant, string> = {
+  primary:
+    "bg-[var(--color-accent)] text-[var(--color-accent-fg)] hover:bg-[var(--color-accent-hover)]",
+  secondary:
+    "border border-[var(--color-border-strong)] bg-[var(--color-surface)] text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)]",
+  quiet: "text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)]",
   danger:
-    "border border-[var(--color-danger)]/35 bg-[var(--color-danger-soft)] text-[var(--color-danger)] hover:border-[var(--color-danger)]/60",
+    "border border-[var(--color-border-strong)] text-[var(--color-danger)] hover:bg-[var(--color-surface-hover)]",
 };
 
 const sizeClass: Record<Size, string> = {
-  sm: "h-8 px-2.5 text-xs gap-1.5 rounded-[var(--radius-control)]",
-  md: "h-9 px-3.5 text-[13px] gap-2 rounded-[var(--radius-control)]",
+  sm: "h-7 px-2.5 text-xs gap-1.5",
+  md: "h-8 px-3 text-[13px] gap-1.5",
 };
 
 export function Button({
   children,
-  tone = "neutral",
+  variant = "secondary",
   size = "md",
   loading,
   icon,
   ...rest
 }: {
   children: ReactNode;
-  tone?: Tone;
+  variant?: Variant;
   size?: Size;
   loading?: boolean;
   icon?: ReactNode;
@@ -46,7 +49,7 @@ export function Button({
       type="button"
       {...rest}
       disabled={rest.disabled || loading}
-      className={`inline-flex select-none items-center justify-center font-medium transition-colors disabled:pointer-events-none disabled:opacity-45 ${sizeClass[size]} ${toneClass[tone]} ${rest.className ?? ""}`}
+      className={`inline-flex select-none items-center justify-center whitespace-nowrap rounded-[var(--radius-control)] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 ${sizeClass[size]} ${variantClass[variant]} ${rest.className ?? ""}`}
     >
       {loading ? <Spinner /> : icon}
       {children}
@@ -58,32 +61,35 @@ export function Spinner() {
   return (
     <span
       aria-hidden
-      className="inline-block size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+      className="inline-block size-3 animate-spin rounded-full border-[1.5px] border-current border-t-transparent opacity-60"
     />
   );
 }
 
+/** A white panel with a hairline border. The only container in the app. */
 export function Card({
   title,
   description,
   children,
   aside,
-  padded = true,
+  footer,
+  padding = "normal",
 }: {
   title?: string;
   description?: string;
   children?: ReactNode;
   aside?: ReactNode;
-  padded?: boolean;
+  footer?: ReactNode;
+  padding?: "normal" | "none";
 }) {
   return (
-    <section className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-[var(--shadow-card)]">
+    <section className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]">
       {title ? (
-        <header className="flex items-start justify-between gap-4 px-5 pt-4">
+        <header className="flex items-start justify-between gap-4 px-4 pt-3.5">
           <div className="min-w-0">
-            <h2 className="text-[13px] font-semibold tracking-tight">{title}</h2>
+            <h2 className="text-[13px] font-semibold leading-5">{title}</h2>
             {description ? (
-              <p className="mt-1 text-xs leading-relaxed text-[var(--color-muted)]">
+              <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-muted)]">
                 {description}
               </p>
             ) : null}
@@ -91,62 +97,80 @@ export function Card({
           {aside ? <div className="shrink-0">{aside}</div> : null}
         </header>
       ) : null}
-      <div className={padded ? "px-5 pb-5 pt-3" : ""}>{children}</div>
+      <div className={padding === "none" ? "" : "px-4 pb-4 pt-3"}>
+        {children}
+      </div>
+      {footer ? (
+        <footer className="border-t border-[var(--color-border)] px-4 py-2.5">
+          {footer}
+        </footer>
+      ) : null}
     </section>
   );
 }
 
-/** A labelled switch. The whole row is clickable, not just the knob. */
-export function Toggle({
-  checked,
-  onChange,
-  disabled,
+/** Label on the left, control on the right, hairline between rows. */
+export function SettingRow({
   label,
   hint,
+  children,
+  disabled,
 }: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
   label: string;
   hint?: string;
+  children: ReactNode;
+  disabled?: boolean;
 }) {
   return (
-    <label
-      className={`flex cursor-pointer items-start justify-between gap-6 py-3 ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+    <div
+      className={`flex items-start justify-between gap-6 py-3 ${disabled ? "opacity-50" : ""}`}
     >
-      <span className="min-w-0">
-        <span className="block text-[13px] font-medium">{label}</span>
+      <div className="min-w-0">
+        <span className="block text-[13px] font-medium leading-5">{label}</span>
         {hint ? (
           <span className="mt-0.5 block text-xs leading-relaxed text-[var(--color-muted)]">
             {hint}
           </span>
         ) : null}
-      </span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
-          checked ? "bg-[var(--color-accent)]" : "bg-[var(--color-border-strong)]"
+      </div>
+      <div className="shrink-0 pt-0.5">{children}</div>
+    </div>
+  );
+}
+
+/** Switch. The knob is positioned with `left`, not a transform. */
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative h-[18px] w-[32px] rounded-full transition-colors ${
+        checked
+          ? "bg-[var(--color-accent)]"
+          : "bg-[var(--color-border-strong)]"
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`absolute top-[2px] size-[14px] rounded-full bg-white shadow-sm transition-[left] duration-150 ${
+          checked ? "left-[16px]" : "left-[2px]"
         }`}
-      >
-        {/*
-         * Positioned with `left`, not `translate`: an absolutely positioned span
-         * with no `left` keeps its static position, and adding a translate on top
-         * of that pushed the knob outside the track entirely.
-         * Track is 36px, knob 16px, so on = 36 - 16 - 2.
-         */}
-        <span
-          aria-hidden
-          className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left] duration-150 ${
-            checked ? "left-[18px]" : "left-0.5"
-          }`}
-        />
-      </button>
-    </label>
+      />
+    </button>
   );
 }
 
@@ -168,7 +192,7 @@ export function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
-      className="inline-flex rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] p-0.5"
+      className="inline-flex rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-[2px]"
     >
       {options.map((option) => {
         const active = option.value === value;
@@ -180,10 +204,10 @@ export function Segmented<T extends string>({
             aria-checked={active}
             disabled={disabled}
             onClick={() => onChange(option.value)}
-            className={`rounded-[7px] px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors ${
               active
-                ? "bg-[var(--color-surface)] text-[var(--color-accent)] shadow-sm ring-1 ring-[var(--color-accent)]/25"
-                : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+                ? "bg-[var(--color-surface)] text-[var(--color-fg)] shadow-sm"
+                : "text-[var(--color-muted)] hover:text-[var(--color-fg-soft)]"
             }`}
           >
             {option.label}
@@ -194,43 +218,50 @@ export function Segmented<T extends string>({
   );
 }
 
-export function Badge({
+/**
+ * Status indicator: a coloured dot plus neutral text.
+ *
+ * Deliberately not a filled pill. The state is already named in words; the dot
+ * only helps scanning, and a row of coloured blocks would compete with content.
+ */
+export function Status({
   tone = "neutral",
   children,
-  dot,
 }: {
   tone?: "neutral" | "accent" | "success" | "warning" | "danger";
   children: ReactNode;
-  dot?: boolean;
 }) {
-  const tones: Record<string, string> = {
-    neutral:
-      "bg-[var(--color-surface-3)] text-[var(--color-fg-soft)] border-transparent",
-    accent:
-      "bg-[var(--color-accent-soft)] text-[var(--color-accent)] border-transparent",
-    success:
-      "bg-[var(--color-success-soft)] text-[var(--color-success)] border-transparent",
-    warning:
-      "bg-[var(--color-warning-soft)] text-[var(--color-warning)] border-transparent",
-    danger:
-      "bg-[var(--color-danger-soft)] text-[var(--color-danger)] border-transparent",
+  const dot: Record<string, string> = {
+    neutral: "bg-[var(--color-muted)]",
+    accent: "bg-[var(--color-accent)]",
+    success: "bg-[var(--color-success)]",
+    warning: "bg-[var(--color-warning)]",
+    danger: "bg-[var(--color-danger)]",
+  };
+  const text: Record<string, string> = {
+    neutral: "text-[var(--color-muted)]",
+    accent: "text-[var(--color-fg-soft)]",
+    success: "text-[var(--color-fg-soft)]",
+    warning: "text-[var(--color-fg-soft)]",
+    danger: "text-[var(--color-danger)]",
   };
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${tones[tone]}`}
+      className={`inline-flex items-center gap-1.5 text-xs font-medium ${text[tone]}`}
     >
-      {dot ? (
-        <span
-          aria-hidden
-          className="inline-block size-1.5 rounded-full bg-current"
-        />
-      ) : null}
+      <span aria-hidden className={`size-[6px] rounded-full ${dot[tone]}`} />
       {children}
     </span>
   );
 }
 
-export function Callout({
+/**
+ * Notice: a hairline-bordered strip with an accent bar, not a tinted box.
+ *
+ * The left border carries the severity; the body stays on the normal surface, so
+ * the text keeps its usual contrast.
+ */
+export function Notice({
   tone = "neutral",
   title,
   children,
@@ -241,29 +272,25 @@ export function Callout({
   children?: ReactNode;
   actions?: ReactNode;
 }) {
-  const tones: Record<string, string> = {
-    neutral:
-      "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg)]",
-    accent:
-      "border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] text-[var(--color-fg)]",
-    warning:
-      "border-[var(--color-warning)]/35 bg-[var(--color-warning-soft)] text-[var(--color-fg)]",
-    danger:
-      "border-[var(--color-danger)]/35 bg-[var(--color-danger-soft)] text-[var(--color-fg)]",
+  const bar: Record<string, string> = {
+    neutral: "border-l-[var(--color-border-strong)]",
+    accent: "border-l-[var(--color-accent)]",
+    warning: "border-l-[var(--color-warning)]",
+    danger: "border-l-[var(--color-danger)]",
   };
   return (
     <div
       role={tone === "danger" ? "alert" : "status"}
-      className={`rounded-[var(--radius-control)] border px-4 py-3 ${tones[tone]}`}
+      className={`rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 bg-[var(--color-surface)] px-3.5 py-2.5 ${bar[tone]}`}
     >
-      <p className="text-[13px] font-medium">{title}</p>
+      <p className="text-[13px] font-medium leading-5">{title}</p>
       {children ? (
-        <div className="mt-1 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+        <div className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">
           {children}
         </div>
       ) : null}
       {actions ? (
-        <div className="mt-3 flex flex-wrap gap-2">{actions}</div>
+        <div className="mt-2.5 flex flex-wrap gap-1.5">{actions}</div>
       ) : null}
     </div>
   );
@@ -272,12 +299,14 @@ export function Callout({
 export function EmptyState({
   title,
   children,
+  action,
 }: {
   title: string;
   children?: ReactNode;
+  action?: ReactNode;
 }) {
   return (
-    <div className="rounded-[var(--radius-control)] border border-dashed border-[var(--color-border-strong)] px-4 py-8 text-center">
+    <div className="px-4 py-10 text-center">
       <p className="text-[13px] font-medium text-[var(--color-fg-soft)]">
         {title}
       </p>
@@ -286,6 +315,33 @@ export function EmptyState({
           {children}
         </p>
       ) : null}
+      {action ? <div className="mt-3 flex justify-center">{action}</div> : null}
+    </div>
+  );
+}
+
+/** Key/value line used in summaries. */
+export function Detail({
+  label,
+  value,
+  muted,
+}: {
+  label: string;
+  value: ReactNode;
+  muted?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 items-baseline gap-2 py-1">
+      <span className="shrink-0 text-xs text-[var(--color-muted)]">
+        {label}
+      </span>
+      <span
+        className={`min-w-0 flex-1 truncate text-right text-[13px] tabular-nums ${
+          muted ? "text-[var(--color-muted)]" : ""
+        }`}
+      >
+        {value}
+      </span>
     </div>
   );
 }

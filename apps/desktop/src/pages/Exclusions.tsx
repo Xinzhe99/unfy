@@ -1,26 +1,27 @@
 import { useState } from "react";
 
-import type { SettingsDto } from "../api";
-import { Button, Card, EmptyState } from "../components/ui";
+import type { AppDto, SettingsDto } from "../api";
+import { Button, Card, Switch } from "../components/ui";
 
 /**
- * Application exclusions.
+ * Exclusions.
  *
- * The engine moves every eligible window, which is the point — but a few
- * applications should never be rearranged (capture tools, media players, a
- * dashboard on a spare screen). This page is the escape hatch.
+ * Exclusions are picked from the applications that actually own a window right
+ * now. Typing an executable name by hand is a guessing game: the string has to
+ * match exactly, and a typo fails silently — the app keeps getting moved and the
+ * user has no idea why the rule did nothing.
  *
- * Rules match the executable file name only, never a path or a wildcard: a path
- * would not survive being compared against the name the platform reports, and a
- * pattern would make a typo silently match nothing. Both are rejected by the Rust
- * validator, and the hint here says so before the user tries.
+ * The text field stays for the case the picker cannot cover: an app that is not
+ * running yet but will be (a game launcher, a full-screen client).
  */
 export function ExclusionsPage({
   settings,
+  runningApps,
   busy,
   onSave,
 }: {
   settings: SettingsDto | null;
+  runningApps: AppDto[];
   busy: boolean;
   onSave: (patch: Partial<SettingsDto>) => void;
 }) {
@@ -30,93 +31,121 @@ export function ExclusionsPage({
     return <p className="text-xs text-[var(--color-muted)]">正在读取设置…</p>;
   }
 
-  const trimmed = draft.trim();
-  const duplicate = settings.excluded_apps.some(
-    (app) => app.toLowerCase() === trimmed.toLowerCase(),
-  );
-  const invalid = trimmed.length > 0 && /[\\/*?]/.test(trimmed);
-  const canAdd = trimmed.length > 0 && !duplicate && !invalid && !busy;
+  const rules = settings.excluded_apps;
 
-  const add = () => {
-    if (!canAdd) return;
-    onSave({ excluded_apps: [...settings.excluded_apps, trimmed] });
+  const setRules = (next: string[]) => onSave({ excluded_apps: next });
+
+  const addRule = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (rules.some((rule) => rule.toLowerCase() === trimmed.toLowerCase())) {
+      return;
+    }
+    setRules([...rules, trimmed]);
     setDraft("");
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <>
       <Card
         title="排除的应用"
-        description="这些应用的窗口永远不会被移动。按可执行文件名匹配，忽略大小写。"
+        description="这些应用的窗口不会在整理时被移动，也不会在恢复时被处理。"
+        aside={<span className="text-[11px] tabular-nums text-[var(--color-muted)]">{rules.length} 条规则</span>}
       >
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={draft}
-            disabled={busy}
-            placeholder="例如 obs64.exe"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                add();
-              }
-            }}
-            className="h-9 flex-1 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-[13px] outline-none focus:border-[var(--color-accent)]"
-            aria-label="要排除的应用名"
-            aria-invalid={invalid || duplicate}
-          />
-          <Button tone="accent" onClick={add} disabled={!canAdd}>
-            添加
-          </Button>
-        </div>
-        {invalid ? (
-          <p className="mt-2 text-xs text-[var(--color-warning)]">
-            只能填文件名，不能包含路径或通配符（* ? / \）。
-          </p>
-        ) : duplicate ? (
-          <p className="mt-2 text-xs text-[var(--color-warning)]">
-            这个应用已经在列表里了。
+        {rules.length === 0 ? (
+          <p className="py-1 text-xs text-[var(--color-muted)]">
+            还没有排除任何应用。
           </p>
         ) : (
-          <p className="mt-2 text-[11px] text-[var(--color-muted)]">
-            名称区分不了时，可以先整理一次，然后在「概览」的跳过清单里查看真实的应用名。
-          </p>
+          <ul className="space-y-1">
+            {rules.map((rule) => (
+              <li
+                key={rule}
+                className="flex items-center justify-between gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] px-2.5 py-1.5"
+              >
+                <span className="min-w-0 truncate font-mono text-xs">{rule}</span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setRules(rules.filter((r) => r !== rule))}
+                  className="shrink-0 text-[11px] text-[var(--color-muted)] transition-colors hover:text-[var(--color-danger)] disabled:opacity-40"
+                >
+                  移除
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
 
-        <div className="mt-4">
-          {settings.excluded_apps.length === 0 ? (
-            <EmptyState title="还没有排除任何应用">
-              列表为空时，所有合格窗口都会参与整理。
-            </EmptyState>
-          ) : (
-            <ul className="divide-y divide-[var(--color-border)]">
-              {settings.excluded_apps.map((app) => (
-                <li
-                  key={app}
-                  className="flex items-center justify-between gap-4 py-2"
-                >
-                  <span className="truncate text-[13px]">{app}</span>
-                  <Button
-                    size="sm"
-                    tone="quiet"
-                    disabled={busy}
-                    onClick={() =>
-                      onSave({
-                        excluded_apps: settings.excluded_apps.filter(
-                          (entry) => entry !== app,
-                        ),
-                      })
-                    }
-                  >
-                    移除
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <form
+          className="mt-2.5 flex gap-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            addRule(draft);
+          }}
+        >
+          <input
+            value={draft}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+            placeholder="例如 game.exe"
+            spellCheck={false}
+            disabled={busy}
+            className="h-7 min-w-0 flex-1 rounded-[var(--radius-control)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 font-mono text-xs outline-none placeholder:font-sans placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)]"
+          />
+          <Button size="sm" type="submit" disabled={busy || draft.trim() === ""}>
+            添加
+          </Button>
+        </form>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--color-muted)]">
+          匹配可执行文件名，不区分大小写。全屏应用与工具窗口本来就不会被移动。
+        </p>
       </Card>
-    </div>
+
+      <Card
+        title="正在运行"
+        description="从当前有窗口的应用中选择，避免手写文件名出错。"
+        aside={
+          <Button
+            size="sm"
+            variant="quiet"
+            disabled={busy}
+            onClick={() => onSave({ excluded_apps: [] })}
+          >
+            清空规则
+          </Button>
+        }
+      >
+        {runningApps.length === 0 ? (
+          <p className="py-1 text-xs text-[var(--color-muted)]">没有检测到有窗口的应用。</p>
+        ) : (
+          <ul>
+            {runningApps.map((app, index) => (
+              <li
+                key={app.name}
+                className={`flex items-center justify-between gap-3 py-1.5 ${
+                  index > 0 ? "border-t border-[var(--color-border)]" : ""
+                }`}
+              >
+                <span className="min-w-0 truncate font-mono text-xs">{app.name}</span>
+                <Switch
+                  checked={app.excluded}
+                  disabled={busy}
+                  label={`排除 ${app.name}`}
+                  onChange={(excluded) =>
+                    setRules(
+                      excluded
+                        ? [...rules, app.name]
+                        : rules.filter(
+                            (r) => r.toLowerCase() !== app.name.toLowerCase(),
+                          ),
+                    )
+                  }
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </>
   );
 }

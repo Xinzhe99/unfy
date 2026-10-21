@@ -113,3 +113,39 @@ pub fn flash_display_labels(seconds: u64) -> bool {
         false
     }
 }
+
+/// Screenshot of one display.
+pub struct Thumbnail {
+    pub native_id: String,
+    pub data_url: String,
+}
+
+/// Screenshot of every display, or an empty list when unsupported.
+pub fn display_thumbnails() -> Vec<Thumbnail> {
+    #[cfg(target_os = "windows")]
+    {
+        conflux_platform_win::display_thumbnails()
+            .into_iter()
+            .map(|t| Thumbnail {
+                native_id: t.native_id,
+                data_url: t.data_url,
+            })
+            .collect()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}
+
+/// Executables that currently own a visible window.
+pub fn running_applications() -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        conflux_platform_win::running_applications()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}

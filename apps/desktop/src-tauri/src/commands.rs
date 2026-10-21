@@ -12,7 +12,7 @@ use conflux_engine::{EngineState, MigrationReport, PendingWork, Preview, Restore
 use conflux_platform::{DisplayProvider, WindowBackend};
 use conflux_settings::{Settings, TargetDisplay};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::{platform, AppState};
 
@@ -138,6 +138,8 @@ pub struct SaveSettingsRequest {
     pub auto_update: Option<bool>,
     pub telemetry: Option<bool>,
     pub excluded_apps: Option<Vec<String>>,
+    pub onboarding_done: Option<bool>,
+    pub onboarding_step: Option<u8>,
 }
 
 /// Refresh the tray after a state change so its labels, enabled set and tooltip
@@ -486,6 +488,8 @@ pub struct SettingsDto {
     pub auto_update: bool,
     pub telemetry: bool,
     pub excluded_apps: Vec<String>,
+    pub onboarding_done: bool,
+    pub onboarding_step: u8,
     pub target: Option<TargetDto>,
 }
 
@@ -513,6 +517,8 @@ impl From<&Settings> for SettingsDto {
             auto_update: s.auto_update,
             telemetry: s.telemetry,
             excluded_apps: s.excluded_apps.clone(),
+            onboarding_done: s.onboarding_done,
+            onboarding_step: s.onboarding_step,
             target: s.target_display.as_ref().map(|t| TargetDto {
                 native_id: t.native_id.clone(),
                 label: t.label.clone(),
@@ -582,6 +588,12 @@ pub fn save_settings(
     }
     if let Some(excluded_apps) = request.excluded_apps {
         settings.excluded_apps = excluded_apps;
+    }
+    if let Some(onboarding_done) = request.onboarding_done {
+        settings.onboarding_done = onboarding_done;
+    }
+    if let Some(onboarding_step) = request.onboarding_step {
+        settings.onboarding_step = onboarding_step.min(2);
     }
 
     settings.validate().map_err(|e| e.to_string())?;
@@ -861,6 +873,8 @@ pub fn live_transaction(app: State<'_, AppState>) -> Result<Option<String>, Stri
 pub struct UpdateStatusDto {
     pub current_version: String,
     pub auto_update: bool,
+    /// False when this build has no updater endpoint or signing key.
+    pub configured: bool,
     pub last_outcome: Option<String>,
     pub last_version: Option<String>,
 }
@@ -872,18 +886,33 @@ pub fn update_status(
     handle: tauri::AppHandle,
 ) -> Result<UpdateStatusDto, String> {
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
+    let last = app.last_update.lock().map(|v| v.clone()).unwrap_or(None);
+
     Ok(UpdateStatusDto {
         current_version: handle.package_info().version.to_string(),
         auto_update: settings.auto_update,
-        last_outcome: None,
-        last_version: None,
+        // Whether this build can update at all. A development build has an empty
+        // signing key and no endpoint, so every check fails; the UI must say
+        // "未配置" instead of offering a button that never works.
+        configured: crate::update::is_configured(&handle),
+        last_outcome: last.as_ref().map(|o| o.0.clone()),
+        last_version: last.map(|o| o.1),
     })
 }
 
 /// Check for an update now, honouring the recovery barrier.
 #[tauri::command]
 pub async fn check_update(handle: tauri::AppHandle) -> Result<String, String> {
-    let outcome = crate::update::check_and_install(handle, true).await;
+    let outcome = crate::update::check_and_install(handle.clone(), true).await;
+
+    // Record the outcome so the settings page can show the last result after a
+    // restart instead of always claiming the check never ran.
+    if let Some(state) = handle.try_state::<AppState>() {
+        if let Ok(mut last) = state.last_update.lock() {
+            *last = Some((outcome.as_str().to_string(), outcome.version()));
+        }
+    }
+
     Ok(outcome.as_str().to_string())
 }
 
@@ -944,4 +973,55 @@ pub fn hotkey_status(app: State<'_, AppState>) -> Result<HotkeyStatusDto, String
 #[tauri::command]
 pub fn identify_displays(seconds: Option<u64>) -> bool {
     platform::flash_display_labels(seconds.unwrap_or(4))
+}
+
+#[derive(Debug, Serialize)]
+pub struct DisplayThumbnailDto {
+    pub native_id: String,
+    pub data_url: String,
+}
+
+/// Screenshot of each display, for the picker.
+///
+/// Captured on demand, not at startup: most launches never open the display page,
+/// and a screenshot costs a few milliseconds per monitor. The images stay in
+/// memory and are never written to disk or included in diagnostics.
+#[tauri::command]
+pub fn display_thumbnails() -> Vec<DisplayThumbnailDto> {
+    platform::display_thumbnails()
+        .into_iter()
+        .map(|t| DisplayThumbnailDto {
+            native_id: t.native_id,
+            data_url: t.data_url,
+        })
+        .collect()
+}
+
+#[derive(Debug, Serialize)]
+pub struct AppDto {
+    pub name: String,
+    /// True when an exclusion rule already covers this application.
+    pub excluded: bool,
+}
+
+/// Applications that currently own a window, for the exclusion picker.
+///
+/// Typing an executable name is a guessing game: users know "OBS", not
+/// "obs64.exe". This returns the names the engine would actually match, sorted
+/// for display.
+#[tauri::command]
+pub fn running_applications(app: State<'_, AppState>) -> Vec<AppDto> {
+    let excluded = app
+        .settings
+        .lock()
+        .map(|s| s.excluded_apps.clone())
+        .unwrap_or_default();
+
+    platform::running_applications()
+        .into_iter()
+        .map(|name| AppDto {
+            excluded: excluded.iter().any(|rule| rule.eq_ignore_ascii_case(&name)),
+            name,
+        })
+        .collect()
 }

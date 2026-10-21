@@ -268,6 +268,55 @@ impl<B: Backend> Engine<B> {
         self.transaction.as_ref().map(|t| t.id)
     }
 
+    /// A cheap fingerprint of the current display topology.
+    ///
+    /// Used to detect a hot-plug: when this changes, any plan computed against
+    /// the old topology is stale and windows may now sit outside every work
+    /// area. Comparing display identity plus geometry catches an unplug, a
+    /// resolution change, and a rearrangement, and nothing else.
+    pub fn topology_signature(&self) -> Option<String> {
+        let displays = self.backend.topology().ok()?;
+        let mut parts: Vec<String> = displays
+            .iter()
+            .map(|d| {
+                format!(
+                    "{}|{}x{}@{},{}|{:.3}",
+                    d.key.native_id,
+                    d.work_area.width(),
+                    d.work_area.height(),
+                    d.work_area.left,
+                    d.work_area.top,
+                    d.scale.x
+                )
+            })
+            .collect();
+        parts.sort();
+        Some(parts.join(";"))
+    }
+
+    /// React to a display being added, removed or reconfigured.
+    ///
+    /// Returns the windows that had to be moved back into a visible area.
+    ///
+    /// The dangerous case is a monitor disappearing while windows sit on it:
+    /// those windows are now unreachable, and the user may not even be able to
+    /// see that they exist. Rescue is deliberately allowed here even while a
+    /// transaction is open, because leaving a window off-screen is worse than
+    /// acting outside the normal plan. The snapshot keeps the original
+    /// coordinates, so a later restore can still put the window back if the
+    /// display returns.
+    pub fn on_topology_changed(&mut self) -> Result<Vec<(WindowId, Rect)>, EngineError> {
+        tracing::warn!(state = ?self.state, "display topology changed; rescuing unreachable windows");
+        let rescued = self.rescue_offscreen()?;
+        if !rescued.is_empty() {
+            tracing::warn!(
+                count = rescued.len(),
+                "moved windows back into a visible area"
+            );
+        }
+        Ok(rescued)
+    }
+
     /// Stop acting on new gather requests while keeping captured windows.
     ///
     /// Pausing is not the same as restoring: the layout stays, the journal stays

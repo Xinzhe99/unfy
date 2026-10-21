@@ -14,6 +14,7 @@
 mod displays;
 mod dpi;
 mod labels;
+mod thumbnails;
 mod windows_impl;
 
 pub use displays::{display_at, WinDisplays};
@@ -107,4 +108,34 @@ impl WindowBackend for WinPlatform {
 /// (the thread that owns it is detached and exits on its own timer).
 pub fn flash_display_labels(seconds: u64) -> bool {
     crate::labels::flash(seconds)
+}
+
+pub use thumbnails::DisplayThumbnail;
+
+/// Capture a thumbnail of every display, for the display picker.
+///
+/// Thumbnails are returned in memory as PNG data URLs and are never written to
+/// disk or sent anywhere.
+pub fn display_thumbnails() -> Vec<DisplayThumbnail> {
+    thumbnails::display_thumbnails()
+}
+
+/// Executables that currently own at least one visible window.
+///
+/// Used by the exclusion picker so the user selects from what is actually
+/// running instead of typing a file name they have to guess.
+pub fn running_applications() -> Vec<String> {
+    use conflux_platform::WindowBackend;
+
+    let backend = crate::WinWindows::new();
+    let mut names: Vec<String> = backend
+        .enumerate()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|w| w.app_name)
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort_by_key(|name| name.to_lowercase());
+    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    names
 }

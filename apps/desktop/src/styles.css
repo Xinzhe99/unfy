@@ -3,63 +3,74 @@
 /*
  * Design tokens.
  *
- * Every colour the UI uses comes from here, in both palettes, so a component can
- * never accidentally hardcode a value that breaks in dark mode. The scale is
- * deliberately small: one accent, one neutral ramp, three semantic colours.
+ * The visual language is deliberately quiet: a neutral grey canvas, white cards
+ * with a hairline border, and a single blue used only for the primary action and
+ * the selected state. Semantic colours appear as a dot or a short label, never as
+ * a filled block — a page full of amber and green boxes reads as an alert
+ * dashboard rather than a tool.
  */
 @theme {
-  --color-surface: oklch(0.985 0.001 250);
-  --color-surface-2: oklch(0.958 0.002 250);
-  --color-surface-3: oklch(0.925 0.003 250);
-  --color-border: oklch(0.895 0.004 250);
-  --color-border-strong: oklch(0.82 0.006 250);
-  --color-fg: oklch(0.21 0.006 250);
-  --color-fg-soft: oklch(0.38 0.007 250);
-  --color-muted: oklch(0.54 0.008 250);
-  --color-accent: oklch(0.55 0.17 262);
-  --color-accent-hover: oklch(0.5 0.18 262);
-  --color-accent-soft: oklch(0.95 0.035 262);
+  /* Canvas and surfaces */
+  --color-canvas: oklch(0.972 0.0015 265);
+  --color-surface: oklch(1 0 0);
+  --color-surface-hover: oklch(0.975 0.002 265);
+  --color-surface-sunken: oklch(0.955 0.002 265);
+  --color-sidebar: oklch(0.962 0.002 265);
+
+  /* Hairlines */
+  --color-border: oklch(0.912 0.003 265);
+  --color-border-strong: oklch(0.855 0.005 265);
+
+  /* Text */
+  --color-fg: oklch(0.235 0.008 265);
+  --color-fg-soft: oklch(0.44 0.008 265);
+  --color-muted: oklch(0.60 0.007 265);
+
+  /* Accent: used for the primary button and the selected state, nothing else */
+  --color-accent: oklch(0.55 0.155 264);
+  --color-accent-hover: oklch(0.49 0.16 264);
   --color-accent-fg: oklch(0.99 0 0);
-  --color-success: oklch(0.55 0.14 152);
-  --color-success-soft: oklch(0.95 0.04 152);
-  --color-warning: oklch(0.62 0.15 72);
-  --color-warning-soft: oklch(0.96 0.05 72);
-  --color-danger: oklch(0.55 0.2 25);
-  --color-danger-soft: oklch(0.96 0.035 25);
+  --color-accent-soft: oklch(0.955 0.025 264);
 
-  --radius-card: 14px;
-  --radius-control: 9px;
+  /* Semantic, rendered as text/dot only */
+  --color-success: oklch(0.52 0.11 155);
+  --color-warning: oklch(0.55 0.1 70);
+  --color-danger: oklch(0.51 0.16 25);
 
-  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.04), 0 4px 16px oklch(0 0 0 / 0.04);
-  --shadow-pop: 0 8px 32px oklch(0 0 0 / 0.14);
+  --radius-card: 10px;
+  --radius-control: 7px;
+
+  --shadow-card: 0 1px 1px oklch(0 0 0 / 0.02), 0 1px 3px oklch(0 0 0 / 0.03);
 }
 
 @theme {
-  --conflux-dark-surface: oklch(0.185 0.007 255);
-  --conflux-dark-surface-2: oklch(0.225 0.009 255);
-  --conflux-dark-surface-3: oklch(0.265 0.011 255);
-  --conflux-dark-border: oklch(0.315 0.012 255);
-  --conflux-dark-border-strong: oklch(0.4 0.014 255);
-  --conflux-dark-fg: oklch(0.945 0.004 255);
-  --conflux-dark-fg-soft: oklch(0.82 0.006 255);
-  --conflux-dark-muted: oklch(0.655 0.01 255);
-  --conflux-dark-accent: oklch(0.72 0.15 262);
-  --conflux-dark-accent-hover: oklch(0.78 0.15 262);
-  --conflux-dark-accent-soft: oklch(0.3 0.055 262);
-  --conflux-dark-accent-fg: oklch(0.17 0.01 262);
-  --conflux-dark-success: oklch(0.74 0.14 152);
-  --conflux-dark-success-soft: oklch(0.28 0.05 152);
-  --conflux-dark-warning: oklch(0.8 0.14 72);
-  --conflux-dark-warning-soft: oklch(0.3 0.05 72);
-  --conflux-dark-danger: oklch(0.7 0.18 25);
-  --conflux-dark-danger-soft: oklch(0.3 0.06 25);
+  --conflux-dark-canvas: oklch(0.175 0.006 265);
+  --conflux-dark-surface: oklch(0.213 0.007 265);
+  --conflux-dark-surface-hover: oklch(0.245 0.008 265);
+  --conflux-dark-surface-sunken: oklch(0.16 0.006 265);
+  --conflux-dark-sidebar: oklch(0.198 0.006 265);
+  --conflux-dark-border: oklch(0.298 0.008 265);
+  --conflux-dark-border-strong: oklch(0.38 0.009 265);
+  --conflux-dark-fg: oklch(0.94 0.004 265);
+  --conflux-dark-fg-soft: oklch(0.79 0.006 265);
+  --conflux-dark-muted: oklch(0.63 0.008 265);
+  --conflux-dark-accent: oklch(0.68 0.14 264);
+  --conflux-dark-accent-hover: oklch(0.74 0.14 264);
+  --conflux-dark-accent-fg: oklch(0.99 0 0);
+  --conflux-dark-accent-soft: oklch(0.28 0.05 264);
+  --conflux-dark-success: oklch(0.7 0.11 155);
+  --conflux-dark-warning: oklch(0.76 0.1 70);
+  --conflux-dark-danger: oklch(0.68 0.15 25);
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.25);
 }
 
 :root.theme-dark {
   color-scheme: dark;
+  --color-canvas: var(--conflux-dark-canvas);
   --color-surface: var(--conflux-dark-surface);
-  --color-surface-2: var(--conflux-dark-surface-2);
-  --color-surface-3: var(--conflux-dark-surface-3);
+  --color-surface-hover: var(--conflux-dark-surface-hover);
+  --color-surface-sunken: var(--conflux-dark-surface-sunken);
+  --color-sidebar: var(--conflux-dark-sidebar);
   --color-border: var(--conflux-dark-border);
   --color-border-strong: var(--conflux-dark-border-strong);
   --color-fg: var(--conflux-dark-fg);
@@ -67,24 +78,21 @@
   --color-muted: var(--conflux-dark-muted);
   --color-accent: var(--conflux-dark-accent);
   --color-accent-hover: var(--conflux-dark-accent-hover);
-  --color-accent-soft: var(--conflux-dark-accent-soft);
   --color-accent-fg: var(--conflux-dark-accent-fg);
+  --color-accent-soft: var(--conflux-dark-accent-soft);
   --color-success: var(--conflux-dark-success);
-  --color-success-soft: var(--conflux-dark-success-soft);
   --color-warning: var(--conflux-dark-warning);
-  --color-warning-soft: var(--conflux-dark-warning-soft);
   --color-danger: var(--conflux-dark-danger);
-  --color-danger-soft: var(--conflux-dark-danger-soft);
-  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.3), 0 4px 16px oklch(0 0 0 / 0.25);
-  --shadow-pop: 0 8px 32px oklch(0 0 0 / 0.5);
 }
 
 @media (prefers-color-scheme: dark) {
   :root.theme-system {
     color-scheme: dark;
+    --color-canvas: var(--conflux-dark-canvas);
     --color-surface: var(--conflux-dark-surface);
-    --color-surface-2: var(--conflux-dark-surface-2);
-    --color-surface-3: var(--conflux-dark-surface-3);
+    --color-surface-hover: var(--conflux-dark-surface-hover);
+    --color-surface-sunken: var(--conflux-dark-surface-sunken);
+    --color-sidebar: var(--conflux-dark-sidebar);
     --color-border: var(--conflux-dark-border);
     --color-border-strong: var(--conflux-dark-border-strong);
     --color-fg: var(--conflux-dark-fg);
@@ -92,16 +100,11 @@
     --color-muted: var(--conflux-dark-muted);
     --color-accent: var(--conflux-dark-accent);
     --color-accent-hover: var(--conflux-dark-accent-hover);
-    --color-accent-soft: var(--conflux-dark-accent-soft);
     --color-accent-fg: var(--conflux-dark-accent-fg);
+    --color-accent-soft: var(--conflux-dark-accent-soft);
     --color-success: var(--conflux-dark-success);
-    --color-success-soft: var(--conflux-dark-success-soft);
     --color-warning: var(--conflux-dark-warning);
-    --color-warning-soft: var(--conflux-dark-warning-soft);
     --color-danger: var(--conflux-dark-danger);
-    --color-danger-soft: var(--conflux-dark-danger-soft);
-    --shadow-card: 0 1px 2px oklch(0 0 0 / 0.3), 0 4px 16px oklch(0 0 0 / 0.25);
-    --shadow-pop: 0 8px 32px oklch(0 0 0 / 0.5);
   }
 }
 
@@ -116,7 +119,7 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  font-feature-settings: "cv11", "ss01";
+  font-feature-settings: "cv05", "cv11";
 }
 
 html,
@@ -128,14 +131,13 @@ body,
 }
 
 body {
-  background: var(--color-surface);
+  background: var(--color-canvas);
   color: var(--color-fg);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
-/* Keyboard focus must always be visible: the hotkey-first workflow means a
-   keyboard-only user has to be able to reach everything. */
+/* Keyboard focus must always be visible. */
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
@@ -154,29 +156,21 @@ body {
   background-clip: content-box;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-muted);
-  background-clip: content-box;
-}
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* Motion is a hint, never a requirement. */
 @keyframes conflux-fade-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
 .animate-in {
-  animation: conflux-fade-in 180ms ease-out both;
+  animation: conflux-fade-in 140ms ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {

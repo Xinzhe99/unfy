@@ -1,251 +1,234 @@
-import { useState } from "react";
-
-import type { HotkeyStatusDto, SettingsDto } from "../api";
-import { Button, Card, Segmented, Toggle } from "../components/ui";
+import type { HotkeyStatusDto, SettingsDto, UpdateStatusDto } from "../api";
+import { Button, Card, Segmented, SettingRow, Status, Switch } from "../components/ui";
+import { IconDownload } from "../components/icons";
 
 /**
- * General page: startup, hotkeys, appearance, restore behaviour, privacy.
+ * Settings.
  *
- * Hotkey capture is a recorder, not a text field: users cannot be expected to
- * type Tauri's accelerator syntax correctly. Registration happens in Rust and its
- * result is shown here, because a shortcut that silently failed to register is
- * worse than no shortcut at all — the user presses it and nothing happens.
+ * Each row states the consequence, not the mechanism: "关闭窗口后仍在后台" rather
+ * than "注册托盘图标". A settings screen that repeats the feature name teaches
+ * nothing.
  */
 export function GeneralPage({
   settings,
   hotkeys,
+  updateStatus,
   busy,
   onSave,
+  onCheckUpdate,
 }: {
   settings: SettingsDto | null;
   hotkeys: HotkeyStatusDto | null;
+  updateStatus: UpdateStatusDto | null;
   busy: boolean;
   onSave: (patch: Partial<SettingsDto>) => void;
+  onCheckUpdate: () => void;
 }) {
   if (!settings) {
     return <p className="text-xs text-[var(--color-muted)]">正在读取设置…</p>;
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card title="启动">
-        <div className="divide-y divide-[var(--color-border)]">
-          <Toggle
-            label="登录时启动"
-            hint="启动后只驻留托盘，不打开设置窗口。"
+    <>
+      <Card title="外观">
+        <SettingRow label="主题" hint="跟随系统会在系统切换深浅色时自动变化">
+          <Segmented
+            label="主题"
+            value={settings.theme}
+            disabled={busy}
+            onChange={(theme) => onSave({ theme })}
+            options={[
+              { value: "system", label: "跟随系统" },
+              { value: "light", label: "浅色" },
+              { value: "dark", label: "深色" },
+            ]}
+          />
+        </SettingRow>
+      </Card>
+
+      <Card title="启动与运行">
+        <SettingRow label="开机自动启动" hint="登录后静默启动，不打开窗口">
+          <Switch
             checked={settings.autostart}
             disabled={busy}
+            label="开机自动启动"
             onChange={(autostart) => onSave({ autostart })}
           />
-        </div>
+        </SettingRow>
+
+        <div className="border-t border-[var(--color-border)]" />
+
+        <SettingRow label="自动检查更新" hint="下载后等待窗口全部恢复再安装">
+          <Switch
+            checked={settings.auto_update}
+            disabled={busy}
+            label="自动检查更新"
+            onChange={(auto_update) => onSave({ auto_update })}
+          />
+        </SettingRow>
       </Card>
 
-      <Card
-        title="快捷键"
-        description="留空表示不注册。注册失败时下方会显示原因，托盘入口始终可用。"
-      >
-        <div className="divide-y divide-[var(--color-border)]">
-          <HotkeyRow
-            label="整理到目标屏"
+      <Card title="快捷键">
+        <SettingRow
+          label="整理窗口"
+          hint={
+            hotkeys?.gather_error
+              ? `未生效：${hotkeys.gather_error}`
+              : "在其他应用中按下也能触发"
+          }
+        >
+          <HotkeyField
             value={settings.hotkey_gather}
-            error={hotkeys?.gather_error ?? null}
+            occupied={Boolean(hotkeys?.gather_error)}
             disabled={busy}
-            onCommit={(value) => onSave({ hotkey_gather: value })}
+            onCommit={(hotkey_gather) => onSave({ hotkey_gather })}
           />
-          <HotkeyRow
-            label="恢复本次布局"
+        </SettingRow>
+
+        <div className="border-t border-[var(--color-border)]" />
+
+        <SettingRow
+          label="恢复布局"
+          hint={
+            hotkeys?.restore_error
+              ? `未生效：${hotkeys.restore_error}`
+              : "把窗口放回整理前的位置"
+          }
+        >
+          <HotkeyField
             value={settings.hotkey_restore}
-            error={hotkeys?.restore_error ?? null}
+            occupied={Boolean(hotkeys?.restore_error)}
             disabled={busy}
-            onCommit={(value) => onSave({ hotkey_restore: value })}
+            onCommit={(hotkey_restore) => onSave({ hotkey_restore })}
           />
-        </div>
+        </SettingRow>
+        <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">
+          留空表示不注册。被系统或其他应用占用时，这里会显示原因。
+        </p>
       </Card>
 
-      <Card title="外观">
-        <Segmented
-          label="主题"
-          value={settings.theme}
-          disabled={busy}
-          onChange={(theme) => onSave({ theme })}
-          options={[
-            { value: "system", label: "跟随系统" },
-            { value: "light", label: "浅色" },
-            { value: "dark", label: "深色" },
-          ]}
-        />
-      </Card>
-
-      <Card
-        title="恢复"
-        description="远程连接常常断几秒又重连。延迟可以避免两次完整的窗口移动。"
-      >
-        <label className="flex items-center justify-between gap-6 py-1">
-          <span>
-            <span className="block text-[13px] font-medium">恢复延迟</span>
-            <span className="mt-0.5 block text-xs text-[var(--color-muted)]">
-              从点击恢复到开始移动窗口之间的等待，0 表示立即执行。
-            </span>
-          </span>
+      <Card title="恢复行为">
+        <SettingRow
+          label="断开后延迟恢复"
+          hint="等远程画面稳定后再放回窗口，避免紧接着重连时来回移动"
+        >
           <div className="flex items-center gap-1.5">
             <input
               type="number"
               defaultValue={settings.restore_delay_secs}
               min={0}
-              max={300}
+              max={60}
               disabled={busy}
               onBlur={(event) => {
                 const next = Number(event.currentTarget.value);
-                if (
-                  Number.isFinite(next) &&
-                  next !== settings.restore_delay_secs
-                ) {
+                if (Number.isFinite(next) && next !== settings.restore_delay_secs) {
                   onSave({
-                    restore_delay_secs: Math.min(300, Math.max(0, Math.round(next))),
+                    restore_delay_secs: Math.min(60, Math.max(0, Math.round(next))),
                   });
                 }
               }}
-              className="h-9 w-20 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 text-[13px] tabular-nums outline-none focus:border-[var(--color-accent)]"
+              className="h-7 w-16 rounded-[var(--radius-control)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 text-right text-xs tabular-nums outline-none focus:border-[var(--color-accent)]"
             />
-            <span className="text-xs text-[var(--color-muted)]">秒</span>
+            <span className="text-[11px] text-[var(--color-muted)]">秒</span>
           </div>
-        </label>
+        </SettingRow>
       </Card>
 
-      <Card title="更新与隐私">
-        <div className="divide-y divide-[var(--color-border)]">
-          <Toggle
-            label="自动检查更新"
-            hint="只在窗口全部恢复后安装；有未完成的恢复记录时会延后。"
-            checked={settings.auto_update}
-            disabled={busy}
-            onChange={(auto_update) => onSave({ auto_update })}
-          />
-          <Toggle
-            label="发送匿名使用统计"
-            hint="默认关闭。只包含版本、平台与成功/失败计数，不含窗口标题、屏幕画面或文件路径。当前版本没有任何上传代码，此项仅记录你的选择。"
-            checked={settings.telemetry}
-            disabled={busy}
-            onChange={(telemetry) => onSave({ telemetry })}
-          />
+      <Card
+        title="更新"
+        aside={
+          updateStatus?.configured ? (
+            <Status tone="neutral">已配置更新源</Status>
+          ) : (
+            <Status tone="warning">未配置更新源</Status>
+          )
+        }
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[13px]">
+              当前版本 <span className="tabular-nums">v{updateStatus?.current_version ?? "—"}</span>
+            </p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--color-muted)]">
+              {updateStatus?.configured
+                ? updateStatus.last_version
+                  ? `最近一次结果：${outcomeLabel(updateStatus.last_outcome)}（${updateStatus.last_version}）`
+                  : "尚未检查过更新。"
+                : "此构建没有签名公钥与更新地址，检查更新不会成功。发布版才会启用。"}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={onCheckUpdate}
+            disabled={busy || !updateStatus?.configured}
+            icon={<IconDownload className="size-3.5" />}
+          >
+            检查更新
+          </Button>
         </div>
       </Card>
-    </div>
+
+      <Card title="隐私">
+        <SettingRow
+          label="使用统计"
+          hint="仅发送功能使用次数与错误类型，不包含窗口标题、应用名与屏幕内容"
+        >
+          <Switch
+            checked={settings.telemetry}
+            disabled={busy}
+            label="使用统计"
+            onChange={(telemetry) => onSave({ telemetry })}
+          />
+        </SettingRow>
+      </Card>
+    </>
   );
 }
 
-function HotkeyRow({
-  label,
+function HotkeyField({
   value,
-  error,
+  occupied,
   disabled,
   onCommit,
 }: {
-  label: string;
   value: string | null;
-  error: string | null;
+  occupied: boolean;
   disabled: boolean;
   onCommit: (value: string | null) => void;
 }) {
-  const [recording, setRecording] = useState(false);
-
   return (
-    <div className="flex items-start justify-between gap-6 py-3">
-      <div className="min-w-0">
-        <span className="block text-[13px] font-medium">{label}</span>
-        {error ? (
-          <span className="mt-1 block text-xs text-[var(--color-warning)]">
-            未能注册：{error}
-          </span>
-        ) : value ? (
-          <span className="mt-1 block text-xs text-[var(--color-success)]">
-            已注册
-          </span>
-        ) : (
-          <span className="mt-1 block text-xs text-[var(--color-muted)]">
-            未设置
-          </span>
-        )}
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => setRecording((v) => !v)}
-          onKeyDown={(event) => {
-            if (!recording) return;
-            const combo = comboFromEvent(event);
-            if (combo === null) return;
-            event.preventDefault();
-            setRecording(false);
-            onCommit(combo);
-          }}
-          onBlur={() => setRecording(false)}
-          className={`h-9 min-w-40 rounded-[var(--radius-control)] border px-3 text-xs font-medium tabular-nums transition-colors ${
-            recording
-              ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-              : "border-[var(--color-border)] bg-[var(--color-surface)]"
-          }`}
-        >
-          {recording ? "请按下组合键…" : (value ?? "点击录制")}
-        </button>
-        <Button
-          size="sm"
-          tone="quiet"
-          disabled={disabled || value === null}
-          onClick={() => onCommit(null)}
-        >
-          清除
-        </Button>
-      </div>
+    <div className="flex items-center gap-1.5">
+      <input
+        defaultValue={value ?? ""}
+        placeholder="未设置"
+        disabled={disabled}
+        spellCheck={false}
+        onBlur={(event) => {
+          const next = event.currentTarget.value.trim();
+          const normalized = next === "" ? null : next;
+          if (normalized !== value) onCommit(normalized);
+        }}
+        className={`h-7 w-40 rounded-[var(--radius-control)] border bg-[var(--color-surface)] px-2 text-right font-mono text-xs outline-none focus:border-[var(--color-accent)] ${
+          occupied
+            ? "border-[var(--color-warning)]"
+            : "border-[var(--color-border-strong)]"
+        }`}
+      />
     </div>
   );
 }
 
-/**
- * Convert a keyboard event into a Tauri accelerator.
- *
- * Returns `null` while only modifiers are held, so pressing Ctrl then Shift does
- * not immediately register "Control+Shift".
- */
-function comboFromEvent(event: React.KeyboardEvent): string | null {
-  const modifiers: string[] = [];
-  if (event.ctrlKey) modifiers.push("Control");
-  if (event.altKey) modifiers.push("Alt");
-  if (event.shiftKey) modifiers.push("Shift");
-  if (event.metaKey) modifiers.push("Super");
-
-  const key = event.key;
-  if (["Control", "Alt", "Shift", "Meta"].includes(key)) return null;
-
-  const normalized = normalizeKey(key);
-  if (!normalized) return null;
-  return [...modifiers, normalized].join("+");
-}
-
-function normalizeKey(key: string): string | null {
-  if (key.length === 1) {
-    const upper = key.toUpperCase();
-    if (/^[A-Z]$/.test(upper) || /^[0-9]$/.test(upper)) return upper;
-    if (key === " ") return "Space";
-    return null;
+function outcomeLabel(outcome: string | null): string {
+  switch (outcome) {
+    case "up_to_date":
+      return "已是最新";
+    case "deferred":
+      return "已下载，等待安装";
+    case "installed":
+      return "已安装";
+    case "failed":
+      return "检查失败";
+    default:
+      return "未知";
   }
-  const named: Record<string, string> = {
-    Escape: "Escape",
-    Enter: "Enter",
-    Tab: "Tab",
-    Backspace: "Backspace",
-    Delete: "Delete",
-    Home: "Home",
-    End: "End",
-    PageUp: "PageUp",
-    PageDown: "PageDown",
-    ArrowUp: "Up",
-    ArrowDown: "Down",
-    ArrowLeft: "Left",
-    ArrowRight: "Right",
-  };
-  if (key in named) return named[key] ?? null;
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(key)) return key;
-  return null;
 }

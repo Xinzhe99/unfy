@@ -628,10 +628,12 @@ dependencies = [
 name = "conflux-platform-win"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "conflux-domain",
  "conflux-engine",
  "conflux-journal",
  "conflux-platform",
+ "flate2",
  "serde",
  "thiserror 2.0.21",
  "tracing",

@@ -11,6 +11,8 @@ conflux-platform = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+base64 = "0.22"
+flate2 = "1"
 conflux-engine = { workspace = true }
 conflux-journal = { workspace = true }
 windows = { version = "0.62", features = [

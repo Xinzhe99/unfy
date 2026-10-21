@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import {
   api,
   errorMessage,
   formatBytes,
-  stateLabels,
+  type AppDto,
   type DisplayDto,
   type EngineStateName,
   type HotkeyStatusDto,
@@ -15,31 +15,57 @@ import {
   type RestoreDto,
   type SettingsDto,
   type StatusDto,
+  type UpdateStatusDto,
 } from "./api";
-import { PermissionBanner } from "./components/PermissionBanner";
-import { DisplaysPage } from "./pages/Displays";
 import { ExclusionsPage } from "./pages/Exclusions";
 import { GeneralPage } from "./pages/General";
+import { completeOnboarding, Onboarding } from "./pages/Onboarding";
 import { OverviewPage } from "./pages/Overview";
+import { DisplaysPage } from "./pages/Displays";
+import {
+  IconDisplays,
+  IconHome,
+  IconInfo,
+  IconSettings,
+  IconShield,
+} from "./components/icons";
+import { Status } from "./components/ui";
 
-type Page = "overview" | "displays" | "exclusions" | "general";
+export type Page = "overview" | "displays" | "exclusions" | "general";
 
-const pages: { id: Page; label: string }[] = [
-  { id: "overview", label: "概览" },
-  { id: "displays", label: "显示器与布局" },
-  { id: "exclusions", label: "排除的应用" },
-  { id: "general", label: "通用" },
+const navigation: {
+  id: Page;
+  label: string;
+  icon: (props: { className?: string }) => ReactElement;
+  group: string;
+}[] = [
+  { id: "overview", label: "概览", icon: IconHome, group: "使用" },
+  { id: "displays", label: "显示器", icon: IconDisplays, group: "使用" },
+  { id: "exclusions", label: "排除的应用", icon: IconShield, group: "使用" },
+  { id: "general", label: "设置", icon: IconSettings, group: "设置" },
 ];
 
-/** Status colour per engine state, used by the header dot and the accent bar. */
-const stateTone: Record<EngineStateName, "neutral" | "accent" | "success" | "warning" | "danger"> = {
+const stateTone: Record<
+  EngineStateName,
+  "neutral" | "accent" | "success" | "warning" | "danger"
+> = {
   idle: "neutral",
   planning: "accent",
   migrating: "accent",
-  active: "success",
+  active: "accent",
   restoring: "accent",
   degraded: "warning",
   error: "danger",
+};
+
+const stateLabel: Record<EngineStateName, string> = {
+  idle: "就绪",
+  planning: "正在计划",
+  migrating: "正在整理",
+  active: "布局已启用",
+  restoring: "正在恢复",
+  degraded: "部分受限",
+  error: "需要处理",
 };
 
 export interface Notice {
@@ -55,6 +81,9 @@ export default function App() {
   const [preview, setPreview] = useState<PreviewDto | null>(null);
   const [pending, setPending] = useState<PendingWorkDto | null>(null);
   const [hotkeys, setHotkeys] = useState<HotkeyStatusDto | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [runningApps, setRunningApps] = useState<AppDto[]>([]);
   const [lastMigration, setLastMigration] = useState<MigrationDto | null>(null);
   const [lastRestore, setLastRestore] = useState<RestoreDto | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -63,33 +92,32 @@ export default function App() {
 
   const flash = useCallback((next: Notice) => {
     setNotice(next);
-    if (noticeTimer.current !== null) {
-      window.clearTimeout(noticeTimer.current);
-    }
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setNotice(null), 6000);
   }, []);
 
   const refresh = useCallback(async () => {
     try {
-      const [nextStatus, nextDisplays, nextSettings, nextPending, nextHotkeys] =
+      const [nextStatus, nextDisplays, nextSettings, nextPending, nextHotkeys, nextUpdate] =
         await Promise.all([
           api.getStatus(),
           api.listDisplays(),
           api.getSettings(),
           api.pendingWork(),
           api.hotkeyStatus(),
+          api.updateStatus(),
         ]);
       setStatus(nextStatus);
       setDisplays(nextDisplays);
       setSettings(nextSettings);
       setPending(nextPending);
       setHotkeys(nextHotkeys);
+      setUpdateStatus(nextUpdate);
     } catch (e) {
       flash({ tone: "danger", text: errorMessage(e) });
     }
   }, [flash]);
 
-  // Theme is a class on <html> so the CSS custom properties switch atomically.
   useEffect(() => {
     const theme = settings?.theme ?? "system";
     const root = document.documentElement;
@@ -97,11 +125,45 @@ export default function App() {
     root.classList.add(`theme-${theme}`);
   }, [settings?.theme]);
 
+  // Screenshots are only fetched when a surface that shows them is visible: each
+  // one is a full-screen capture and a PNG encode, and most sessions never open
+  // those pages. The guide counts as such a surface — it is where a new user
+  // picks the target display.
+  const needsThumbnails =
+    page === "displays" ||
+    page === "exclusions" ||
+    (settings !== null && !settings.onboarding_done);
+
+  useEffect(() => {
+    if (!needsThumbnails) return;
+    let cancelled = false;
+    void (async () => {
+      const shots = await api.displayThumbnails();
+      if (cancelled) return;
+      setThumbnails(
+        Object.fromEntries(shots.map((s) => [s.native_id, s.data_url])),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [needsThumbnails, displays.length]);
+
+  useEffect(() => {
+    if (page !== "exclusions") return;
+    let cancelled = false;
+    void (async () => {
+      const apps = await api.runningApplications();
+      if (!cancelled) setRunningApps(apps);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [page, settings?.excluded_apps]);
+
   useEffect(() => {
     void refresh();
 
-    // Tray and hotkey actions happen outside this window; every one of them
-    // emits an event so the UI never shows a stale engine state.
     const unlistenAction = listen<{ action: string; ok: boolean; message?: string }>(
       "conflux://action",
       (event) => {
@@ -117,9 +179,6 @@ export default function App() {
         text: "还有窗口没有恢复，已取消退出。请先恢复布局，或选择保留当前布局。",
       });
     });
-    // The engine reports when a long migration starts and finishes. Without it
-    // the button looks unresponsive for the second or two the platform calls
-    // take, and a user is likely to click again.
     const unlistenProgress = listen<{ phase: string }>(
       "conflux://progress",
       (event) => {
@@ -127,9 +186,22 @@ export default function App() {
         if (event.payload.phase === "done") void refresh();
       },
     );
+    const unlistenTopology = listen<{ rescued: number }>(
+      "conflux://topology-changed",
+      (event) => {
+        void refresh();
+        if (event.payload.rescued > 0) {
+          flash({
+            tone: "warning",
+            text: `显示器连接发生变化，已把 ${event.payload.rescued} 个窗口移回可见区域。`,
+          });
+        }
+      },
+    );
     const unlistenUpdate = listen<{ outcome: string; version?: string }>(
       "conflux://update",
       (event) => {
+        void refresh();
         if (event.payload.outcome === "deferred") {
           flash({
             tone: "neutral",
@@ -142,16 +214,14 @@ export default function App() {
       },
     );
 
-    // The engine can be driven from the tray while this window is open, so poll
-    // slowly as a backstop. Events cover the common path; polling covers a missed
-    // event and external changes such as a monitor being unplugged.
     const timer = window.setInterval(() => void refresh(), 4000);
 
     return () => {
       void unlistenAction.then((fn) => fn());
       void unlistenExit.then((fn) => fn());
-      void unlistenUpdate.then((fn) => fn());
       void unlistenProgress.then((fn) => fn());
+      void unlistenTopology.then((fn) => fn());
+      void unlistenUpdate.then((fn) => fn());
       window.clearInterval(timer);
     };
   }, [refresh, flash]);
@@ -178,9 +248,12 @@ export default function App() {
     [flash, refresh],
   );
 
-  const state = status?.state ?? "idle";
-  const supported = status?.supported ?? false;
-  const tone = stateTone[state];
+  const saveSettings = (patch: Partial<SettingsDto>) =>
+    run(async () => {
+      const next = await api.saveSettings(patch);
+      setSettings(next);
+      return next;
+    });
 
   const onRestore = () =>
     run(
@@ -207,257 +280,368 @@ export default function App() {
       }),
     );
 
+  if (settings && !settings.onboarding_done) {
+    return (
+      <Onboarding
+        displays={displays}
+        settings={settings}
+        thumbnails={thumbnails}
+        busy={busy}
+        onSelectTarget={async (nativeId) => {
+          await run(() => api.setTargetDisplay(nativeId));
+        }}
+        onIdentify={() =>
+          void run(() => api.identifyDisplays(4), (shown) => ({
+            tone: shown ? "neutral" : "warning",
+            text: shown
+              ? "已在每块屏幕上显示编号。"
+              : "无法显示编号，请检查屏幕状态。",
+          }))
+        }
+        onFinish={() =>
+          void run(
+            async () => {
+              await completeOnboarding();
+              const next = await api.getSettings();
+              setSettings(next);
+              return next;
+            },
+            () => null,
+          )
+        }
+      />
+    );
+  }
+
+  const state = status?.state ?? "idle";
+  const supported = status?.supported ?? false;
+  const groups = [...new Set(navigation.map((item) => item.group))];
+
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-5">
-        <div className="flex items-center gap-3">
+    <div className="flex h-full">
+      <aside className="flex w-48 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-sidebar)]">
+        <div className="flex h-12 items-center px-4">
           <span className="text-[13px] font-semibold tracking-tight">Conflux</span>
-          <span
-            className={`inline-flex items-center gap-1.5 text-xs ${
-              tone === "success"
-                ? "text-[var(--color-success)]"
-                : tone === "warning"
-                  ? "text-[var(--color-warning)]"
-                  : tone === "danger"
-                    ? "text-[var(--color-danger)]"
-                    : tone === "accent"
-                      ? "text-[var(--color-accent)]"
-                      : "text-[var(--color-muted)]"
-            }`}
-          >
-            <span aria-hidden className="inline-block size-1.5 rounded-full bg-current" />
-            {stateLabels[state]}
-            {status?.paused ? " · 已暂停" : ""}
-          </span>
-          {!supported ? (
-            <span className="rounded-full bg-[var(--color-warning-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-warning)]">
-              只读演示模式
-            </span>
-          ) : null}
         </div>
-        <nav className="flex gap-0.5" aria-label="页面">
-          {pages.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setPage(item.id)}
-              aria-current={page === item.id ? "page" : undefined}
-              className={`rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium transition-colors ${
-                page === item.id
-                  ? "bg-[var(--color-surface-2)] text-[var(--color-fg)]"
-                  : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"
-              }`}
-            >
-              {item.label}
-            </button>
+
+        <nav className="flex-1 px-2" aria-label="主导航">
+          {groups.map((group) => (
+            <div key={group} className="mb-3">
+              <p className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                {group}
+              </p>
+              {navigation
+                .filter((item) => item.group === group)
+                .map((item) => {
+                  const active = page === item.id;
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setPage(item.id)}
+                      aria-current={active ? "page" : undefined}
+                      className={`mb-0.5 flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-[13px] transition-colors ${
+                        active
+                          ? "bg-[var(--color-surface)] font-medium text-[var(--color-fg)] shadow-[var(--shadow-card)]"
+                          : "text-[var(--color-fg-soft)] hover:bg-[var(--color-surface)]/60"
+                      }`}
+                    >
+                      <Icon className="size-4 shrink-0 opacity-70" />
+                      {item.label}
+                    </button>
+                  );
+                })}
+            </div>
           ))}
         </nav>
-      </header>
 
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 p-5">
-          {notice ? (
-            <div
-              role={notice.tone === "danger" ? "alert" : "status"}
-              className={`animate-in rounded-[var(--radius-control)] border px-4 py-2.5 text-xs ${
-                notice.tone === "danger"
-                  ? "border-[var(--color-danger)]/35 bg-[var(--color-danger-soft)] text-[var(--color-danger)]"
-                  : notice.tone === "warning"
-                    ? "border-[var(--color-warning)]/35 bg-[var(--color-warning-soft)] text-[var(--color-warning)]"
-                    : notice.tone === "success"
-                      ? "border-[var(--color-success)]/35 bg-[var(--color-success-soft)] text-[var(--color-success)]"
-                      : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-soft)]"
-              }`}
-            >
-              {notice.text}
-            </div>
-          ) : null}
-
-          {status ? (
-            <PermissionBanner
-              status={status}
-              busy={busy}
-              onRecheck={() => void refresh()}
-            />
-          ) : null}
-
-          {pending?.present ? (
-            <PendingBanner
-              pending={pending}
-              busy={busy}
-              onRestore={() => void onRestore()}
-              onDismiss={() =>
-                void run(
-                  () => api.dismissPendingWork(),
-                  () => ({ tone: "neutral", text: "已隐藏提示。恢复记录仍然保留。" }),
-                )
-              }
-            />
-          ) : null}
-
-          {page === "overview" ? (
-            <OverviewPage
-              status={status}
-              settings={settings}
-              preview={preview}
-              lastMigration={lastMigration}
-              lastRestore={lastRestore}
-              busy={busy}
-              onPreview={() =>
-                void run(
-                  async () => {
-                    const next = await api.preview();
-                    setPreview(next);
-                    return next;
-                  },
-                  (next) =>
-                    next.placements.length === 0
-                      ? { tone: "neutral", text: "没有可整理的窗口。" }
-                      : null,
-                )
-              }
-              onMigrate={() =>
-                void run(
-                  async () => {
-                    const result = await api.migrate();
-                    setLastMigration(result);
-                    setPreview(null);
-                    return result;
-                  },
-                  (result) => ({
-                    tone: result.rejected > 0 ? "warning" : "success",
-                    text:
-                      `已整理 ${result.applied} 个窗口` +
-                      (result.rejected > 0
-                        ? `，${result.rejected} 个应用未接受`
-                        : "") +
-                      (result.gone > 0 ? `，${result.gone} 个已关闭` : "") +
-                      (result.skipped > 0 ? `，跳过 ${result.skipped} 个` : "") +
-                      "。",
-                  }),
-                )
-              }
-              onRestore={() => void onRestore()}
-              onPause={(paused) =>
-                void run(
-                  () => api.setPaused(paused),
-                  (result) => ({
-                    tone: "neutral",
-                    text: result.paused
-                      ? "已暂停自动整理。当前布局仍然保留。"
-                      : "已恢复自动整理。",
-                  }),
-                )
-              }
-              onRescue={() =>
-                void run(
-                  () => api.rescueOffscreen(),
-                  (count) => ({
-                    tone: count === 0 ? "neutral" : "success",
-                    text:
-                      count === 0
-                        ? "没有发现越界窗口。"
-                        : `已把 ${count} 个窗口移回可见区域。`,
-                  }),
-                )
-              }
-              onIdentify={() =>
-                void run(
-                  () => api.identifyDisplays(4),
-                  (shown) => ({
-                    tone: shown ? "neutral" : "warning",
-                    text: shown
-                      ? "已在每块屏幕上显示编号，4 秒后自动消失。"
-                      : "无法显示编号，请检查屏幕状态。",
-                  }),
-                )
-              }
-              onExport={() =>
-                void run(
-                  () => api.exportDiagnostics(),
-                  (result) => ({
-                    tone: "neutral",
-                    text: `诊断包已写入 ${result.path}（${formatBytes(result.bytes)}）。`,
-                  }),
-                )
-              }
-            />
-          ) : null}
-
-          {page === "displays" ? (
-            <DisplaysPage
-              displays={displays}
-              settings={settings}
-              target={status?.target ?? null}
-              busy={busy}
-              onSelect={(nativeId) =>
-                void run(
-                  () => api.setTargetDisplay(nativeId),
-                  () => ({ tone: "success", text: "目标显示器已保存。" }),
-                )
-              }
-              onIdentify={() =>
-                void run(() => api.identifyDisplays(4), (shown) => ({
-                  tone: shown ? "neutral" : "warning",
-                  text: shown
-                    ? "已在每块屏幕上显示编号。"
-                    : "无法显示编号，请检查屏幕状态。",
-                }))
-              }
-              onSave={(patch) =>
-                void run(
-                  async () => {
-                    const next = await api.saveSettings(patch);
-                    setSettings(next);
-                    return next;
-                  },
-                  () => null,
-                )
-              }
-            />
-          ) : null}
-
-          {page === "exclusions" ? (
-            <ExclusionsPage
-              settings={settings}
-              busy={busy}
-              onSave={(patch) =>
-                void run(
-                  async () => {
-                    const next = await api.saveSettings(patch);
-                    setSettings(next);
-                    return next;
-                  },
-                  () => null,
-                )
-              }
-            />
-          ) : null}
-
-          {page === "general" ? (
-            <GeneralPage
-              settings={settings}
-              hotkeys={hotkeys}
-              busy={busy}
-              onSave={(patch) =>
-                void run(
-                  async () => {
-                    const next = await api.saveSettings(patch);
-                    setSettings(next);
-                    return next;
-                  },
-                  () => null,
-                )
-              }
-            />
+        <div className="border-t border-[var(--color-border)] px-3 py-2.5">
+          <Status tone={stateTone[state]}>
+            {stateLabel[state]}
+            {status?.paused ? " · 已暂停" : ""}
+          </Status>
+          {!supported ? (
+            <p className="mt-1 text-[11px] text-[var(--color-muted)]">
+              当前平台未实现窗口控制
+            </p>
           ) : null}
         </div>
-      </main>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-5">
+          <h1 className="text-[13px] font-semibold">
+            {navigation.find((item) => item.id === page)?.label}
+          </h1>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] tabular-nums text-[var(--color-muted)]">
+              v{updateStatus?.current_version ?? "—"}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage("general")}
+              className="text-[var(--color-muted)] transition-colors hover:text-[var(--color-fg)]"
+              aria-label="设置"
+            >
+              <IconSettings className="size-4" />
+            </button>
+          </div>
+        </header>
+
+        <main className="flex-1 overflow-y-auto">
+          <div className="mx-auto flex max-w-2xl flex-col gap-3 px-5 py-4">
+            {notice ? (
+              <div
+                role={notice.tone === "danger" ? "alert" : "status"}
+                className={`animate-in flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 bg-[var(--color-surface)] px-3.5 py-2.5 text-xs ${
+                  notice.tone === "danger"
+                    ? "border-l-[var(--color-danger)]"
+                    : notice.tone === "warning"
+                      ? "border-l-[var(--color-warning)]"
+                      : notice.tone === "success"
+                        ? "border-l-[var(--color-success)]"
+                        : "border-l-[var(--color-accent)]"
+                }`}
+              >
+                <IconInfo className="mt-px size-3.5 shrink-0 text-[var(--color-muted)]" />
+                <span className="text-[var(--color-fg-soft)]">{notice.text}</span>
+              </div>
+            ) : null}
+
+            {status && !status.has_permission ? (
+              <PermissionPrompt
+                status={status}
+                busy={busy}
+                onRequest={() =>
+                  void run(() => api.requestPermission(), () => ({
+                    tone: "neutral",
+                    text: "已请求授权。授权后请点「重新检查」。",
+                  }))
+                }
+                onSettings={() => void api.openPermissionSettings()}
+                onRecheck={() => void refresh()}
+              />
+            ) : null}
+
+            {pending?.present ? (
+              <PendingCard
+                pending={pending}
+                busy={busy}
+                onRestore={() => void onRestore()}
+                onDismiss={() =>
+                  void run(
+                    () => api.dismissPendingWork(),
+                    () => ({ tone: "neutral", text: "已隐藏提示，恢复记录仍然保留。" }),
+                  )
+                }
+              />
+            ) : null}
+
+            {page === "overview" ? (
+              <OverviewPage
+                status={status}
+                settings={settings}
+                preview={preview}
+                lastMigration={lastMigration}
+                lastRestore={lastRestore}
+                busy={busy}
+                onPreview={() =>
+                  void run(
+                    async () => {
+                      const next = await api.preview();
+                      setPreview(next);
+                      return next;
+                    },
+                    (next) =>
+                      next.placements.length === 0
+                        ? { tone: "neutral", text: "没有可整理的窗口。" }
+                        : null,
+                  )
+                }
+                onMigrate={() =>
+                  void run(
+                    async () => {
+                      const result = await api.migrate();
+                      setLastMigration(result);
+                      setPreview(null);
+                      return result;
+                    },
+                    (result) => ({
+                      tone: result.rejected > 0 ? "warning" : "success",
+                      text:
+                        `已整理 ${result.applied} 个窗口` +
+                        (result.rejected > 0
+                          ? `，${result.rejected} 个应用未接受`
+                          : "") +
+                        (result.gone > 0 ? `，${result.gone} 个已关闭` : "") +
+                        (result.skipped > 0 ? `，跳过 ${result.skipped} 个` : "") +
+                        "。",
+                    }),
+                  )
+                }
+                onRestore={() => void onRestore()}
+                onPause={(paused) =>
+                  void run(
+                    () => api.setPaused(paused),
+                    (result) => ({
+                      tone: "neutral",
+                      text: result.paused
+                        ? "已暂停自动整理，当前布局保留。"
+                        : "已恢复自动整理。",
+                    }),
+                  )
+                }
+                onRescue={() =>
+                  void run(
+                    () => api.rescueOffscreen(),
+                    (count) => ({
+                      tone: count === 0 ? "neutral" : "success",
+                      text:
+                        count === 0
+                          ? "没有发现越界窗口。"
+                          : `已把 ${count} 个窗口移回可见区域。`,
+                    }),
+                  )
+                }
+                onIdentify={() =>
+                  void run(() => api.identifyDisplays(4), (shown) => ({
+                    tone: shown ? "neutral" : "warning",
+                    text: shown
+                      ? "已在每块屏幕上显示编号，4 秒后消失。"
+                      : "无法显示编号，请检查屏幕状态。",
+                  }))
+                }
+                onExport={() =>
+                  void run(
+                    () => api.exportDiagnostics(),
+                    (result) => ({
+                      tone: "neutral",
+                      text: `诊断包已写入 ${result.path}（${formatBytes(result.bytes)}）。`,
+                    }),
+                  )
+                }
+                onOpenDisplays={() => setPage("displays")}
+              />
+            ) : null}
+
+            {page === "displays" ? (
+              <DisplaysPage
+                displays={displays}
+                settings={settings}
+                target={status?.target ?? null}
+                thumbnails={thumbnails}
+                busy={busy}
+                onSelect={(nativeId) =>
+                  void run(
+                    () => api.setTargetDisplay(nativeId),
+                    () => null,
+                  )
+                }
+                onIdentify={() =>
+                  void run(() => api.identifyDisplays(4), (shown) => ({
+                    tone: shown ? "neutral" : "warning",
+                    text: shown
+                      ? "已在每块屏幕上显示编号。"
+                      : "无法显示编号，请检查屏幕状态。",
+                  }))
+                }
+                onSave={(patch) => void saveSettings(patch)}
+              />
+            ) : null}
+
+            {page === "exclusions" ? (
+              <ExclusionsPage
+                settings={settings}
+                runningApps={runningApps}
+                busy={busy}
+                onSave={(patch) => void saveSettings(patch)}
+              />
+            ) : null}
+
+            {page === "general" ? (
+              <GeneralPage
+                settings={settings}
+                hotkeys={hotkeys}
+                updateStatus={updateStatus}
+                busy={busy}
+                onSave={(patch) => void saveSettings(patch)}
+                onCheckUpdate={() =>
+                  void run(
+                    () => api.checkUpdate(),
+                    (outcome) => ({
+                      tone: outcome === "up_to_date" ? "success" : "neutral",
+                      text:
+                        outcome === "up_to_date"
+                          ? "当前已是最新版本。"
+                          : outcome === "deferred"
+                            ? "更新已下载，将在窗口全部恢复后安装。"
+                            : outcome === "installed"
+                              ? "更新已安装，应用即将重启。"
+                              : "检查更新失败，请稍后重试。",
+                    }),
+                  )
+                }
+              />
+            ) : null}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
 
-function PendingBanner({
+function PermissionPrompt({
+  status,
+  busy,
+  onRequest,
+  onSettings,
+  onRecheck,
+}: {
+  status: StatusDto;
+  busy: boolean;
+  onRequest: () => void;
+  onSettings: () => void;
+  onRecheck: () => void;
+}) {
+  return (
+    <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] bg-[var(--color-surface)] px-3.5 py-2.5">
+      <p className="text-[13px] font-medium">
+        需要「{status.permission_name}」权限才能移动窗口
+      </p>
+      <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+        预览、查看显示器与导出诊断仍可使用，只是不会移动窗口。
+      </p>
+      <div className="mt-2.5 flex gap-1.5">
+        <button
+          type="button"
+          onClick={onRequest}
+          disabled={busy}
+          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-40"
+        >
+          请求授权
+        </button>
+        <button
+          type="button"
+          onClick={onSettings}
+          className="rounded-[var(--radius-control)] border border-[var(--color-border-strong)] px-2.5 py-1 text-xs font-medium"
+        >
+          前往系统设置
+        </button>
+        <button
+          type="button"
+          onClick={onRecheck}
+          disabled={busy}
+          className="rounded-[var(--radius-control)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)]"
+        >
+          重新检查
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PendingCard({
   pending,
   busy,
   onRestore,
@@ -469,21 +653,18 @@ function PendingBanner({
   onDismiss: () => void;
 }) {
   return (
-    <div className="animate-in rounded-[var(--radius-control)] border border-[var(--color-warning)]/35 bg-[var(--color-warning-soft)] px-4 py-3">
+    <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] bg-[var(--color-surface)] px-3.5 py-2.5">
       <p className="text-[13px] font-medium">上次整理未完成</p>
-      <p className="mt-1 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+      <p className="mt-0.5 text-xs leading-relaxed text-[var(--color-fg-soft)]">
         有 {pending.windows} 个窗口的快照仍待处理
         {pending.may_have_moved ? "，其中部分可能已被移动" : ""}。
-        {pending.truncated_bytes > 0
-          ? " 记录尾部有损坏，已单独保存用于诊断。"
-          : ""}
       </p>
-      <div className="mt-3 flex gap-2">
+      <div className="mt-2.5 flex gap-1.5">
         <button
           type="button"
           onClick={onRestore}
           disabled={busy}
-          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-50"
+          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-40"
         >
           尝试恢复
         </button>
@@ -491,7 +672,7 @@ function PendingBanner({
           type="button"
           onClick={onDismiss}
           disabled={busy}
-          className="rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium text-[var(--color-fg-soft)] hover:text-[var(--color-fg)]"
+          className="rounded-[var(--radius-control)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)]"
         >
           稍后处理
         </button>
