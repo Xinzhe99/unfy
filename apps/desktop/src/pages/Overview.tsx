@@ -87,6 +87,11 @@ export function OverviewPage({
     state === "active" || state === "degraded" || state === "restoring";
   const busyState = state === "migrating" || state === "restoring";
   const needsAttention = state === "degraded" || state === "error";
+  // In `Error` the engine refuses every new gather by design: the journal is not
+  // durable, so writing another one would put the user's windows at risk. The
+  // actions that still work are rescue and restore, and they must be what the
+  // page offers - previously it showed "gather", the one button that cannot run.
+  const blocked = state === "error";
   // With one display there is nowhere to gather to. Saying nothing leaves the
   // user pressing a button that reports "moved 0 windows", which reads as broken.
   const singleDisplay = (status?.display_count ?? 0) < 2;
@@ -196,7 +201,24 @@ export function OverviewPage({
         ) : null}
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {hasWork ? (
+          {blocked ? (
+            <>
+              <Button onClick={onRestore} disabled={busy}>
+                尝试恢复
+              </Button>
+              <Button onClick={onRescue} disabled={busy || !supported}>
+                救援越界窗口
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
+                onClick={onExport}
+                disabled={busy}
+              >
+                导出诊断包
+              </Button>
+            </>
+          ) : hasWork ? (
             <>
               <Button
                 variant="primary"
@@ -412,6 +434,12 @@ function targetDisplayName(
 function humanError(raw: string): string {
   const incomplete = raw.match(/restore_incomplete:(\d+)/);
   if (incomplete) return `还有 ${incomplete[1]} 个窗口没能恢复原位`;
+  // Journal failures are the one path that leaves the engine unable to act at
+  // all, and the raw text is an English OS error. Say what it means and what the
+  // user can do; the exact reason is in the diagnostics bundle.
+  if (raw.includes("journal write failed") || raw.includes("journal is corrupt")) {
+    return "无法写入恢复记录，为避免窗口位置丢失，整理已停止。请确认磁盘空间与目录权限，然后重启应用。";
+  }
   switch (raw) {
     case "already_active":
       return "还有未完成的整理，请先恢复";

@@ -370,9 +370,65 @@ describe("pages render", () => {
     // The raw code is an implementation detail; the sentence is the product.
     expect(html).toContain("请先恢复");
     expect(html).not.toContain("already_active");
+    // A journal failure is the only path that stops the engine acting at all; the
+    // raw OS error in English is not an explanation a user can act on.
+    const journalFailure = renderToStaticMarkup(
+      <OverviewPage
+        status={{ ...status, state: "error", last_error: "journal write failed: io error: os error 183" }}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+      />,
+    );
+    expect(journalFailure).toContain("无法写入恢复记录");
+    expect(journalFailure).not.toContain("os error");
     // A message about a past failure must be dismissable: once read, it is noise
     // until the next success overwrites it.
     expect(html).toContain("知道了");
+  });
+
+  test("overview offers recovery, not a gather, when the engine is in error", () => {
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={{ ...status, state: "error" }}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+      />,
+    );
+    // The engine refuses new gathers in this state. Offering the button anyway
+    // means the user presses the only prominent action and gets an error.
+    expect(html).not.toContain("整理到目标屏");
+    expect(html).toContain("尝试恢复");
+    expect(html).toContain("救援越界窗口");
   });
 
   test("overview offers a way out when restoring is impossible", () => {
