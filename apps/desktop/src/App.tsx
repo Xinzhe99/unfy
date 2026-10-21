@@ -243,14 +243,29 @@ export default function App() {
         if (phase === "done") void refresh();
       },
     );
-    const unlistenTopology = listen<{ rescued: number }>(
+    const unlistenTopology = listen<{
+      rescued: number;
+      needs_regather?: boolean;
+      captured?: number;
+    }>(
       "conflux://topology-changed",
       (event) => {
         void refresh();
-        if (event.payload.rescued > 0) {
+        const { rescued, needs_regather } = event.payload;
+        if (rescued > 0) {
           flash({
             tone: "warning",
-            text: `显示器连接发生变化，已把 ${event.payload.rescued} 个窗口移回可见区域。`,
+            text: `显示器连接发生变化，已把 ${rescued} 个窗口移回可见区域。`,
+          });
+          return;
+        }
+        if (needs_regather) {
+          // The layout survived but the display list it was planned against did
+          // not. Saying nothing leaves windows arranged for a monitor that is no
+          // longer where the plan assumed.
+          flash({
+            tone: "neutral",
+            text: "显示器连接发生变化。当前布局可能已不适用，建议重新点「整理到目标屏」。",
           });
         }
       },
@@ -388,7 +403,28 @@ export default function App() {
           <span className="text-[13px] font-semibold tracking-tight">Conflux</span>
         </div>
 
-        <nav className="flex-1 px-2" aria-label="主导航">
+        <nav
+          className="flex-1 px-2"
+          aria-label="主导航"
+          // Arrow keys move between pages, the way a real sidebar behaves. Tab
+          // alone would walk through every item to reach the content, which is
+          // four extra stops on every visit.
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            const index = navigation.findIndex((item) => item.id === page);
+            const delta = event.key === "ArrowDown" ? 1 : -1;
+            const next = navigation[(index + delta + navigation.length) % navigation.length];
+            if (!next) return;
+            event.preventDefault();
+            setPage(next.id);
+            // Move focus with the selection so the next key press continues from
+            // the new item instead of the old one.
+            const target = event.currentTarget.querySelector<HTMLButtonElement>(
+              `[data-page="${next.id}"]`,
+            );
+            target?.focus();
+          }}
+        >
           {groups.map((group) => (
             <div key={group} className="mb-3">
               <p className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
@@ -403,6 +439,8 @@ export default function App() {
                     <button
                       key={item.id}
                       type="button"
+                      data-page={item.id}
+                      tabIndex={active ? 0 : -1}
                       onClick={() => setPage(item.id)}
                       aria-current={active ? "page" : undefined}
                       className={`mb-0.5 flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-[13px] transition-colors ${
@@ -624,16 +662,21 @@ export default function App() {
                 onCheckUpdate={() =>
                   void run(
                     () => api.checkUpdate(),
-                    (outcome) => ({
-                      tone: outcome === "up_to_date" ? "success" : "neutral",
+                    (result) => ({
+                      tone:
+                        result.outcome === "up_to_date"
+                          ? "success"
+                          : result.outcome === "failed"
+                            ? "danger"
+                            : "neutral",
                       text:
-                        outcome === "up_to_date"
+                        result.outcome === "up_to_date"
                           ? "当前已是最新版本。"
-                          : outcome === "deferred"
+                          : result.outcome === "deferred"
                             ? "更新已下载，将在窗口全部恢复后安装。"
-                            : outcome === "installed"
+                            : result.outcome === "installed"
                               ? "更新已安装，应用即将重启。"
-                              : "检查更新失败，请稍后重试。",
+                              : `检查更新失败：${result.detail || "未知原因"}`,
                     }),
                   )
                 }

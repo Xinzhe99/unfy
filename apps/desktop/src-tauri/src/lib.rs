@@ -30,8 +30,8 @@ pub struct AppState {
     pub settings_path: std::path::PathBuf,
     /// Which global shortcuts actually registered, and why any failed.
     pub hotkey_status: Arc<std::sync::Mutex<commands::HotkeyStatusDto>>,
-    /// Outcome of the most recent update check, as (outcome, version).
-    pub last_update: Arc<std::sync::Mutex<Option<(String, String)>>>,
+    /// Outcome of the most recent update check: (outcome, version, detail).
+    pub last_update: Arc<std::sync::Mutex<Option<(String, String, String)>>>,
     /// Remote-session detector state. One tracker per process, because the
     /// activation streak must survive across polls.
     pub detector: Arc<std::sync::Mutex<conflux_detect::Tracker>>,

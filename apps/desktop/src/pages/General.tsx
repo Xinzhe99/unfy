@@ -221,6 +221,13 @@ export function GeneralPage({
                   : "尚未检查过更新。"
                 : "此构建没有签名公钥与更新地址，检查更新不会成功。发布版才会启用。"}
             </p>
+            {updateStatus?.configured &&
+            updateStatus.last_outcome === "failed" &&
+            updateStatus.last_detail ? (
+              <p className="mt-1 font-mono text-[11px] leading-relaxed text-[var(--color-danger)]">
+                {updateStatus.last_detail}
+              </p>
+            ) : null}
           </div>
           <Button
             size="sm"

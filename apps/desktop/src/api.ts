@@ -165,6 +165,14 @@ export interface UpdateStatusDto {
   configured: boolean;
   last_outcome: string | null;
   last_version: string | null;
+  /** Why the last check failed, when it did. */
+  last_detail: string | null;
+}
+
+export interface UpdateCheckDto {
+  outcome: "up_to_date" | "deferred" | "installed" | "failed";
+  /** The failure reason, empty unless `outcome` is `failed`. */
+  detail: string;
 }
 
 export interface ActivityEntryDto {
@@ -207,7 +215,7 @@ export const api = {
   requestPermission: () => invoke<boolean>("request_permission"),
   openPermissionSettings: () => invoke<boolean>("open_permission_settings"),
   updateStatus: () => invoke<UpdateStatusDto>("update_status"),
-  checkUpdate: () => invoke<string>("check_update"),
+  checkUpdate: () => invoke<UpdateCheckDto>("check_update"),
   liveTransaction: () => invoke<string | null>("live_transaction"),
   setPaused: (paused: boolean) => invoke<PauseDto>("set_paused", { paused }),
   hotkeyStatus: () => invoke<HotkeyStatusDto>("hotkey_status"),

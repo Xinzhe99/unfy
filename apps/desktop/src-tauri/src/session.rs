@@ -318,17 +318,31 @@ pub fn watch_topology<R: Runtime>(app: &AppHandle<R>) {
             last = current;
 
             match engine.on_topology_changed() {
-                Ok(rescued) if rescued.is_empty() => {
-                    tracing::info!("display topology changed; nothing needed rescuing");
-                }
                 Ok(rescued) => {
                     let count = rescued.len();
+                    let captured = engine.captured_window_count();
+                    let state = engine.state();
                     drop(engine);
-                    tracing::warn!(count, "display topology changed; rescued windows");
+
+                    if count > 0 {
+                        tracing::warn!(count, "display topology changed; rescued windows");
+                    } else {
+                        tracing::info!("display topology changed; nothing needed rescuing");
+                    }
+
                     use tauri::Emitter;
                     let _ = handle.emit(
                         "conflux://topology-changed",
-                        serde_json::json!({ "rescued": count }),
+                        serde_json::json!({
+                            "rescued": count,
+                            // A layout that survived a topology change is still
+                            // aimed at the old display list. Telling the UI lets
+                            // it offer "整理到目标屏" again, which is what the
+                            // user wants when the monitor comes back or moves.
+                            "needs_regather": captured > 0
+                                && state == conflux_domain::EngineState::Active,
+                            "captured": captured,
+                        }),
                     );
                     crate::tray::refresh(&handle);
                 }

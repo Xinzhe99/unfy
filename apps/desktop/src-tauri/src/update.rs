@@ -46,6 +46,18 @@ impl UpdateOutcome {
         }
     }
 
+    /// Why the check failed, for the UI. Empty for every other outcome.
+    ///
+    /// Returning a bare "failed" left the user with a red line and no cause; the
+    /// most common cause is a build with no network access or an update URL that
+    /// the platform refuses (non-HTTPS), and both are actionable once named.
+    pub fn detail(&self) -> String {
+        match self {
+            UpdateOutcome::Failed { message } => message.clone(),
+            _ => String::new(),
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             UpdateOutcome::UpToDate { .. } => "up_to_date",

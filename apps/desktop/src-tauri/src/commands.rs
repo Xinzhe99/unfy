@@ -1031,6 +1031,8 @@ pub struct UpdateStatusDto {
     pub configured: bool,
     pub last_outcome: Option<String>,
     pub last_version: Option<String>,
+    /// Why the last check failed, when it did.
+    pub last_detail: Option<String>,
 }
 
 /// Report update state. Does not trigger a network call.
@@ -1050,24 +1052,41 @@ pub fn update_status(
         // "未配置" instead of offering a button that never works.
         configured: crate::update::is_configured(&handle),
         last_outcome: last.as_ref().map(|o| o.0.clone()),
-        last_version: last.map(|o| o.1),
+        last_version: last.as_ref().map(|o| o.1.clone()),
+        last_detail: last.map(|o| o.2),
     })
 }
 
 /// Check for an update now, honouring the recovery barrier.
 #[tauri::command]
-pub async fn check_update(handle: tauri::AppHandle) -> Result<String, String> {
+pub async fn check_update(handle: tauri::AppHandle) -> Result<UpdateCheckDto, String> {
     let outcome = crate::update::check_and_install(handle.clone(), true).await;
+    let detail = outcome.detail();
 
     // Record the outcome so the settings page can show the last result after a
     // restart instead of always claiming the check never ran.
     if let Some(state) = handle.try_state::<AppState>() {
         if let Ok(mut last) = state.last_update.lock() {
-            *last = Some((outcome.as_str().to_string(), outcome.version()));
+            *last = Some((
+                outcome.as_str().to_string(),
+                outcome.version(),
+                detail.clone(),
+            ));
         }
     }
 
-    Ok(outcome.as_str().to_string())
+    Ok(UpdateCheckDto {
+        outcome: outcome.as_str().to_string(),
+        detail,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateCheckDto {
+    /// `up_to_date`, `deferred`, `installed`, or `failed`.
+    pub outcome: String,
+    /// The failure reason, empty unless `outcome` is `failed`.
+    pub detail: String,
 }
 
 #[derive(Debug, Serialize)]

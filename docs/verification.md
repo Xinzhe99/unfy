@@ -281,6 +281,27 @@ exact restore: 12/12
 
 **关于构建方式**：本仓库的调试构建默认指向 Vite dev server（`devUrl`）。验证界面时需要 `--features tauri/custom-protocol` 把 `dist` 嵌入二进制，否则窗口加载的是 dev server 地址。此机 shell 里的 Node 是 WSL 版，直接 `npm run dev` 会因拿不到 Windows binding 而失败；前端构建本身正常（走 Windows Node）。
 
+### 自动更新的检查链路
+
+用一个 minisign 测试密钥和本地清单服务真实走了一遍检查流程（`tauri.conf.json` 临时指向
+`http://127.0.0.1:8787/manifest.json`，验证后已还原为空配置）：
+
+```
+WARN the update download URL http://127.0.0.1:8787/artifact.bin does not use the `https` protocol
+INFO update check finished outcome="failed"
+界面显示：install failed: invalid updater binary format
+```
+
+**能证明的**：端点被读取、清单被解析、签名被校验、下载被执行、失败原因一路传到了界面。
+最后一步失败是因为测试产物不是合法的 updater 包（用的是图标文件签的名），不是流程缺陷。
+
+**发现并修复的缺陷**：在此之前 `check_update` 只返回字符串 `"failed"`，具体原因只写进日志。
+用户点「检查更新」只会看到"检查更新失败，请稍后重试"，无法判断是网络、签名还是更新包格式。
+现在 `UpdateOutcome::detail()` 把原因带回界面，设置页与提示条都会显示。
+
+**不能证明的**：真实发布服务器可达、HTTPS 证书、以及一次真实升级后进程重启并保留用户状态。
+这些需要真实发布环境，见 [release.md](release.md) 的首次发布清单。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
