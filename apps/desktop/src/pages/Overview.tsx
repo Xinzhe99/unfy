@@ -26,6 +26,7 @@ export function OverviewPage({
   preview,
   displays,
   activity,
+  progress,
   busy,
   onPreview,
   onMigrate,
@@ -42,6 +43,8 @@ export function OverviewPage({
   preview: PreviewDto | null;
   displays: DisplayDto[];
   activity: ActivityEntryDto[];
+  /** Live count while a gather runs, or null. */
+  progress: { done: number; total: number } | null;
   busy: boolean;
   onPreview: () => void;
   onMigrate: () => void;
@@ -181,7 +184,11 @@ export function OverviewPage({
                 disabled={busy || !supported || singleDisplay}
                 loading={busy}
               >
-                {busy ? "正在整理…" : "整理到目标屏"}
+                {progress
+                  ? `正在整理 ${progress.done}/${progress.total}…`
+                  : busy
+                    ? "正在整理…"
+                    : "整理到目标屏"}
               </Button>
               <Button
                 onClick={onPreview}

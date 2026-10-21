@@ -349,10 +349,34 @@ pub async fn migrate(
     );
 
     let activity = app.activity.clone();
-    let result =
-        tokio::task::spawn_blocking(move || migrate_blocking(engine_state, settings, activity))
-            .await
-            .map_err(|e| format!("migration task failed: {e}"))?;
+    let settings_for_refused = app.settings.clone();
+    let settings_path = app.settings_path.clone();
+    let progress_emitter = emitter.clone();
+    let emit: Arc<dyn Fn(usize, usize) + Send + Sync> = Arc::new(move |done, total| {
+        let _ = tauri::Emitter::emit(
+            &progress_emitter,
+            "conflux://progress",
+            serde_json::json!({ "phase": "migrating", "done": done, "total": total }),
+        );
+    });
+
+    let result = tokio::task::spawn_blocking(move || {
+        let report = migrate_blocking(engine_state, settings, activity, emit)?;
+        // Remember which applications refused, so the overview can offer to
+        // exclude them without the user typing a file name from a toast that has
+        // already disappeared.
+        if let Ok(mut stored) = settings_for_refused.lock() {
+            if stored.last_refused_apps != report.refused_apps {
+                stored.last_refused_apps = report.refused_apps.clone();
+                if let Err(e) = stored.save(&settings_path) {
+                    tracing::warn!(error = %e, "could not persist refused apps");
+                }
+            }
+        }
+        Ok::<_, String>(report)
+    })
+    .await
+    .map_err(|e| format!("migration task failed: {e}"))?;
 
     let _ = tauri::Emitter::emit(
         &emitter,
@@ -367,9 +391,21 @@ fn migrate_blocking(
     engine: Arc<std::sync::Mutex<conflux_engine::Engine<crate::platform::Backend>>>,
     settings: Arc<std::sync::Mutex<Settings>>,
     activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
+    emit: Arc<dyn Fn(usize, usize) + Send + Sync>,
 ) -> Result<MigrationDto, String> {
     let mut engine = engine.lock().map_err(|e| e.to_string())?;
     let settings = settings.lock().map_err(|e| e.to_string())?;
+
+    // Install the progress hook for this run. It is replaced rather than
+    // accumulated because a stale hook would fire into a dead window after the
+    // command returned.
+    {
+        let mut config = engine.config().clone();
+        config.on_progress = Some(emit);
+        if let Err(e) = engine.update_config(config) {
+            tracing::warn!(error = %e, "could not install the progress hook");
+        }
+    }
 
     let target = engine
         .resolve_target(

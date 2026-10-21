@@ -133,7 +133,7 @@ impl RestoreReport {
 }
 
 /// Configuration the engine needs from settings.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EngineConfig {
     pub layout: LayoutConfig,
     /// How far a window may drift from the requested rectangle before the engine
@@ -160,6 +160,14 @@ pub struct EngineConfig {
     /// Kept in the config so diagnostics can report it, but the engine never
     /// sleeps on it — see the note in `restore`.
     pub restore_delay_secs: u32,
+    /// Called after each window has been submitted, with (done, total).
+    ///
+    /// The engine has no UI thread and must not grow one; this is the smallest
+    /// hook that lets a caller report progress. A batch of a hundred windows
+    /// completes in ~200 ms on an idle desktop, but one application that is
+    /// busy pumping its message queue can hold a single window for seconds - and
+    /// an indeterminate spinner for that long reads as a hang.
+    pub on_progress: Option<std::sync::Arc<dyn Fn(usize, usize) + Send + Sync>>,
     /// Executable names that are never moved.
     ///
     /// Matched case-insensitively against `WindowSnapshot::app_name`. This is the
@@ -168,9 +176,32 @@ pub struct EngineConfig {
     pub excluded_apps: Vec<String>,
 }
 
+impl std::fmt::Debug for EngineConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The progress callback is a closure and cannot be printed; everything
+        // else is plain data. Printing `on_progress: Some(..)` keeps the shape of
+        // the struct visible in logs without requiring a Debug bound on it.
+        f.debug_struct("EngineConfig")
+            .field("layout", &self.layout)
+            .field("tolerance_px", &self.tolerance_px)
+            .field("max_attempts", &self.max_attempts)
+            .field("retry_delay_ms", &self.retry_delay_ms)
+            .field("journal_dir", &self.journal_dir)
+            .field("min_reachable", &self.min_reachable)
+            .field("restore_delay_secs", &self.restore_delay_secs)
+            .field(
+                "on_progress",
+                &self.on_progress.as_ref().map(|_| "<callback>"),
+            )
+            .field("excluded_apps", &self.excluded_apps)
+            .finish()
+    }
+}
+
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
+            on_progress: None,
             layout: LayoutConfig::default(),
             tolerance_px: 4,
             max_attempts: 2,
@@ -796,6 +827,9 @@ impl<B: Backend> Engine<B> {
                     }
                 }
                 self.outcomes.insert(placement.id.clone(), outcome);
+                if let Some(progress) = self.config.on_progress.as_ref() {
+                    progress(self.outcomes.len(), placements.len());
+                }
                 if outcome == WindowOutcome::Applied {
                     applied.push(placement.id.clone());
                 }

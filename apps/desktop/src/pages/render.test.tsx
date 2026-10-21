@@ -173,6 +173,7 @@ describe("pages render", () => {
         preview={null}
         displays={displays}
         activity={[]}
+        progress={null}
         busy={false}
         onPreview={noop}
         onMigrate={noop}
@@ -202,6 +203,7 @@ describe("pages render", () => {
         preview={preview}
         displays={displays}
         activity={activity}
+        progress={null}
         busy={false}
         onPreview={noop}
         onMigrate={noop}
@@ -228,6 +230,7 @@ describe("pages render", () => {
         preview={null}
         displays={[displays[0]!]}
         activity={[]}
+        progress={null}
         busy={false}
         onPreview={noop}
         onMigrate={noop}
@@ -243,6 +246,32 @@ describe("pages render", () => {
     expect(html).toContain("只检测到一块显示器");
   });
 
+  test("overview reports the gather count while it runs", () => {
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={{ done: 3, total: 7 }}
+        busy
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+      />,
+    );
+    // "working" alone is indistinguishable from "stuck" when one application
+    // holds the batch.
+    expect(html).toContain("正在整理 3/7");
+  });
+
   test("overview offers to exclude an application that refused to move", () => {
     const html = renderToStaticMarkup(
       <OverviewPage
@@ -255,6 +284,7 @@ describe("pages render", () => {
         preview={null}
         displays={displays}
         activity={[]}
+        progress={null}
         busy={false}
         onPreview={noop}
         onMigrate={noop}

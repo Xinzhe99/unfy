@@ -763,3 +763,52 @@ fn retarget_on_idle_engine_is_a_plain_gather() {
     assert_eq!(report.restored, 0);
     assert_eq!(report.migration.applied_count(), 3);
 }
+
+/// The progress hook must fire once per submitted window and end at (total, total).
+///
+/// Without it the UI shows an indeterminate spinner for the whole gather. On an
+/// idle desktop that is 200 ms; with one application holding its message queue it
+/// can be seconds, and an indeterminate spinner that long reads as a hang.
+#[test]
+fn migrate_reports_progress_for_every_window() {
+    use std::sync::{Arc, Mutex};
+
+    let backend = scenario();
+    let seen: Arc<Mutex<Vec<(usize, usize)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            on_progress: Some(Arc::new(move |done, total| {
+                sink.lock().unwrap().push((done, total));
+            })),
+            ..config("progress")
+        },
+    );
+
+    engine.migrate(&target_key()).expect("migrate");
+
+    let events = seen.lock().unwrap().clone();
+    assert_eq!(
+        events.len(),
+        3,
+        "one event per submitted window: {events:?}"
+    );
+    assert_eq!(events.first(), Some(&(1, 3)));
+    assert_eq!(
+        events.last(),
+        Some(&(3, 3)),
+        "the last event must reach the total, or the UI never shows completion"
+    );
+    // Monotonic: a counter that jumps backwards looks like a restart.
+    assert!(events.windows(2).all(|w| w[0].0 < w[1].0), "{events:?}");
+}
+
+#[test]
+fn no_progress_hook_installed_is_not_an_error() {
+    // The default config has no hook; migrating must still work.
+    let mut engine = Engine::new(scenario(), config("no-progress"));
+    let report = engine.migrate(&target_key()).expect("migrate");
+    assert_eq!(report.applied_count(), 3);
+}

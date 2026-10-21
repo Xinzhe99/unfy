@@ -86,6 +86,9 @@ export default function App() {
   const [runningApps, setRunningApps] = useState<AppDto[]>([]);
   const [activity, setActivity] = useState<ActivityEntryDto[]>([]);
   const [health, setHealth] = useState<HealthItemDto[]>([]);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const noticeTimer = useRef<number | null>(null);
@@ -235,11 +238,26 @@ export default function App() {
         text: "还有窗口没有恢复，已取消退出。请先恢复布局，或选择保留当前布局。",
       });
     });
-    const unlistenProgress = listen<{ phase: string; seconds?: number }>(
+    const unlistenProgress = listen<{
+      phase: string;
+      seconds?: number;
+      done?: number;
+      total?: number;
+    }>(
       "conflux://progress",
       (event) => {
         const phase = event.payload.phase;
         setBusy(phase !== "done" && phase !== "waiting");
+        // A count once the engine reports one. Without it the button only says
+        // "working", which is indistinguishable from "stuck" when a single
+        // application holds the batch for a few seconds.
+        if (phase === "migrating" && (event.payload.total ?? 0) > 0) {
+          setProgress({
+            done: event.payload.done ?? 0,
+            total: event.payload.total ?? 0,
+          });
+        }
+        if (phase === "done") setProgress(null);
         // A delayed restore is not "busy": the window is still usable and the
         // user can cancel it by gathering. Saying "正在恢复" during the wait
         // would be a lie, and hiding the countdown leaves the button looking dead.
@@ -550,6 +568,7 @@ export default function App() {
                 preview={preview}
                 displays={displays}
                 activity={activity}
+                progress={progress}
                 busy={busy}
                 onPreview={() =>
                   void run(
