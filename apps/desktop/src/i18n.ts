@@ -249,6 +249,7 @@ const EN: Record<string, string> = {
   "{count} 条规则": "{count} rules",
   "还没有排除任何应用。": "No applications excluded yet.",
   "移除": "Remove",
+  "这条规则已经存在。": "That rule is already in the list.",
   "例如 game.exe": "e.g. game.exe",
   "添加": "Add",
   "匹配可执行文件名，不区分大小写。全屏应用与工具窗口本来就不会被移动。":

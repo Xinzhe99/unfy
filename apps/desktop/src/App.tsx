@@ -978,6 +978,7 @@ export default function App() {
                 runningApps={runningApps}
                 busy={busy}
                 onSave={(patch) => void saveSettings(patch)}
+                onNotice={(text) => flash({ tone: "neutral", text })}
               />
             ) : null}
 

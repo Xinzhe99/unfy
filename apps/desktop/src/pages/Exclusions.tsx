@@ -20,11 +20,14 @@ export function ExclusionsPage({
   runningApps,
   busy,
   onSave,
+  onNotice,
 }: {
   settings: SettingsDto | null;
   runningApps: AppDto[];
   busy: boolean;
   onSave: (patch: Partial<SettingsDto>) => void;
+  /** Report something the form cannot show inline. */
+  onNotice: (text: string) => void;
 }) {
   const [draft, setDraft] = useState("");
 
@@ -39,7 +42,13 @@ export function ExclusionsPage({
   const addRule = (name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
+    // A duplicate used to return in silence: the box kept its text, the rule count
+    // did not move, and nothing explained why. Pressing Add and seeing nothing
+    // happen reads as a broken button. Say it was already there, and clear the box
+    // so the next attempt starts empty.
     if (rules.some((rule) => rule.toLowerCase() === trimmed.toLowerCase())) {
+      onNotice(t("这条规则已经存在。"));
+      setDraft("");
       return;
     }
     setRules([...rules, trimmed]);
