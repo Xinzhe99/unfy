@@ -137,6 +137,15 @@ pub struct Settings {
     /// exit, and this app is routinely killed from a terminal or by the installer
     /// during development, so the geometry never persisted when it mattered.
     pub window_geometry: Option<(i32, i32, i32, i32)>,
+    /// Whether the window was maximised when it was last closed.
+    ///
+    /// Separate from the rectangle because a maximised window reports the maximised
+    /// bounds, and Windows has no portable way to ask for the restore rectangle from a
+    /// new process. Keeping the last un-maximised rectangle and this flag reproduces what
+    /// the user gets from clicking "restore"; without the flag they got a window that
+    /// filled the screen but was not maximised - the title bar offered "maximise" and
+    /// dragging it behaved as if it had never been maximised.
+    pub window_maximized: bool,
     /// Explicit consent for anonymous usage counters. Default off.
     ///
     /// No uploader exists in this build: the flag records the user's choice so a
@@ -229,6 +238,7 @@ impl Default for Settings {
             auto_restore: false,
             last_refused_apps: Vec::new(),
             window_geometry: None,
+            window_maximized: false,
             auto_update: true,
             telemetry: false,
         }

@@ -468,13 +468,11 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    let Some((x, y, width, height)) = app
-        .state::<AppState>()
-        .settings
-        .lock()
-        .ok()
-        .and_then(|settings| settings.window_geometry)
-    else {
+    let (saved, was_maximized) = match app.state::<AppState>().settings.lock() {
+        Ok(settings) => (settings.window_geometry, settings.window_maximized),
+        Err(_) => return,
+    };
+    let Some((x, y, width, height)) = saved else {
         return;
     };
 
@@ -536,6 +534,13 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
 
     let _ = window.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+
+    // Maximise after placing, never instead of it: the rectangle above is the size the
+    // window returns to when the user un-maximises, and Windows takes the current
+    // rectangle as that restore size.
+    if was_maximized {
+        let _ = window.maximize();
+    }
 }
 
 /// Where a restored window should land, given the saved geometry and the monitor.
@@ -591,16 +596,29 @@ fn persist_window_geometry(app: &tauri::AppHandle) {
     let Ok(mut settings) = state.settings.lock() else {
         return;
     };
+    let maximized = window.is_maximized().unwrap_or(false);
     let geometry = (
         position.x,
         position.y,
         size.width as i32,
         size.height as i32,
     );
-    if settings.window_geometry == Some(geometry) {
+    // While maximised, the reported rectangle is the maximised one. Keeping the previous
+    // rectangle means the next launch restores the size the user gets from "restore",
+    // which is what Windows itself does with `WINDOWPLACEMENT`.
+    if (maximized && settings.window_maximized) || settings.window_geometry == Some(geometry) {
+        if settings.window_maximized != maximized {
+            settings.window_maximized = maximized;
+            if let Err(e) = settings.save(&state.settings_path) {
+                tracing::warn!(error = %e, "could not persist window state");
+            }
+        }
         return;
     }
-    settings.window_geometry = Some(geometry);
+    if !maximized {
+        settings.window_geometry = Some(geometry);
+    }
+    settings.window_maximized = maximized;
     if let Err(e) = settings.save(&state.settings_path) {
         tracing::warn!(error = %e, "could not persist window geometry");
     }
