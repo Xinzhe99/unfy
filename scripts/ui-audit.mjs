@@ -179,8 +179,34 @@ const PROBE = `(() => {
     }
   }
 
+  // Disabled controls are checked too, and by effective contrast rather than by
+  // the colour token alone: a button that dims itself with opacity blends its
+  // label into the card, which is how the exclude link sat at 2.4:1 while every
+  // enabled-state check passed.
+  const dimmed = [];
+  for (const b of document.querySelectorAll("button")) {
+    if (!b.disabled) continue;
+    const style = getComputedStyle(b);
+    const alpha = parseFloat(style.opacity);
+    const fg = colour(style.color);
+    if (!fg) continue;
+    const bg = backgroundOf(b);
+    const mixed = {
+      r: fg.r * alpha + bg.r * (1 - alpha),
+      g: fg.g * alpha + bg.g * (1 - alpha),
+      b: fg.b * alpha + bg.b * (1 - alpha),
+    };
+    const a = luminance(mixed);
+    const c = luminance(bg);
+    const ratio = (Math.max(a, c) + 0.05) / (Math.min(a, c) + 0.05);
+    if (ratio < 4.5) {
+      dimmed.push([(b.innerText || "").trim().slice(0, 24), Math.round(ratio * 100) / 100]);
+    }
+  }
+
   const main = document.querySelector("main");
   return JSON.stringify({
+    dimmed,
     page: document.querySelector("h1")?.innerText ?? "?",
     contrast: contrast.slice(0, 8),
     clipped: clipped.slice(0, 8),
@@ -268,6 +294,9 @@ try {
         if (r.page !== page) findings.push([where, `navigation went to ${r.page}`]);
         for (const [text, ratio] of r.contrast) findings.push([where, `contrast ${ratio}:1 on "${text}"`]);
         for (const text of r.clipped) findings.push([where, `clipped "${text}"`]);
+        for (const [label, ratio] of r.dimmed ?? []) {
+          findings.push([where, `disabled contrast ${ratio}:1 on "${label}"`]);
+        }
         if (r.overflowsX) findings.push([where, "document overflows horizontally"]);
         for (const label of r.outside) findings.push([where, `button outside viewport: "${label}"`]);
         if (!r.main) findings.push([where, "no <main> scroll container"]);

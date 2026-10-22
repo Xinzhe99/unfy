@@ -120,7 +120,7 @@ export function ExclusionsPage({
                   type="button"
                   disabled={busy}
                   onClick={() => setRules(rules.filter((r) => r !== rule))}
-                  className="shrink-0 text-[11px] text-[var(--color-muted)] transition-colors hover:text-[var(--color-danger)] disabled:opacity-40"
+                  className="shrink-0 text-[11px] text-[var(--color-muted)] transition-colors hover:text-[var(--color-danger)]"
                 >{t("移除")}</button>
               </li>
             ))}

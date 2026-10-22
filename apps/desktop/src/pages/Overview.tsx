@@ -249,7 +249,11 @@ export function OverviewPage({
                   type="button"
                   onClick={() => onExclude(pendingApps)}
                   disabled={busy}
-                  className="text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-fg)] disabled:opacity-55"
+                  // No opacity change when `busy`: muted text on the card measures 5.03:1, and
+                  // any fade drops it under the 4.5:1 floor (0.9 alone gives 4.34:1).
+                  // The button is disabled for a few milliseconds to stop a double
+                  // submit, not to signal that the action is unavailable.
+                  className="text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-fg)]"
                 >
                   {t("排除这些应用")}
                 </button>

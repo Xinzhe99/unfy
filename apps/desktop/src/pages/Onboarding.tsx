@@ -281,7 +281,7 @@ function DetectChoice({
       aria-checked={selected}
       disabled={disabled}
       onClick={onSelect}
-      className={`flex w-full items-start gap-2.5 border-b border-[var(--color-border)] px-3 py-2.5 text-left last:border-b-0 disabled:opacity-50 ${
+      className={`flex w-full items-start gap-2.5 border-b border-[var(--color-border)] px-3 py-2.5 text-left last:border-b-0 disabled:text-[var(--color-muted)] ${
         selected ? "bg-[var(--color-surface-hover)]" : ""
       }`}
     >

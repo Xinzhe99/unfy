@@ -117,7 +117,7 @@ export function HotkeyRecorder({
             ? t("快捷键 {keys}，点击重新录制", { keys: formatAccelerator(value) })
             : t("录制快捷键")
         }
-        className={`h-7 w-40 rounded-[var(--radius-control)] border px-2 font-mono text-xs tabular-nums transition-colors disabled:opacity-40 ${
+        className={`h-7 w-40 rounded-[var(--radius-control)] border px-2 font-mono text-xs tabular-nums transition-colors disabled:text-[var(--color-muted)] ${
           recording
             ? "border-[var(--color-accent)] bg-[var(--color-surface-hover)] text-[var(--color-fg)]"
             : invalid
@@ -132,7 +132,7 @@ export function HotkeyRecorder({
           type="button"
           disabled={disabled}
           onClick={() => onChange(null)}
-          className="text-[11px] text-[var(--color-muted)] hover:text-[var(--color-fg)] disabled:opacity-40"
+          className="text-[11px] text-[var(--color-muted)] hover:text-[var(--color-fg)]"
         >
           {t("清除")}
         </button>

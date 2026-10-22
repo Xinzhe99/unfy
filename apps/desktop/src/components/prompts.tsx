@@ -36,7 +36,7 @@ export function PermissionPrompt({
           type="button"
           onClick={onRequest}
           disabled={busy}
-          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-40"
+          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:bg-[var(--color-accent-soft)] disabled:text-[var(--color-muted)]"
         >{t("请求授权")}</button>
         <button
           type="button"
@@ -79,7 +79,7 @@ export function PendingCard({
           type="button"
           onClick={onRestore}
           disabled={busy}
-          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:opacity-40"
+          className="rounded-[var(--radius-control)] bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-fg)] disabled:bg-[var(--color-accent-soft)] disabled:text-[var(--color-muted)]"
         >{t("尝试恢复")}</button>
         <button
           type="button"
