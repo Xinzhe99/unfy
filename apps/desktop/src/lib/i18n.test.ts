@@ -137,6 +137,51 @@ describe("coverage", () => {
     expect(missing).toEqual([]);
   });
 
+  /**
+   * No catalogue entry may be unreachable.
+   *
+   * The three tests above catch a *missing* translation. This one catches the
+   * opposite, which is what actually accumulated: renaming a sentence leaves the old
+   * entry behind, and a duplicate key differing by one space hides beside the real
+   * one. Nothing reads them, nothing breaks, and they quietly grow - the count was 15
+   * by the time anyone looked, including six for skip reasons that no longer exist
+   * and an old wording of the refused-window hint that contradicted the new one.
+   *
+   * A key counts as reachable if the literal appears anywhere in the frontend or the
+   * Rust sources. That is deliberately loose: many keys are looked up indirectly
+   * through a map (`skipLabels`, `stateLabels`, the activity `kind` table) or sent
+   * from Rust as a `Message::new` argument, and a stricter "appears inside a t(...)
+   * call" rule would flag all of those.
+   */
+  test("no catalogue entry is unreachable", () => {
+    const root = `${import.meta.dir}/..`;
+    const catalogue = readFileSync(`${root}/i18n.ts`, "utf8");
+    const known = [...catalogue.matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]!);
+
+    const sources: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx|rs)$/.test(entry.name)) continue;
+        if (entry.name.includes(".test.")) continue;
+        if (entry.name === "i18n.ts") continue;
+        sources.push(readFileSync(full, "utf8"));
+      }
+    };
+    walk(root);
+    walk(`${root}/../src-tauri/src`);
+    const haystack = sources.join("\n");
+
+    const orphans = known.filter((key) => !haystack.includes(key));
+    expect(orphans).toEqual([]);
+    // Guard against the scan silently finding nothing after a path change.
+    expect(known.length).toBeGreaterThan(300);
+  });
+
   test("every Chinese literal in the UI has an English entry", () => {
     // Reads the source rather than the catalogue so a new hardcoded string is
     // caught even if nobody remembers to add it to the dictionary.

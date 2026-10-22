@@ -161,8 +161,6 @@ const EN: Record<string, string> = {
     "Some windows could not be restored. Try again, or close those windows first.",
   "出现了无法自动处理的问题。恢复与救援仍然可用；如果反复失败，请导出诊断包。":
     "Something could not be handled automatically. Restore and rescue still work; if it keeps failing, export a diagnostics bundle.",
-  "当前只检测到一块显示器，没有需要整理的窗口。接入第二块显示器后，整理才有意义。":
-    "Only one display is connected, so there is nothing to gather. Gathering needs a second display.",
   "现在只能从本窗口或托盘触发整理。设置一个快捷键、或打开远程检测，之后就不必先切回这个窗口。":
     "Gathering is only reachable from this window or the tray. Set a shortcut, or turn on remote detection, to avoid switching back here first.",
   "保存的目标显示器（{display}）已断开，整理时会改用主显示器。":
@@ -191,10 +189,7 @@ const EN: Record<string, string> = {
   "自动整理": "Auto gather",
   "自动恢复": "Auto restore",
   "暂停状态变更": "Pause changed",
-  "保留当前布局记录": "Kept layout",
   "没有接受位置调整的应用": "Applications that refused to move",
-  "这些应用会自己纠正窗口位置。排除它们可以避免每次都重试。":
-    "These applications correct their own position. Excluding them stops the retry on every gather.",
   "排除": "Exclude",
   "全部排除": "Exclude all",
   "工具": "Tools",
@@ -324,8 +319,6 @@ const EN: Record<string, string> = {
   "还需要一个非修饰键": "Needs a non-modifier key",
   "清除": "Clear",
   "录制快捷键": "Record shortcut",
-  "快捷键 {accelerator}，点击重新录制":
-    "Shortcut {accelerator}, click to record again",
   "恢复行为": "Restore behaviour",
   "恢复延迟": "Restore delay",
   "等这么多秒再放回窗口。期间如果又检测到远程会话，这次恢复会取消——避免断开重连时来回搬两次":
@@ -448,8 +441,6 @@ const EN: Record<string, string> = {
     "A layout is still active. Restore it before gathering onto a different screen.",
   "自动整理已暂停。在托盘菜单或概览页取消暂停后重试。":
     "Automation is paused. Resume it from the tray or the overview, then retry.",
-  "目标显示器当前不可用，请在「显示器」页重新选择。":
-    "The target display is unavailable. Choose it again on the Displays page.",
   "系统拒绝了窗口操作权限，请检查授权后重试。":
     "The system denied window control. Check the permission and retry.",
   "已取消这次恢复，因为期间开始了新的整理。":
@@ -485,7 +476,6 @@ const EN: Record<string, string> = {
   "已标记为远程会话。开启了自动整理的话，窗口会按设置收拢。":
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
-  "用户": "User",
   "活动历史": "Activity history",
   "记录了每次整理、恢复与救援的时间与窗口数量。清除后无法恢复，其他设置不受影响":
     "Records the time and window count of every gather, restore and rescue. Clearing it cannot be undone; no other setting is affected",
@@ -555,14 +545,8 @@ const EN: Record<string, string> = {
   "还有未完成的整理，请先恢复":
     "A previous gather has not been restored yet",
   "恢复已被新的整理请求取消": "The restore was cancelled by a new gather",
-  "本应用的窗口": "Conflux's own windows",
   "不可见": "Not visible",
-  "尺寸为零": "Zero size",
-  "工具窗口": "Tool window",
-  "系统外壳": "Shell window",
-  "附属于主窗口": "Owned by a main window",
   "全屏": "Full screen",
-  "其他虚拟桌面": "On another virtual desktop",
   "权限不足": "Permission denied",
   "已最小化": "Minimised",
   "已排除此应用": "Excluded app",
@@ -592,9 +576,6 @@ const EN: Record<string, string> = {
 
   "{month}月{day}日 {time}": "{month}/{day} {time}",
 
-  "保守级别": "cautious",
-  "均衡级别": "balanced",
-  "激进级别": "eager",
 
   "{seconds} 秒后恢复布局。点「保留当前布局」可以取消。":
     "Restoring in {seconds}s. Choose Keep current layout to cancel.",
