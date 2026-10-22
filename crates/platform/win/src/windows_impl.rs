@@ -222,6 +222,13 @@ impl WindowBackend for WinWindows {
     }
 
     fn capabilities(&self, id: &WindowId) -> Capabilities {
+        // The minimum size comes from `WM_GETMINMAXINFO`, which the target window
+        // answers in its own display's pixels. Without this guard the thread is
+        // system-aware, Windows virtualises the reply, and the layout believes a
+        // window can be squeezed smaller than it will actually go - the same class of
+        // bug the other guards exist for. Untested here: both monitors on this machine
+        // are at 100 %, where the two coordinate spaces coincide.
+        let _guard = PerMonitorV2::enter();
         let Ok(hwnd) = hwnd_from_id(id) else {
             return Capabilities::default();
         };
