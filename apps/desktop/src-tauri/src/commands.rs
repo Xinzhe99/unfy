@@ -1782,6 +1782,16 @@ pub async fn cycle_target<R: tauri::Runtime>(
         migrate_blocking(engine_state, settings_state, activity, emit, "window")
     })
     .await;
+    // Close the progress cycle. The gather and restore paths complete their own
+    // events; this one only ever announced "migrating", so anything watching the
+    // stream saw a batch that began and never ended. The button happens to reset
+    // through `run()`'s finally, which is why this was invisible, but the event
+    // stream should not depend on which call site the user came through.
+    let _ = tauri::Emitter::emit(
+        &handle,
+        "conflux://progress",
+        serde_json::json!({ "phase": "done" }),
+    );
 
     {
         let engine = app.engine.lock().map_err(|e| e.to_string())?;
