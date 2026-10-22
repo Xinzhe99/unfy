@@ -183,6 +183,10 @@ const PROBE = `(() => {
   // the colour token alone: a button that dims itself with opacity blends its
   // label into the card, which is how the exclude link sat at 2.4:1 while every
   // enabled-state check passed.
+  // Every disabled button, whatever mechanism produced the dimming. The first
+  // version only looked at elements whose opacity was below 1, which skipped
+  // exactly the buttons that were fixed by switching them to colour changes - and
+  // reported "no disabled controls" on a page that had two.
   const dimmed = [];
   for (const b of document.querySelectorAll("button")) {
     if (!b.disabled) continue;
@@ -190,7 +194,10 @@ const PROBE = `(() => {
     const alpha = parseFloat(style.opacity);
     const fg = colour(style.color);
     if (!fg) continue;
-    const bg = backgroundOf(b);
+    // The button's own background is what the label sits on; if it is transparent,
+    // walk outwards for the card behind it.
+    const own = colour(style.backgroundColor);
+    const bg = own && own.a > 0.9 ? own : backgroundOf(b);
     const mixed = {
       r: fg.r * alpha + bg.r * (1 - alpha),
       g: fg.g * alpha + bg.g * (1 - alpha),

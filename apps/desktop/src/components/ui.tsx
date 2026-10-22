@@ -23,7 +23,11 @@ const variantClass: Record<Variant, string> = {
   quiet:
     "text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)] disabled:text-[var(--color-muted)]",
   danger:
-    "border border-[var(--color-border-strong)] text-[var(--color-danger)] hover:bg-[var(--color-surface-hover)]",
+    // `disabled:` matters here as much as on the others: three destructive buttons
+    // take `disabled={busy}`, and without this they kept their full red label while
+    // silently ignoring clicks. Muted rather than faded, for the contrast reason
+    // spelled out on the button below.
+    "border border-[var(--color-border-strong)] text-[var(--color-danger)] hover:bg-[var(--color-surface-hover)] disabled:text-[var(--color-muted)]",
 };
 
 const sizeClass: Record<Size, string> = {
