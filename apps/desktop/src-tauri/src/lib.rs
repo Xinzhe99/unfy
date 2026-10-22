@@ -474,8 +474,30 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
             )
         })
         .unwrap_or((0, 0));
-    let width = width.min(bounds.width as i32 - frame.0);
-    let height = height.min(bounds.height as i32 - frame.1);
+    // Never go below the window's own minimum: on a display smaller than that - an
+    // 800x600 virtual screen, a headless RDP session - the upper clamp alone would ask
+    // for a size the window refuses, and the two constraints fight. A window slightly
+    // too large for such a screen is the lesser problem, and the position clamp below
+    // still keeps its title bar reachable.
+    //
+    // The minimum is read from the same config the window was built from, so changing
+    // `minWidth` in tauri.conf.json cannot leave this function behind.
+    let config = app.config();
+    let window_cfg = config.app.windows.first();
+    let min_w = window_cfg
+        .and_then(|w| w.min_width)
+        .map(|v| v as i32)
+        .unwrap_or(0);
+    let min_h = window_cfg
+        .and_then(|w| w.min_height)
+        .map(|v| v as i32)
+        .unwrap_or(0);
+    let width = width
+        .min(bounds.width as i32 - frame.0)
+        .max(min_w.min(bounds.width as i32 - frame.0));
+    let height = height
+        .min(bounds.height as i32 - frame.1)
+        .max(min_h.min(bounds.height as i32 - frame.1));
 
     // Keep the whole window on the monitor it is being restored to. The overlap test
     // above only asks for a draggable strip; a saved position near the far edge would
