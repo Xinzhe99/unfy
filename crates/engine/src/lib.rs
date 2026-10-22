@@ -173,6 +173,18 @@ pub struct EngineConfig {
     /// Matched case-insensitively against `WindowSnapshot::app_name`. This is the
     /// escape hatch for applications the user does not want rearranged: media
     /// players, capture tools, games, a full-screen dashboard.
+    ///
+    /// # What it does and does not block
+    ///
+    /// It blocks **gathering** and **rescue** - the two operations that move a
+    /// window somewhere new. It does not block **restoring**, which puts a window
+    /// back where it already was, nor the fallback that pulls a window into a
+    /// visible area when its display disappears. An excluded application must
+    /// never be stranded just because the user asked not to have it rearranged.
+    ///
+    /// Both halves are pinned by `an_exclusion_blocks_gathering_but_not_restoring`;
+    /// rescue has its own test. Keeping one half and dropping the other is the
+    /// failure this comment exists to prevent.
     pub excluded_apps: Vec<String>,
 }
 

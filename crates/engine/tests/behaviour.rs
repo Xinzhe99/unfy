@@ -623,6 +623,112 @@ fn excluded_app_is_never_moved() {
 }
 
 #[test]
+fn an_exclusion_blocks_gathering_but_not_restoring() {
+    // The two halves of the rule, pinned together so a future change cannot keep
+    // one and drop the other. An exclusion means "do not move my windows" - it does
+    // not mean "leave them where a gather put them". Restoring returns the window to
+    // the rectangle it had before, which is the opposite of moving it, and refusing
+    // to restore an excluded application would strand it on the target display
+    // forever.
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        1,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.set_app_name(1, "obs64.exe");
+
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            excluded_apps: vec!["obs64.exe".into()],
+            ..config("exclude-then-restore")
+        },
+    );
+
+    // Gathering leaves it exactly where it was.
+    let report = engine.migrate(&target_key()).expect("migrate");
+    assert!(
+        !report.outcomes.contains_key(&id(1)),
+        "an excluded window must not be gathered"
+    );
+    let window = engine
+        .backend()
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id.native_id == 1)
+        .unwrap();
+    assert_eq!(window.visible_rect, Rect::new(100, 100, 900, 700));
+
+    // And restoring is not blocked by the exclusion. A second, unexcluded window
+    // makes that observable: gather moves it, restore brings it back, and the
+    // excluded window is still where it started - proving restore ran over the
+    // whole set rather than skipping the excluded entry.
+    let mut engine = {
+        let mut backend = FakeBackend::with_two_displays();
+        backend.add_window(
+            1,
+            Rect::new(100, 100, 900, 700),
+            "fake-display-a",
+            WindowMode::Normal,
+            FakeBehaviour::Compliant,
+        );
+        backend.add_window(
+            2,
+            Rect::new(300, 300, 1100, 900),
+            "fake-display-a",
+            WindowMode::Normal,
+            FakeBehaviour::Compliant,
+        );
+        backend.set_app_name(1, "obs64.exe");
+        Engine::new(
+            backend,
+            EngineConfig {
+                excluded_apps: vec!["obs64.exe".into()],
+                ..config("exclude-then-restore-2")
+            },
+        )
+    };
+
+    engine.migrate(&target_key()).expect("migrate");
+    let gathered = engine
+        .backend()
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id.native_id == 2)
+        .unwrap();
+    assert_ne!(
+        gathered.visible_rect,
+        Rect::new(300, 300, 1100, 900),
+        "the unexcluded window must have moved, or this proves nothing"
+    );
+
+    let restored = engine.restore().expect("restore");
+    assert_eq!(
+        restored.outcomes.get(&id(2)),
+        Some(&WindowOutcome::Restored),
+        "restore must still bring the unexcluded window home"
+    );
+    for (native, expected) in [
+        (1u64, Rect::new(100, 100, 900, 700)),
+        (2, Rect::new(300, 300, 1100, 900)),
+    ] {
+        let window = engine
+            .backend()
+            .enumerate()
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id.native_id == native)
+            .unwrap();
+        assert_eq!(window.visible_rect, expected, "window {native} is not home");
+    }
+}
+
+#[test]
 fn rescue_leaves_excluded_applications_alone() {
     // Rescue exists for windows stranded off every display. An exclusion rule says
     // "never move this application", and there is no clause for stranded windows -
