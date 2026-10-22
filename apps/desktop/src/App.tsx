@@ -367,13 +367,23 @@ export default function App() {
           if (countdownTimer.current !== null) {
             window.clearInterval(countdownTimer.current);
           }
+          // The countdown owns the notice line for its whole life, so a timer
+          // left over from the preceding message must be cancelled here: `flash`
+          // clears every notice after six seconds, and a twenty-second wait would
+          // lose its countdown at the six-second mark and show nothing at all for
+          // the remaining fourteen. That is exactly the stretch where the user is
+          // wondering whether the app noticed the disconnect.
+          if (noticeTimer.current !== null) {
+            window.clearTimeout(noticeTimer.current);
+            noticeTimer.current = null;
+          }
           let remaining = seconds;
           const show = () => {
             setNotice({
               tone: "neutral",
               text:
                 remaining > 0
-                  ? t("{seconds} 秒后恢复布局。现在点「整理到目标屏」可以取消。", { seconds: remaining })
+                  ? t("{seconds} 秒后恢复布局。点「保留当前布局」可以取消。", { seconds: remaining })
                   : t("正在恢复布局…"),
             });
           };

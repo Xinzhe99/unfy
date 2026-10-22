@@ -452,6 +452,16 @@ fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
             Ok(mut schedule) => schedule.claim(),
             Err(_) => return Err("schedule lock".to_string()),
         };
+        // Tell the window a wait is in progress. Without this the automatic restore
+        // looks like the app has stopped responding for the whole delay: the user
+        // disconnects, sees nothing, and has no idea a timer is running or that
+        // gathering again would cancel it. `commands::restore_with_trigger` emits
+        // the same event for the delayed path there; this one hand-rolled the wait
+        // and dropped the notification.
+        let _ = app.emit(
+            "conflux://progress",
+            serde_json::json!({ "phase": "waiting", "seconds": delay }),
+        );
         if !crate::schedule::wait_cancellable(
             std::time::Duration::from_secs(u64::from(delay)),
             &token,
@@ -481,6 +491,13 @@ fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
         pending: report.pending.len(),
     };
     drop(engine);
+    // Close the progress cycle this function opened with "waiting", after the lock
+    // is released so a slow tray refresh cannot hold the engine. Without it the
+    // window keeps saying "正在恢复布局…" once the windows are already back.
+    let _ = app.emit(
+        "conflux://progress",
+        serde_json::json!({ "phase": "done" }),
+    );
     crate::tray::refresh(app);
     Ok(summary)
 }

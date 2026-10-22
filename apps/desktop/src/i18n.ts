@@ -596,8 +596,8 @@ const EN: Record<string, string> = {
   "均衡级别": "balanced",
   "激进级别": "eager",
 
-  "{seconds} 秒后恢复布局。现在点「整理到目标屏」可以取消。":
-    "Restoring in {seconds}s. Press Gather to target now to cancel.",
+  "{seconds} 秒后恢复布局。点「保留当前布局」可以取消。":
+    "Restoring in {seconds}s. Choose Keep current layout to cancel.",
   "显示器连接发生变化，已把 {count} 个窗口移回可见区域。":
     "Displays changed; {count} windows were moved back into view.",
   "新版本 {version} 已下载，将在窗口全部恢复后安装。":

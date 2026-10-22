@@ -686,6 +686,16 @@ pub async fn restore_with_trigger<R: tauri::Runtime>(
     })
     .await
     .map_err(|e| format!("restore task failed: {e}"))?;
+    // Close the progress cycle. The gather path has always emitted this; the restore
+    // path did not, and the UI sets `busy` from these events. A delayed restore left
+    // it saying "正在恢复布局…" - the countdown's final message - with `busy` stuck at
+    // the false that "waiting" sets, so the notice never cleared and every button in
+    // the row stayed enabled while the windows were already moving back.
+    let _ = tauri::Emitter::emit(
+        handle,
+        "conflux://progress",
+        serde_json::json!({ "phase": "done" }),
+    );
     note_result(app, result.as_ref().err().cloned().map(Message::new));
     crate::tray::refresh(handle);
     result
@@ -1973,6 +1983,14 @@ pub fn keep_current_layout(app: State<'_, AppState>) -> Result<(), String> {
         // A paused engine has nothing left to pause once the transaction is gone.
         settings.paused = false;
         let _ = settings.save(&app.settings_path);
+    }
+    // Drop any restore that is still counting down. Accepting the current layout is
+    // the same decision as cancelling the pending undo - the whole point is that the
+    // windows stay where they are - and the button is offered precisely during the
+    // wait, when the countdown offers nothing else to press. Waking the timer here
+    // is also what makes the countdown's wording true.
+    if let Ok(mut schedule) = app.schedule.lock() {
+        schedule.cancel();
     }
     if let Ok(mut log) = app.activity.lock() {
         log.record(crate::activity::Entry {
