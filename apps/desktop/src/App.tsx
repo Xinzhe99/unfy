@@ -678,7 +678,12 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto">
+        {/* `min-h-0` is required, not cosmetic: a flex item's default `min-height:
+            auto` refuses to shrink below its content, so with ten settings cards the
+            scroll container grew to fit the page and `overflow-y-auto` never engaged.
+            The page then had no way to reach anything below the fold - the privacy and
+            help cards were simply unreachable at the default window size. */}
+        <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-2xl flex-col gap-3 px-5 py-4">
             {notice ? (
               <div

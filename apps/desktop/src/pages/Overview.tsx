@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { t } from "../i18n";
 import { renderMessage, renderNotice, stateLabels } from "../api";
 import type {
@@ -83,6 +85,8 @@ export function OverviewPage({
   /** Declare or end a remote session by hand. */
   onToggleRemote: () => void;
 }) {
+  // The full history is reference material; three rows answer "what just happened".
+  const [expanded, setExpanded] = useState(false);
   const supported = status?.supported ?? false;
   const state = status?.state ?? "idle";
   const paused = status?.paused ?? false;
@@ -378,8 +382,12 @@ export function OverviewPage({
         {activity.length === 0 ? (
           <p className="py-1 text-xs text-[var(--color-muted)]">{t("还没有执行过操作。整理或恢复之后，这里会记录每次的结果。")}</p>
         ) : (
+          // Three rows by default, the rest behind a disclosure. The list is the
+          // answer to "what did it just do", which three rows already give; the full
+          // history is there for anyone who wants it.
+          <>
           <ul>
-            {activity.slice(0, 8).map((entry) => (
+            {activity.slice(0, expanded ? 40 : 3).map((entry) => (
               <li
                 key={`${entry.at}-${entry.kind}-${entry.affected}`}
                 className="flex items-baseline justify-between gap-3 border-t border-[var(--color-border)] py-1.5 first:border-t-0 first:pt-0"
@@ -403,6 +411,18 @@ export function OverviewPage({
               </li>
             ))}
           </ul>
+          {activity.length > 3 ? (
+            <button
+              type="button"
+              onClick={() => setExpanded(!expanded)}
+              className="mt-1 text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+            >
+              {expanded
+                ? t("收起")
+                : t("显示全部 {count} 条", { count: activity.length })}
+            </button>
+          ) : null}
+          </>
         )}
       </Card>
 
