@@ -14,6 +14,7 @@ import { skipLabel } from "../api";
 export function PlanPreview({ preview }: { preview: PreviewDto }) {
   const work = preview.target_work;
   const placed = preview.placements.length;
+  const squeezed = preview.placements.filter((p) => p.clamped).length;
 
   // Two windows of the same application are indistinguishable in the drawing
   // otherwise, and "which explorer window goes where" is exactly the question a
@@ -66,6 +67,15 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
           />
           {preview.placements.map((placement, index) => (
             <g key={placement.window_id}>
+              {/* SVG has no `title` attribute; a `<title>` child is the standard way
+                  to give an element a tooltip, and the label inside the box is
+                  shortened on purpose. Hovering reveals the full name and, for a
+                  squeezed window, why it is drawn dashed. */}
+              <title>{`${placement.app_name || t("窗口 {number}", { number: index + 1 })}${
+                placement.clamped
+                  ? t("：比它的格子需要更大，会压到相邻窗口")
+                  : ""
+              }`}</title>
               <rect
                 x={placement.rect.left}
                 y={placement.rect.top}
@@ -118,6 +128,16 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
         {preview.unplaced.length > 0 ? (
           <span className="text-[var(--color-warning)]">
             {t("{count} 个窗口放不下，保持原位", { count: preview.unplaced.length })}
+          </span>
+        ) : null}
+        {squeezed > 0 ? (
+          <span>
+            {/* Dashed cells already meant this; without a legend the drawing just
+                looked wrong. The count matters: "one of eight will overlap" is a
+                different decision from "most of them will". */}
+            {t("虚线框的窗口比格子需要更大，会略微压到相邻窗口（{count} 个）", {
+              count: squeezed,
+            })}
           </span>
         ) : null}
       </div>

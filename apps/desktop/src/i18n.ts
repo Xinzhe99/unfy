@@ -169,7 +169,7 @@ const EN: Record<string, string> = {
     "The saved target display ({display}) is disconnected; gathering will use the primary display.",
   "重新选择目标显示器": "Choose the target again",
   "布局预览": "Layout preview",
-  "预览不会移动任何窗口。这是点击预览那一刻的快照；离开本页后会重新计算。":
+  "预览不会移动任何窗口。窗口有变化时会自动更新。":
     "Preview moves nothing. It is a snapshot from the moment you pressed the button; leaving this page recomputes it.",
   "{count} 个窗口": "{count} windows",
   "没有可整理的窗口": "Nothing to gather",
@@ -486,6 +486,10 @@ const EN: Record<string, string> = {
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
   "用户": "User",
+  "虚线框的窗口比格子需要更大，会略微压到相邻窗口（{count} 个）":
+    "Dashed windows need more room than their cell and will overlap their neighbours slightly ({count})",
+  "：比它的格子需要更大，会压到相邻窗口":
+    ": needs more room than its cell, so it will overlap its neighbours",
   "帮助": "Help",
   "重新显示引导": "Show the guide again",
   "重新显示": "Show again",

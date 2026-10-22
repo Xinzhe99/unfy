@@ -311,7 +311,7 @@ export function OverviewPage({
       {preview ? (
         <Card
           title={t("布局预览")}
-          description={t("预览不会移动任何窗口。这是点击预览那一刻的快照；离开本页后会重新计算。")}
+          description={t("预览不会移动任何窗口。窗口有变化时会自动更新。")}
           aside={
             // A plain count, not a `Status`: the dot in that component means "state
             // of the engine", and a grey dot next to a window count reads as

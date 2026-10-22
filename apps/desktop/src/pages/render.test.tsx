@@ -439,9 +439,10 @@ describe("pages render", () => {
     expect(html).toContain("设置一个快捷键");
   });
 
-  test("the preview is labelled as a snapshot", () => {
-    // It stays on screen while the user may have changed the desktop underneath
-    // it, so the copy has to say what it is rather than imply a live view.
+  test("the preview says it keeps itself current", () => {
+    // The copy used to call this a snapshot taken at click time, which was true and
+    // also the problem: it stayed on screen naming windows the user had since
+    // closed. It is recomputed now, and the copy has to say so.
     const html = renderToStaticMarkup(
       <OverviewPage
         status={status}
@@ -468,7 +469,7 @@ describe("pages render", () => {
         onToggleRemote={noop}
       />,
     );
-    expect(html).toContain("快照");
+    expect(html).toContain("自动更新");
     expect(html).toContain("布局预览");
   });
 

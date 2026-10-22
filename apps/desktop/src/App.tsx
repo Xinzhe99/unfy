@@ -182,15 +182,22 @@ export default function App() {
   useEffect(() => {
     if (!needsThumbnails) return;
     let cancelled = false;
-    void (async () => {
+    const capture = async () => {
       const shots = await api.displayThumbnails();
       if (cancelled) return;
       setThumbnails(Object.fromEntries(shots.map((s) => [s.native_id, s])));
-    })();
+    };
+    // Captured on entry and then kept current: the picture has to agree with the
+    // screen the user is looking at, and one capture taken when the page opened
+    // went on showing windows that had since been closed and content that had
+    // moved. Re-entering the page re-captures as well, which it did not before.
+    void capture();
+    const timer = window.setInterval(() => void capture(), 5000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
-  }, [needsThumbnails, displays.length]);
+  }, [needsThumbnails, page, displays.length]);
 
   // The list is what the user is looking at while they switch to another app and
   // come back. Fetching only on navigation meant the newly opened app was missing
@@ -221,6 +228,25 @@ export default function App() {
   useEffect(() => {
     if (page !== "overview") setPreview(null);
   }, [page]);
+
+  // While the plan is on screen it is recomputed on the same cadence as the rest of
+  // the overview. It is a description of which windows exist right now: leaving it
+  // frozen meant a window the user had just closed was still drawn in the picture
+  // they were using to decide whether to gather.
+  const previewShown = preview !== null;
+  useEffect(() => {
+    if (!previewShown) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void api.preview().then((next) => {
+        if (!cancelled) setPreview(next);
+      });
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [previewShown]);
 
   useEffect(() => {
     // The first load is done by `startPolling` below, which runs only when the
