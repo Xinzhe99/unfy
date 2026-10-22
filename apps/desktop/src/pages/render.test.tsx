@@ -1133,6 +1133,64 @@ describe("pages render", () => {
     expect(html).toContain("notepad #2");
   });
 
+  /** Text actually printed inside the drawing, excluding `<title>` tooltips. */
+  const labels = (html: string) =>
+    [...html.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]!);
+
+  test("plan preview labels cells that do not collide", () => {
+    // Tiled cells share edges; that is not a collision. The first attempt at collision
+    // detection counted a shared border and stripped the labels from an ordinary grid.
+    const html = renderToStaticMarkup(
+      <PlanPreview
+        preview={{
+          ...preview,
+          placements: [
+            { window_id: "1:1", app_name: "alpha.exe", order: 1, rect: { left: 0, top: 0, width: 600, height: 400 }, clamped: false },
+            { window_id: "1:2", app_name: "beta.exe", order: 2, rect: { left: 600, top: 0, width: 600, height: 400 }, clamped: false },
+            { window_id: "1:3", app_name: "gamma.exe", order: 3, rect: { left: 0, top: 400, width: 600, height: 400 }, clamped: false },
+          ],
+        }}
+      />,
+    );
+    expect(labels(html)).toEqual(expect.arrayContaining(["alpha", "beta", "gamma"]));
+  });
+
+  test("plan preview drops every label in a cascade", () => {
+    // A cascade has full-size cells that are merely offset. Size checks pass for all of
+    // them, so only collision can tell that no label can be read.
+    const cascade = Array.from({ length: 6 }, (_, i) => ({
+      window_id: `1:${i}`,
+      app_name: `app${i}.exe`,
+      order: i + 1,
+      rect: { left: i * 28, top: i * 28, width: 500, height: 400 },
+      clamped: true,
+    }));
+    const html = renderToStaticMarkup(
+      <PlanPreview preview={{ ...preview, placements: cascade }} />,
+    );
+    expect(labels(html)).toEqual([]);
+  });
+
+  test("plan preview skips only the cells that collide", () => {
+    // One oversized window covering a neighbour must not silence the labels on the rest
+    // of a grid that is otherwise clean.
+    const html = renderToStaticMarkup(
+      <PlanPreview
+        preview={{
+          ...preview,
+          placements: [
+            { window_id: "1:1", app_name: "clean.exe", order: 1, rect: { left: 0, top: 0, width: 600, height: 400 }, clamped: false },
+            { window_id: "1:2", app_name: "big.exe", order: 2, rect: { left: 600, top: 0, width: 900, height: 800 }, clamped: true },
+            { window_id: "1:3", app_name: "under.exe", order: 3, rect: { left: 900, top: 0, width: 600, height: 400 }, clamped: false },
+          ],
+        }}
+      />,
+    );
+    const shown = labels(html);
+    expect(shown.some((l) => l.startsWith("clean"))).toBe(true);
+    expect(shown.some((l) => l.startsWith("under"))).toBe(false);
+  });
+
   test("plan preview truncates a long application name instead of clipping it", () => {
     const html = renderToStaticMarkup(
       <PlanPreview
