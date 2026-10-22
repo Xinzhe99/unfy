@@ -285,6 +285,10 @@ pub fn watch_topology<R: Runtime>(app: &AppHandle<R>) {
                             "captured": captured,
                         }),
                     );
+                    // The engine skipped this process on purpose, so its own window needs
+                    // its own rescue: a monitor unplugged while it sat there leaves it at a
+                    // coordinate nothing covers.
+                    crate::rescue_own_window(&handle);
                     crate::tray::refresh(&handle);
                 }
                 Err(e) => tracing::error!(error = %e, "topology rescue failed"),

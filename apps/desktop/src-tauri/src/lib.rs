@@ -409,6 +409,40 @@ pub fn run() {
 /// `document.visibilityState` does not change when Tauri hides a window: measuring
 /// CPU while hidden showed the polling rate unchanged. The frontend therefore
 /// cannot rely on the web `visibilitychange` event and needs an explicit signal.
+/// Move the settings window back on screen if a display change stranded it.
+///
+/// Called from the topology watcher, which already runs whenever the monitor set changes.
+pub fn rescue_own_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return;
+    };
+    let rect = (
+        position.x,
+        position.y,
+        size.width as i32,
+        size.height as i32,
+    );
+    let monitors: Vec<MonitorRect> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| {
+            let p = m.position();
+            let s = m.size();
+            (p.x, p.y, s.width as i32, s.height as i32)
+        })
+        .collect();
+
+    let Some((x, y)) = rescue_target(rect, &monitors) else {
+        return;
+    };
+    tracing::warn!(from_x = rect.0, from_y = rect.1, x, y, "settings window was off-screen");
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
 /// Match the window frame to the saved theme, before the webview draws anything.
 ///
 /// The frame is drawn by the operating system, and the frontend only reaches
@@ -480,15 +514,16 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
     // geometry can be larger than the screen it is restored onto - a window last used
     // on a 4K display, reopened on a laptop panel - and setting a 3000x1600 window on a
     // 1920x1080 screen leaves parts of it unreachable.
+    // Require a meaningful overlap - see `is_reachable`, shared with the topology rescue
+    // so the two cannot disagree about what "off-screen" means.
     let host = app.available_monitors().ok().and_then(|monitors| {
         monitors.into_iter().find(|monitor| {
             let pos = monitor.position();
             let size = monitor.size();
-            let (sx, sy) = (pos.x, pos.y);
-            let (sw, sh) = (size.width as i32, size.height as i32);
-            // Require a meaningful overlap: a window whose title bar is off
-            // the top edge cannot be dragged back.
-            x + width.min(200) > sx && x < sx + sw && y + 40 > sy && y < sy + sh
+            is_reachable(
+                (x, y, width, height),
+                &[(pos.x, pos.y, size.width as i32, size.height as i32)],
+            )
         })
     });
 
@@ -541,6 +576,42 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
     if was_maximized {
         let _ = window.maximize();
     }
+}
+
+/// A monitor's rectangle: `(left, top, width, height)`.
+type MonitorRect = (i32, i32, i32, i32);
+
+/// Whether a window would have a draggable strip on some monitor.
+///
+/// Both the startup restore and the topology rescue ask this, and the rule has to be the
+/// same in both places: a window whose title bar is off the top edge cannot be dragged
+/// back, and one narrower than the grab margin is not reachable either.
+fn is_reachable(rect: (i32, i32, i32, i32), monitors: &[MonitorRect]) -> bool {
+    // Height is not part of the test: the question is whether a grabbable strip is on
+    // screen, and 40 px of title bar is enough regardless of how tall the window is.
+    let (x, y, w, _height) = rect;
+    monitors.iter().any(|(mx, my, mw, mh)| {
+        x + w.min(200) > *mx && x < mx + mw && y + 40 > *my && y < my + mh
+    })
+}
+
+/// Where to move a stranded window, or `None` when it is already reachable.
+///
+/// The engine rescues other applications' windows and deliberately skips this process, so
+/// a display unplugged while the settings window sat on it left the window at a coordinate
+/// no monitor covers. The tray can show it, but showing does not move it - and a tool whose
+/// whole purpose is rescuing stranded windows should not strand itself.
+fn rescue_target(rect: (i32, i32, i32, i32), monitors: &[MonitorRect]) -> Option<(i32, i32)> {
+    if is_reachable(rect, monitors) {
+        return None;
+    }
+    let (mx, my, mw, mh) = monitors.first().copied()?;
+    let (x, y, w, h) = rect;
+    // Move it wholly onto the first monitor, the same way the startup restore clamps.
+    let (w, h) = (w.min(mw), h.min(mh));
+    let x = x.clamp(mx, (mx + mw - w).max(mx));
+    let y = y.clamp(my, (my + mh - h).max(my));
+    Some((x, y))
 }
 
 /// Where a restored window should land, given the saved geometry and the monitor.
@@ -912,6 +983,50 @@ mod geometry {
     const SCREEN: ((i32, i32), (i32, i32)) = ((0, 0), (1920, 1080));
     const FRAME: (i32, i32) = (16, 39);
     const MIN: (i32, i32) = (720, 520);
+
+    use super::{is_reachable, rescue_target};
+
+    /// The two monitors on this machine: primary at the origin, a second to its left.
+    fn monitors() -> Vec<(i32, i32, i32, i32)> {
+        vec![(0, 0, 1920, 1080), (-1920, -78, 1920, 1080)]
+    }
+
+    #[test]
+    fn a_window_on_an_attached_monitor_is_reachable() {
+        assert!(is_reachable((504, 161, 912, 718), &monitors()));
+        // The second monitor sits at a negative x.
+        assert!(is_reachable((-1500, 100, 912, 718), &monitors()));
+    }
+
+    #[test]
+    fn a_window_whose_title_bar_is_off_the_top_is_not_reachable() {
+        // Nothing to grab: dragging needs the title bar on screen.
+        assert!(!is_reachable((-1500, -900, 912, 718), &monitors()));
+    }
+
+    #[test]
+    fn a_window_on_a_removed_monitor_is_moved_to_the_first_one() {
+        // The second monitor was unplugged while the window sat on it.
+        let stranded = (-1500, 100, 912, 718);
+        assert!(!is_reachable(stranded, &[(0, 0, 1920, 1080)]));
+        assert_eq!(rescue_target(stranded, &[(0, 0, 1920, 1080)]), Some((0, 100)));
+    }
+
+    #[test]
+    fn a_reachable_window_is_left_alone() {
+        assert_eq!(rescue_target((504, 161, 912, 718), &monitors()), None);
+    }
+
+    #[test]
+    fn a_stranded_window_larger_than_the_remaining_screen_is_shrunk_to_fit() {
+        let stranded = (-3000, 500, 4000, 2200);
+        assert_eq!(rescue_target(stranded, &[(0, 0, 1920, 1080)]), Some((0, 0)));
+    }
+
+    #[test]
+    fn with_no_monitors_there_is_nowhere_to_move_to() {
+        assert_eq!(rescue_target((100, 100, 912, 718), &[]), None);
+    }
 
     #[test]
     fn a_window_larger_than_the_screen_is_shrunk() {
