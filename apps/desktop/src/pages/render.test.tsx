@@ -913,6 +913,32 @@ describe("pages render", () => {
     expect(html).toContain("1 条规则");
   });
 
+  test("a hotkey that failed to register says so on its own row", () => {
+    // The health card already lists a failed combination, but that is a summary on a
+    // different card. The row next to the recorder is where a user looks after
+    // recording a shortcut, and its error branch was never exercised: the fixture
+    // always had `gather_error: null`.
+    const html = renderToStaticMarkup(
+      <GeneralPage
+        settings={settings}
+        hotkeys={{
+          ...hotkeys,
+          gather: "Ctrl+Alt+G",
+          gather_error: message("这个组合已被其他程序占用"),
+        }}
+        health={health}
+        updateStatus={null}
+        busy={false}
+        onSave={noop}
+        onCheckUpdate={noop}
+        onReset={noop}
+        onShowGuide={noop}
+        onClearHistory={noop}
+      />,
+    );
+    expect(html).toContain("未生效：这个组合已被其他程序占用");
+  });
+
   test("settings page in both update configurations", () => {
     const configured = renderToStaticMarkup(
       <GeneralPage

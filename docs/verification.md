@@ -1915,6 +1915,24 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 **一次自伤**：插入测试时我把新块放在了一个 `test(` 声明行之后，导致原测试缺少开头、文件末尾
 括号不闭合，测试数从 103 掉到 53。修好后恢复 104（103 + 新增 1）。
 
+### 快捷键注册失败的那一行从未被测试（本轮，已补）
+
+`GeneralPage` 的快捷键行有两个分支：注册成功显示「在其他应用中按下也能触发」，失败显示
+「未生效：{reason}」。测试夹具里 `gather_error` 恒为 `null`，所以失败分支一次也没跑过。
+
+原有测试里那句 `Ctrl+Alt+G is already in use` 来自**健康检查卡片**的 detail，不是这一行——两个
+不同的界面位置，只有一个被覆盖。
+
+补 `a hotkey that failed to register says so on its own row`，验证去掉失败分支它会失败。
+
+### 枚举映射的核对结果（本轮）
+
+| 映射 | 绑定方式 | 结论 |
+|---|---|---|
+| `stateLabels` ↔ `EngineState` | `Record<EngineStateName, string>`，编译期强制 | 7 个状态一致，无需运行时兜底 |
+| `skipLabels` ↔ `SkipReason` | `Record<string, string>` + `?? reason` 兜底 | 5 个原因一致 |
+| `ACTIVITY_KINDS` ↔ `activity::Kind` | 上一轮已加 `?? entry.kind` 兜底 | 7 个类型一致 |
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
