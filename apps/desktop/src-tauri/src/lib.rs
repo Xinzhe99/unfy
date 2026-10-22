@@ -436,25 +436,39 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
         return;
     };
 
-    let visible = app
-        .available_monitors()
-        .map(|monitors| {
-            monitors.iter().any(|monitor| {
-                let pos = monitor.position();
-                let size = monitor.size();
-                let (sx, sy) = (pos.x, pos.y);
-                let (sw, sh) = (size.width as i32, size.height as i32);
-                // Require a meaningful overlap: a window whose title bar is off
-                // the top edge cannot be dragged back.
-                x + width.min(200) > sx && x < sx + sw && y + 40 > sy && y < sy + sh
-            })
+    // Find the monitor the saved position lands on, and remember its size: the saved
+    // geometry can be larger than the screen it is restored onto - a window last used
+    // on a 4K display, reopened on a laptop panel - and setting a 3000x1600 window on a
+    // 1920x1080 screen leaves parts of it unreachable.
+    let host = app.available_monitors().ok().and_then(|monitors| {
+        monitors.into_iter().find(|monitor| {
+            let pos = monitor.position();
+            let size = monitor.size();
+            let (sx, sy) = (pos.x, pos.y);
+            let (sw, sh) = (size.width as i32, size.height as i32);
+            // Require a meaningful overlap: a window whose title bar is off
+            // the top edge cannot be dragged back.
+            x + width.min(200) > sx && x < sx + sw && y + 40 > sy && y < sy + sh
         })
-        .unwrap_or(false);
+    });
 
-    if !visible {
+    let Some(monitor) = host else {
         tracing::info!("saved window geometry is off-screen; keeping the default");
         return;
-    }
+    };
+
+    let bounds = monitor.size();
+    let origin = monitor.position();
+    let width = width.min(bounds.width as i32);
+    let height = height.min(bounds.height as i32);
+
+    // Keep the whole window on the monitor it is being restored to. The overlap test
+    // above only asks for a draggable strip; a saved position near the far edge would
+    // otherwise leave most of the window past it.
+    let max_x = origin.x + bounds.width as i32 - width;
+    let max_y = origin.y + bounds.height as i32 - height;
+    let x = x.clamp(origin.x, max_x.max(origin.x));
+    let y = y.clamp(origin.y, max_y.max(origin.y));
 
     let _ = window.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
