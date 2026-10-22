@@ -2495,6 +2495,21 @@ Per-Monitor-V2——进程清单本身是 `system-aware`，线程级提升才能
 **验证它真能抓到那个死锁**：把 `pending_work(app.clone())` 放回 `diagnostics_report` 的持锁区间，
 测试精确报出 `commands.rs:diagnostics_report holds [engine, settings] then calls pending_work`。
 
+### 全部 Tauri 命令的响应时间（本轮，实测）
+
+上一轮的死锁让 `preview_diagnostics` 挂住，于是把所有命令都量了一遍：
+
+| 命令 | 耗时 | 备注 |
+|---|---|---|
+| `display_thumbnails` | **93 ms** | 截取并编码每块屏的 PNG，进入显示器页时调用一次 |
+| `preview` | 28 ms | |
+| `running_applications` | 14 ms | 枚举有窗口的进程 |
+| `get_status` / `activity_log` | 1 ms | 每 4 秒轮询 |
+| 其余 | 0 ms | |
+
+没有慢到会冻结界面的命令。`get_status` 在轮询路径上且持有 engine 锁，实测 1 ms；`topology()` 是
+Win32 枚举，显示器热插拔时可能变慢，但这是理论风险，未改动。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
