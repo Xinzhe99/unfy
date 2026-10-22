@@ -141,6 +141,46 @@ jobs:
             target/**/release/bundle/macos/*.tar.gz
           if-no-files-found: warn
 
+  ui-audit:
+    name: UI audit (real window)
+    needs: [frontend]
+    # Needs a real WebView2 window: contrast, layout and clipping cannot be judged
+    # in a DOM shim, where every computed style is invented. Windows runners have
+    # the same WebView2 the app ships against.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install
+        working-directory: apps/desktop
+        run: npm ci
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build the window
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Build the app
+        run: cargo build -p conflux-desktop --features tauri/custom-protocol
+
+      - name: Audit contrast, clipping and overflow
+        run: bun scripts/ui-audit.mjs
+
   e2e-windows:
     name: End-to-end (real desktop)
     needs: [check]
