@@ -164,10 +164,21 @@ export default function App() {
   }, [locale]);
 
   useEffect(() => {
-    const theme = settings?.theme ?? "system";
+    // Wait for the settings rather than guessing. `?? "system"` used to apply a class
+    // the moment React mounted, which removed the one `index.html` had already set from
+    // the cache and put light back - so a dark-theme user got the flash twice: once
+    // before the page painted, once when this effect ran.
+    if (!settings) return;
+    const theme = settings.theme;
     const root = document.documentElement;
     root.classList.remove("theme-system", "theme-light", "theme-dark");
     root.classList.add(`theme-${theme}`);
+    // Cached so `index.html` can apply it before the first paint; see the comment there.
+    try {
+      window.localStorage.setItem("conflux-theme", theme);
+    } catch {
+      // Storage disabled: the inline script keeps the default and this is only a cache.
+    }
     // The window frame is drawn by the operating system, not by the stylesheet, so
     // it stays light over a dark page unless it is told which theme to use. `null`
     // hands the decision back to the system, which is what "follow the system"

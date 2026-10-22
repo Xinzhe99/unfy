@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Conflux</title>
+    <script>
+      // Apply the theme before the bundle loads.
+      //
+      // The settings file is the source of truth, but it lives behind an async IPC call,
+      // so the first paint used the stylesheet default - light - and a dark-theme user
+      // saw a white window for the length of the load. This reads a cached copy that the
+      // app writes whenever it applies a theme; React re-applies the real value a moment
+      // later and wins if the two disagree.
+      try {
+        var stored = localStorage.getItem("conflux-theme");
+        if (stored) document.documentElement.classList.add("theme-" + stored);
+      } catch (e) {
+        // A webview with storage disabled keeps the default; nothing to do here.
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
