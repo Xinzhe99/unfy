@@ -26,7 +26,6 @@ import { Onboarding } from "../pages/Onboarding";
 import { applyLocale, currentLocale, t } from "../i18n";
 import { errorMessage, humanError, skipLabels, stateLabels } from "../api";
 import { navigation } from "../App";
-import { DisplaysPage } from "../pages/Displays";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import { PendingCard, PermissionPrompt } from "../components/prompts";
 import { PlanPreview } from "../components/PlanPreview";
@@ -1676,6 +1675,56 @@ describe("English mode", () => {
     [
       "plan preview",
       () => renderToStaticMarkup(<PlanPreview preview={preview} />),
+    ],
+    // The displays page, the exclusions page and the guide were missing from this
+    // sweep. Their keys all have English entries - checked separately - but nothing
+    // rendered them in English, so a string assembled at runtime could have leaked
+    // Chinese with every check still green.
+    [
+      "displays page",
+      () =>
+        renderToStaticMarkup(
+          <DisplaysPage
+            displays={displays}
+            settings={settings}
+            target={status.target}
+            thumbnails={{}}
+            busy={false}
+            onSelect={noop}
+            onIdentify={noop}
+            onCycle={noop}
+            onSave={noop}
+          />,
+        ),
+    ],
+    [
+      "exclusions page",
+      () =>
+        renderToStaticMarkup(
+          <ExclusionsPage
+            settings={{ ...settings, excluded_apps: ["msedge.exe"] }}
+            runningApps={apps}
+            busy={false}
+            onSave={noop}
+            onNotice={noop}
+          />,
+        ),
+    ],
+    [
+      "onboarding guide",
+      () =>
+        renderToStaticMarkup(
+          <Onboarding
+            displays={displays}
+            settings={{ ...settings, onboarding_done: false }}
+            thumbnails={{}}
+            busy={false}
+            onSelectTarget={async () => {}}
+            onIdentify={noop}
+            onSetDetect={async () => {}}
+            onFinish={noop}
+          />,
+        ),
     ],
   ];
 
