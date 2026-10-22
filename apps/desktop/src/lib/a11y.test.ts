@@ -92,6 +92,26 @@ describe("focus and motion", () => {
     expect(css).toContain("prefers-reduced-motion");
   });
 
+  test("every window listener added in an effect is removed again", async () => {
+    // The pairing that took two rounds of misreading to check by hand: an effect that
+    // adds `window.addEventListener` or `document.addEventListener` and forgets the
+    // matching remove keeps firing after the component unmounts, and its closure holds
+    // stale state. The cleanup block is thirty lines below the registration, so reading
+    // it is exactly the kind of check that gets skipped.
+    const offenders: string[] = [];
+    for (const file of await tsxFiles()) {
+      const text = await Bun.file(`${ROOT}/${file}`).text();
+      for (const match of text.matchAll(
+        /(window|document)\.addEventListener\("([\w:-]+)"/g,
+      )) {
+        const [, target, event] = match;
+        const removal = `${target}.removeEventListener("${event}"`;
+        if (!text.includes(removal)) offenders.push(`${file}: ${target} ${event}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   test("text contrast uses the fg tokens, never a bare white or black", async () => {
     const offenders: string[] = [];
     for (const file of await tsxFiles()) {

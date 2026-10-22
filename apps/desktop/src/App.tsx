@@ -503,6 +503,7 @@ export default function App() {
       void unlistenUpdate.then((fn) => fn());
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onWindow);
+
       void unlistenHidden.then((fn) => fn());
       stopPolling();
       if (countdownTimer.current !== null) {

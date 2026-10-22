@@ -2620,6 +2620,19 @@ keeping the default`，窗口保持默认尺寸——原有行为正确。
 这个对象不是可替换的，或轮询走了别的路径。改动本身由事件名一致性（两侧各一处、拼写相同）和类型
 检查覆盖。
 
+### 事件监听器的配对现在有静态检查（本轮）
+
+连续两轮我在同一个 effect 里判断错了两次（先说缺 `startPolling`、再说清理漏了监听器），两次的证据
+都在我读过的代码里。与其继续靠阅读核对，不如让测试来管。
+
+`a11y.test.ts` 增加一条：`window.addEventListener` / `document.addEventListener` 的每一个注册，
+都必须有同目标的 `removeEventListener`。
+
+验证有效性：删掉 `window.removeEventListener("focus", onWindow)` 后，测试报
+`src\App.tsx: window focus`。
+
+**这一步同时确认了我上两轮的判断都是错的**：清理函数本来就是完整的。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
