@@ -532,15 +532,7 @@ fn run_rescue<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 
 fn show_settings<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-        // The window stops polling when it is hidden - `document.visibilityState` does
-        // not change for a Tauri hide, so the frontend listens for events. A `focus`
-        // listener also restarts it, but `set_focus` above can be refused when another
-        // window holds the foreground; this event comes from the one place that shows
-        // the window, so the refresh does not depend on the focus landing.
-        let _ = tauri::Emitter::emit(app, "conflux://window-shown", ());
+        crate::show_window(&window);
     }
 }
 
@@ -550,9 +542,7 @@ fn toggle_settings<R: Runtime>(app: &AppHandle<R>) {
         if visible {
             crate::hide_window(&window);
         } else {
-            let _ = window.show();
-            let _ = window.unminimize();
-            let _ = window.set_focus();
+            crate::show_window(&window);
         }
     }
 }

@@ -2650,6 +2650,24 @@ keeping the default`，窗口保持默认尺寸——原有行为正确。
 
 验证有效性：把 `tauri.conf.json` 改成 0.2.0 后，测试报 `Expected "0.1.0", Received "0.2.0"`。
 
+### 三处显示窗口，只有一处通知前端（本轮，已修）
+
+上一轮给托盘的「设置」补了 `window-shown` 事件，但**另外两处显示窗口的地方没补**：
+
+| 位置 | 场景 | 上一轮后 |
+|---|---|---|
+| `tray.rs` `show_settings` | 托盘「设置」 | 有事件 |
+| `tray.rs` `toggle_settings` | 托盘左键切换 | **无** |
+| `lib.rs` 单实例回调 | 第二个实例启动 | **无** |
+
+后两种方式重新打开窗口时，前端不知道窗口回来了，可能继续显示陈旧数据。
+
+修法不是再补两次，而是抽出 `show_window(&window)`——显示、取消最小化、聚焦、发事件四件事一处做完，
+三处共用。
+
+新增 `the_window_is_shown_only_through_the_helper`：扫描源码，`window.show()` 只允许出现在
+`show_window` 内部。把 `toggle_settings` 改回直接调用后，测试报 `tray.rs: let _ = window.show();`。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

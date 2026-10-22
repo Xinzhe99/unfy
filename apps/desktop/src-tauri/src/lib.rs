@@ -298,9 +298,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             let _ = (args, _cwd);
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
+                show_window(&window);
             }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -409,6 +407,20 @@ pub fn run() {
 /// `document.visibilityState` does not change when Tauri hides a window: measuring
 /// CPU while hidden showed the polling rate unchanged. The frontend therefore
 /// cannot rely on the web `visibilitychange` event and needs an explicit signal.
+/// Show the settings window and tell the UI it is back.
+///
+/// Three places reveal this window - the tray's settings item, the tray's left-click
+/// toggle, and a second instance handing off - and each used to do its own three calls.
+/// Only one of them told the frontend, so a window reopened the other two ways could keep
+/// showing stale data. One function means the next caller cannot forget.
+pub fn show_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use tauri::Emitter;
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    let _ = window.app_handle().emit("conflux://window-shown", ());
+}
+
 pub fn hide_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use tauri::Emitter;
     let _ = window.hide();
@@ -776,6 +788,63 @@ mod lock_order {
             offenders,
             Vec::<String>::new(),
             "these call a locking function while holding a guard: \n{}",
+            offenders.join("\n")
+        );
+    }
+}
+
+#[cfg(test)]
+mod window_visibility {
+    //! Revealing the window must go through one function.
+    //!
+    //! Three places show it - the tray's settings item, the tray's left-click toggle and
+    //! a second instance handing off. Each used to do `show`/`unminimize`/`set_focus`
+    //! itself, and when the frontend needed a "you are visible again" event only one of
+    //! them was updated, so a window reopened the other two ways could keep showing stale
+    //! data. Counting the raw calls is cruder than the lock-order scan and enough here:
+    //! the only legal `window.show()` is inside `show_window`.
+
+    fn sources() -> Vec<(String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).expect("read src") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                out.push((name, std::fs::read_to_string(&path).expect("read file")));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_window_is_shown_only_through_the_helper() {
+        let mut offenders = Vec::new();
+        let mut inside_helper = false;
+        for (name, text) in sources() {
+            for line in text.lines() {
+                if line.contains("fn show_window") {
+                    inside_helper = name == "lib.rs";
+                    continue;
+                }
+                if inside_helper && line.trim() == "}" {
+                    inside_helper = false;
+                }
+                let trimmed = line.trim_start();
+                // Skip comments and the check itself: the doc comment above quotes the
+                // call it forbids, and so does this condition.
+                if trimmed.starts_with("//") || trimmed.starts_with("if line.contains") {
+                    continue;
+                }
+                if line.contains("window.show()") && !inside_helper {
+                    offenders.push(format!("{name}: {}", line.trim()));
+                }
+            }
+        }
+        assert_eq!(
+            offenders,
+            Vec::<String>::new(),
+            "these reveal the window without telling the frontend it is back: \n{}",
             offenders.join("\n")
         );
     }
