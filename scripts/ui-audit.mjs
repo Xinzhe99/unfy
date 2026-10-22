@@ -33,8 +33,20 @@ import { setTimeout as sleep } from "node:timers/promises";
 const PORT = 9333;
 const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 const EXE = `${ROOT}target/debug/conflux.exe`;
-const PAGES = ["概览", "显示器", "排除的应用", "设置"];
+// Each page by its heading in both languages. The audit used to run only in Chinese,
+// which left the layouts nobody checked: English labels are longer ("Gather to target"
+// against 整理到目标屏) and that is exactly what overflows a narrow window.
+const PAGES = [
+  { zh: "概览", en: "Overview" },
+  { zh: "显示器", en: "Displays" },
+  { zh: "排除的应用", en: "Exclusions" },
+  { zh: "设置", en: "Settings" },
+];
 const THEMES = ["浅色", "深色"];
+const LOCALES = [
+  { id: "zh", nav: "中文", label: "zh" },
+  { id: "en", nav: "English", label: "en" },
+];
 const SIZES = [
   { name: "912x718", w: 912, h: 718 },
   { name: "720x520", w: 720, h: 520 },
@@ -269,36 +281,78 @@ try {
     findings.push(["startup", "navigation never rendered"]);
   }
 
-  for (const theme of THEMES) {
-    await client.evaluate(clickByText("设置"));
-    // Fixed sleeps were the first bug in this script: 300 ms was enough on an idle
-    // desktop and not on a loaded one, and the failure surfaced as "theme button
-    // missing" - a layout complaint about a page that had simply not rendered yet.
-    // Wait for the heading, then for the button itself.
-    if (!(await waitForPage(client, "设置"))) {
-      findings.push(["设置", "settings page did not open"]);
+  // Chinese runs through both themes; English runs once, in the light theme. Length
+  // overflow does not depend on the palette, and doubling the run for a second
+  // language would double the slowest part of the audit for no extra coverage.
+  const RUNS = THEMES.map((theme) => ({ theme, locale: LOCALES[0] })).concat([
+    { theme: THEMES[0], locale: LOCALES[1] },
+  ]);
+
+  for (const { theme, locale } of RUNS) {
+    // Reach the settings page by its current-language name first. The app remembers the
+    // language, so a run can start in either; look for both instead of assuming.
+    const onSettings = await client.evaluate(
+      '["设置", "Settings"].includes(document.querySelector("h1")?.innerText ?? "")',
+    );
+    if (!onSettings) {
+      const inEnglish = await client.evaluate(
+        'document.querySelector("nav button")?.innerText === "Overview"',
+      );
+      await client.evaluate(clickByText(inEnglish ? "Settings" : "设置"));
+      await sleep(400);
     }
+    const settingsLabel = await client.evaluate('document.querySelector("h1")?.innerText ?? ""');
+    await client.evaluate(clickByText(settingsLabel));
+    if (!(await waitForPage(client, settingsLabel))) {
+      findings.push([settingsLabel, "settings page did not open"]);
+    }
+    // Pick the language first: switching it re-renders the page, which would drop a
+    // theme selection made before it.
+    let langApplied = false;
+    for (let i = 0; i < 20 && !langApplied; i++) {
+      langApplied = await client.evaluate(clickByText(locale.nav));
+      if (!langApplied) await sleep(150);
+    }
+    if (!langApplied) findings.push([settingsLabel, `language button ${locale.nav} missing`]);
+    // Switching the language re-renders every label, including the one the next step
+    // is about to look for. Wait for the page heading to be in the target language
+    // before hunting for the theme button.
+    const wantedHeading = locale.id === "zh" ? "设置" : "Settings";
+    let headingOk = false;
+    for (let i = 0; i < 20 && !headingOk; i++) {
+      headingOk = await client.evaluate(
+        `document.querySelector("h1")?.innerText === ${JSON.stringify(wantedHeading)}`,
+      );
+      if (!headingOk) await sleep(150);
+    }
+    if (!headingOk) {
+      const actual = await client.evaluate('document.querySelector("h1")?.innerText ?? ""');
+      findings.push([settingsLabel, `after switching language the heading is "${actual}", expected "${wantedHeading}"`]);
+    }
+    const settingsLabelAfter = locale.id === "zh" ? "设置" : "Settings";
+    // The theme labels are translated too.
+    const themeLabel = locale.id === "zh" ? theme : { 浅色: "Light", 深色: "Dark" }[theme];
     let applied = false;
     for (let i = 0; i < 20 && !applied; i++) {
-      applied = await client.evaluate(clickByText(theme));
+      applied = await client.evaluate(clickByText(themeLabel));
       if (!applied) await sleep(150);
     }
-    if (!applied) findings.push(["设置", `theme button ${theme} missing`]);
+    if (!applied) findings.push([settingsLabelAfter, `theme button ${themeLabel} missing`]);
     await sleep(400);
 
     for (const size of SIZES) {
       // The window is resized from outside the page; the probe reads whatever the
       // layout currently is, so the resize only needs to have settled.
       for (const page of PAGES) {
-        await client.evaluate(clickByText(page));
-        await waitForPage(client, page);
+        await client.evaluate(clickByText(page[locale.id]));
+        await waitForPage(client, page[locale.id]);
         await sleep(120);
         const raw = await client.evaluate(PROBE);
         const r = JSON.parse(raw);
-        const where = `${theme}/${size.name}/${r.page}`;
+        const where = `${locale.id}/${theme}/${size.name}/${r.page}`;
         checked.push(where);
 
-        if (r.page !== page) findings.push([where, `navigation went to ${r.page}`]);
+        if (r.page !== page[locale.id]) findings.push([where, `navigation went to ${r.page}`]);
         for (const [text, ratio] of r.contrast) findings.push([where, `contrast ${ratio}:1 on "${text}"`]);
         for (const text of r.clipped) findings.push([where, `clipped "${text}"`]);
         for (const [label, ratio] of r.dimmed ?? []) {
@@ -311,17 +365,58 @@ try {
     }
   }
 } finally {
+  // Put the language and theme back before quitting. They are persisted settings, so
+  // leaving the app in English/light made the *next* run start from a state it did not
+  // expect - and the failure it produced ("settings page did not open") pointed at the
+  // page rather than at the pollution.
+  if (client) {
+    try {
+      await client.evaluate('document.querySelector("h1")?.innerText === "Settings" || document.querySelector("h1")?.innerText === "设置"');
+      // Language first (it relabels everything), then the theme.
+      let heading = await client.evaluate('document.querySelector("h1")?.innerText ?? ""');
+      if (heading !== "Settings" && heading !== "设置") {
+        await client.evaluate(clickByText(heading === "Settings" ? "Settings" : "设置"));
+        await sleep(400);
+        heading = await client.evaluate('document.querySelector("h1")?.innerText ?? ""');
+      }
+      if (heading === "Settings") {
+        await client.evaluate(clickByText("中文"));
+        await sleep(400);
+        heading = await client.evaluate('document.querySelector("h1")?.innerText ?? ""');
+      }
+      if (heading !== "设置") {
+        await client.evaluate(clickByText("设置"));
+        await sleep(400);
+      }
+      // "跟随系统" appears in both the language and the theme groups; the language one
+      // comes first in the DOM. Restore both, since the audit switched both.
+      await client.evaluate(`(() => {
+        const all = [...document.querySelectorAll("button")].filter((b) => b.innerText.trim() === "跟随系统");
+        all[0]?.click();
+        return all.length;
+      })()`);
+      await sleep(400);
+      await client.evaluate(`(() => {
+        const all = [...document.querySelectorAll("button")].filter((b) => b.innerText.trim() === "跟随系统");
+        all[1]?.click();
+        return all.length;
+      })()`);
+      await sleep(400);
+    } catch {
+      // Best effort: a failed restore must not mask the findings above.
+    }
+  }
   client?.close();
   app.kill();
 }
 
-const expected = PAGES.length * THEMES.length * SIZES.length;
+const expected = (THEMES.length + 1) * PAGES.length * SIZES.length;
 if (checked.length !== expected) {
   findings.push(["coverage", `inspected ${checked.length} of ${expected} combinations`]);
 }
 
 if (findings.length === 0) {
-  console.log(`ui audit: clean (${checked.length} combinations: ${PAGES.length} pages x ${THEMES.length} themes x ${SIZES.length} sizes)`);
+  console.log(`ui audit: clean (${checked.length} combinations: ${PAGES.length} pages x ${SIZES.length} sizes x ${THEMES.length + 1} theme-locale runs)`);
   process.exit(0);
 }
 console.error(`ui audit: ${findings.length} finding(s)`);
