@@ -78,24 +78,32 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
 /// session that survived the sleep stays active and one that ended is detected by
 /// the normal path on the next poll.
 fn resume_after_sleep<R: Runtime>(app: &AppHandle<R>) {
-    let Some(state) = app.try_state::<AppState>() else {
-        return;
-    };
-    // `Tracker::force` resets the streak while keeping the current evidence.
-    if let Ok(mut tracker) = state.detector.lock() {
-        let evidence = tracker.evidence().cloned();
-        tracker.force(evidence);
-    }
-    // The last-observation summary is compared against the next poll; keeping a
-    // pre-sleep value would suppress the "evidence changed" log line for a genuine
-    // change. The manual marker is a user statement and survives regardless.
-    if let Ok(mut last) = state.last_observation.lock() {
+    {
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        // `Tracker::force` resets the streak while keeping the current evidence.
+        if let Ok(mut tracker) = state.detector.lock() {
+            let evidence = tracker.evidence().cloned();
+            tracker.force(evidence);
+        }
+        // The last-observation summary is compared against the next poll; keeping a
+        // pre-sleep value would suppress the "evidence changed" log line for a genuine
+        // change. The manual marker is a user statement and survives regardless.
+        //
+        // `let` rather than `if let`: the guard from an `if let` lives to the end of the
+        // enclosing block, which outlives `state` here and made the borrow fail.
+        let mut last = match state.last_observation.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
         *last = None;
     }
-    let _ = app.emit(
-        "conflux://resumed",
-        serde_json::json!({ "detection": "revalidated" }),
-    );
+    // No event is emitted. This is backend bookkeeping - the streak and the observation
+    // summary that suppresses the next "evidence changed" log line - and the frontend has
+    // nothing to do with it: the status poll re-reads the same tracker within four
+    // seconds. An event was sent here for a while and nothing listened, which is worse
+    // than silence because it looks like a contract.
 }
 
 /// Re-read the sensitivity after the user changes it.

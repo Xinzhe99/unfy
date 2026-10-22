@@ -2668,6 +2668,20 @@ keeping the default`，窗口保持默认尺寸——原有行为正确。
 新增 `the_window_is_shown_only_through_the_helper`：扫描源码，`window.show()` 只允许出现在
 `show_window` 内部。把 `toggle_settings` 改回直接调用后，测试报 `tray.rs: let _ = window.show();`。
 
+### 一个发了却没人监听的事件（本轮，已删）
+
+对比后端发出的事件与前端监听的事件，发现 `conflux://resumed` 只在后端出现。它在系统从休眠恢复时
+发出，前端从未监听。
+
+查它的实际作用：重置检测器的连续计数、清空 `last_observation`——**都是后端内部簿记**，前端没有
+可做的事（4 秒后的状态轮询会读到同一个检测器）。删掉事件，注释写明为什么不需要通知。
+
+删事件后 `app` 不再被使用，编译器暴露出一个借用问题：`if let Ok(mut last) = state.lock()` 的
+guard 活到块末，而 `state` 更早被 drop。改用 `let ... = match ...` 绑定后解决。
+
+新增 `every backend event has a listener and every listener an event`：两侧事件集合必须相同。
+注入一个 `conflux://orphan-event` 后测试精确报出。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

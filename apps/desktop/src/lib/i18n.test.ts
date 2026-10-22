@@ -182,6 +182,34 @@ describe("coverage", () => {
     expect(known.length).toBeGreaterThan(300);
   });
 
+  /**
+   * Backend events and frontend listeners must name the same set.
+   *
+   * An event with no listener is a contract nobody honours - `conflux://resumed` was
+   * emitted on every wake from sleep and nothing listened, which reads as a promise the
+   * frontend was supposed to keep. A listener with no emitter is worse: the window waits
+   * for something that never arrives.
+   */
+  test("every backend event has a listener and every listener an event", () => {
+    const root = `${import.meta.dir}/..`;
+    const collect = (dir: string, pattern: RegExp) => {
+      const found = new Set<string>();
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !pattern.test(entry.name)) continue;
+        const text = readFileSync(`${dir}/${entry.name}`, "utf8");
+        for (const match of text.matchAll(/"(conflux:\/\/[a-z-]+)"/g)) {
+          found.add(match[1]!);
+        }
+      }
+      return found;
+    };
+    const backend = collect(`${root}/../src-tauri/src`, /\.rs$/);
+    const frontend = collect(root, /\.tsx$/);
+    expect(backend.size).toBeGreaterThan(5);
+    expect([...backend].filter((e) => !frontend.has(e))).toEqual([]);
+    expect([...frontend].filter((e) => !backend.has(e))).toEqual([]);
+  });
+
   test("every Chinese literal in the UI has an English entry", () => {
     // Reads the source rather than the catalogue so a new hardcoded string is
     // caught even if nobody remembers to add it to the dictionary.
