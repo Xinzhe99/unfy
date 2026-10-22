@@ -456,7 +456,10 @@ export default function App() {
         if (event.payload.outcome === "deferred") {
           flash({
             tone: "neutral",
-            text: t("新版本 {version} 已下载，将在窗口全部恢复后安装。", { version: event.payload.version ?? "" }),
+            // "已下载" was wrong on both counts: the barrier is checked *before* the
+            // download, so nothing was fetched, and nothing installs when the windows
+            // come back either - the check simply runs again on the next launch.
+            text: t("新版本 {version} 可用，但当前有未完成的整理，这次没有安装。下次启动时会重新检查。", { version: event.payload.version ?? "" }),
           });
         }
         if (event.payload.outcome === "installed") {
@@ -1091,7 +1094,7 @@ export default function App() {
                         result.outcome === "up_to_date"
                           ? t("当前已是最新版本。")
                           : result.outcome === "deferred"
-                            ? t("更新已下载，将在窗口全部恢复后安装。")
+                            ? t("有新版本，但当前有未完成的整理，这次没有安装。下次启动时会重新检查。")
                             : result.outcome === "installed"
                               ? t("更新已安装，应用即将重启。")
                               : t("检查更新失败：{detail}", { detail: result.detail || t("未知原因") }),

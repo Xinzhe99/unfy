@@ -196,7 +196,7 @@ export function GeneralPage({
 
         <div className="border-t border-[var(--color-border)]" />
 
-        <SettingRow label={t("自动检查更新")} hint={t("下载后等待窗口全部恢复再安装")}>
+        <SettingRow label={t("自动检查更新")} hint={t("有未完成的整理时会跳过这次安装，下次启动再检查")}>
           <Switch
             checked={settings.auto_update}
             disabled={busy}

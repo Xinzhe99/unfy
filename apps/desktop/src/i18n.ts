@@ -312,7 +312,7 @@ const EN: Record<string, string> = {
   "登录后静默启动，不打开窗口":
     "Starts silently at login, without opening a window",
   "自动检查更新": "Check for updates automatically",
-  "下载后等待窗口全部恢复再安装":
+  "有未完成的整理时会跳过这次安装，下次启动再检查":
     "Downloads first; installs only once every window is restored",
   "快捷键": "Shortcuts",
   "使用建议组合": "Use suggested pair",
@@ -343,8 +343,8 @@ const EN: Record<string, string> = {
     "This build has no signing key or endpoint, so checking for updates cannot succeed. Release builds have both.",
   "检查更新": "Check for updates",
   "当前已是最新版本。": "Already up to date.",
-  "更新已下载，将在窗口全部恢复后安装。":
-    "Update downloaded; it will install once every window is restored.",
+  "有新版本，但当前有未完成的整理，这次没有安装。下次启动时会重新检查。":
+    "An update is available, but a gather is unfinished. Nothing was installed this time; the check runs again next launch.",
   "更新已安装，应用即将重启。": "Update installed; the app will restart.",
   "检查更新失败：{detail}": "Update check failed: {detail}",
   "已是最新": "Up to date",
@@ -593,8 +593,8 @@ const EN: Record<string, string> = {
     "Restoring in {seconds}s. Choose Keep current layout to cancel.",
   "显示器连接发生变化，已把 {count} 个窗口移回可见区域。":
     "Displays changed; {count} windows were moved back into view.",
-  "新版本 {version} 已下载，将在窗口全部恢复后安装。":
-    "Version {version} downloaded; it will install once every window is restored.",
+  "新版本 {version} 可用，但当前有未完成的整理，这次没有安装。下次启动时会重新检查。":
+    "Version {version} is available, but a gather is unfinished. Nothing was installed this time; the check runs again next launch.",
   "未知原因": "unknown reason",
 
   "当前平台尚未实现窗口控制": "Window control is not implemented on this platform",
