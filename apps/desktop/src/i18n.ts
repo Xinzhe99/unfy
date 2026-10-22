@@ -423,8 +423,8 @@ const EN: Record<string, string> = {
   "随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。":
     "Change this any time in Settings → Remote-session detection. Nothing moves automatically before you do.",
   "有些窗口不会被移动": "Some windows will not move",
-  "少数应用会自己纠正窗口位置，整理时它们留在原处。这不是失败：Conflux 会把它们的名字列出来，并给一个「排除」按钮。":
-    "A few applications correct their own position and stay where they are. That is not a failure: Conflux lists them and offers an Exclude button.",
+  "有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处。这不是失败：Conflux 会把它们的名字列出来，并给一个「排除」按钮。":
+    "Some windows do not take the new position: a few snap back on their own, others are too large for the cell. They stay where they are, and that is not a failure: Conflux lists them and offers an Exclude button.",
   "排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。":
     "Once excluded, they are neither moved nor counted as unsettled.",
   "全屏应用、最小化的窗口和系统外壳本来就会跳过。":
@@ -609,8 +609,6 @@ const EN: Record<string, string> = {
     "Only one display is connected, so there is nothing to gather. Connect a second display, or start streaming multiple screens from the remote client.",
   "界面可以浏览，但不会移动任何窗口。":
     "The interface works, but no windows will be moved.",
-  "少数应用会自己纠正窗口位置，整理时它们留在原处。这不是失败：Conflux会把它们的名字列出来，并给一个「排除」按钮。":
-    "A few applications correct their own position and stay where they are. That is not a failure: Conflux lists them and offers an Exclude button.",
 
   "正在读取设置…": "Reading settings…",
   "窗口如何排列在目标屏上。空间不足时自动降级，不会压成不可用的小格。":
