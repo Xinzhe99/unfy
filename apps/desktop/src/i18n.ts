@@ -473,6 +473,7 @@ const EN: Record<string, string> = {
   "保留你的改动 {count} 个": "kept your changes for {count}",
   "原屏不可用，回退到可见区域 {count} 个":
     "original display gone, {count} placed in a visible area",
+  "{count} 个没有接受恢复位置": "{count} refused the restored position",
   "仍有 {count} 个待处理": "{count} still pending",
   "已暂停自动整理，当前布局保留。":
     "Automation paused; the current layout is kept.",

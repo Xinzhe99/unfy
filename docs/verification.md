@@ -2451,6 +2451,29 @@ Per-Monitor-V2——进程清单本身是 `system-aware`，线程级提升才能
 超出本轮范围，而伪造一个"检查源码含某字符串"的测试是我明确要避免的模式。改动本身是加一个条件
 和一条拼接，由类型检查和孤儿键检测（确认新 key 被引用）覆盖。
 
+### 恢复结果漏报被拒绝的窗口，以及一次自造的死锁（本轮）
+
+**漏报**：`RestoreDto` 有 `rejected` 字段（恢复时拒绝移动的窗口），但结果文案只用
+`restored`、`kept_user_change`、`fallback_visible`、`pending`。多数窗口回家、少数拒绝时，提示是
+绿色的「已恢复 N 个窗口。」。
+
+修法：`rejected > 0` 时加「{count} 个没有接受恢复位置」，并把语气改为警告。
+
+**自造的死锁**：给诊断包补 journal 完整性时，我在 `diagnostics_report` 里调用了 `pending_work`，
+而该函数自己会取 `engine` 和 `settings` 锁——调用点那时正持有这两把锁。`Mutex` 不可重入，
+`preview_diagnostics` 直接挂住，WebSocket 超时。
+
+这个缺陷是我这轮引入的，也是**验证脚本第一次因为产品死锁而超时**（前几次超时都是脚本自身问题）。
+修法是把两把锁 `drop` 之后再调用。
+
+修好后诊断包多出 `journal` 字段：
+
+```json
+"journal": {"unfinished": false, "windows": 0, "may_have_moved": false, "truncated_bytes": 0}
+```
+
+这是排查"窗口没回来"时第一个该看的东西——尾部被截断意味着原位置记录从未写入，重试再多次也没用。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

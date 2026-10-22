@@ -545,7 +545,8 @@ export default function App() {
       (report) => {
         setPendingApps(report.pending_apps);
         return {
-        tone: report.pending > 0 ? "warning" : "success",
+        tone:
+          report.pending > 0 || report.rejected > 0 ? "warning" : "success",
         text:
           [
             t("已恢复 {count} 个窗口", { count: report.restored }),
@@ -554,6 +555,12 @@ export default function App() {
               : null,
             report.fallback_visible > 0
               ? t("原屏不可用，回退到可见区域 {count} 个", { count: report.fallback_visible })
+              : null,
+            // `rejected` is not `pending`: these windows refused the move back. Leaving
+            // it out of the sentence meant a restore that put most windows home and was
+            // refused by the rest reported a clean success.
+            report.rejected > 0
+              ? t("{count} 个没有接受恢复位置", { count: report.rejected })
               : null,
             report.pending > 0 ? t("仍有 {count} 个待处理", { count: report.pending }) : null,
           ]

@@ -1539,6 +1539,29 @@ fn diagnostics_report(app: &State<'_, AppState>) -> Result<serde_json::Value, St
         }
     }
 
+    // Both guards must go before `pending_work` runs: it takes the engine and settings
+    // locks itself, and a `Mutex` is not reentrant - calling it while they are held
+    // deadlocked the whole app the first time this was written.
+    drop(engine);
+    drop(settings);
+
+    // Journal completeness. This is the first question when a user reports that a
+    // window did not come back: a torn tail means the record of its original rectangle
+    // was never written, and no amount of retrying can fix that.
+    if let Ok(pending) = pending_work(app.clone()) {
+        if let Some(object) = report.as_object_mut() {
+            object.insert(
+                "journal".into(),
+                serde_json::json!({
+                    "unfinished": pending.present,
+                    "windows": pending.windows,
+                    "may_have_moved": pending.may_have_moved,
+                    "truncated_bytes": pending.truncated_bytes,
+                }),
+            );
+        }
+    }
+
     Ok(report)
 }
 
