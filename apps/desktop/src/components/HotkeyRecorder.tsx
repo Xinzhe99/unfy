@@ -80,11 +80,19 @@ export function HotkeyRecorder({
       event.stopPropagation();
     };
 
+    // Leaving the window ends the recording. The capture listener swallows every
+    // keystroke while it is attached, so a user who clicked record, switched away,
+    // and came back would find Ctrl+R and Ctrl+W doing nothing - indistinguishable
+    // from a frozen app - with only a border colour to explain why.
+    const onBlur = () => stop();
+
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("blur", onBlur);
     };
   }, [recording, onChange, stop]);
 
