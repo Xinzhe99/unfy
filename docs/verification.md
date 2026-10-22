@@ -2895,7 +2895,24 @@ Windows 自己就是这么做的（`WINDOWPLACEMENT` 分别保存 restore rect �
 **未运行时验证**：拓扑变化触发的那次救援需要真的拔掉显示器。改显示器配置有把用户桌面留在
 异常状态的风险，不值得为了确认 4 行接线而做。
 
-## 未验证
+
+
+---
+
+### 自动整理被「远程能看到全部屏幕」抑制时，提示错误（本轮，已修）
+```
+Suppression::AllScreens -> suppressed: "all_screens", Suppression::Cooldown -> "cooldown"
+```
+前端只处理了 `"cooldown"`。对于 `"all_screens"`：
+
+> 检测到{evidence}。**自动整理已关闭**，可点「整理到目标屏」。
+
+但用户设置的是「远程端能看到全部屏幕」，**自动整理并没有关闭**——提示指向了一个已经打开的开关。
+
+修法：`if (suppressed === "all_screens") return;`
+
+**未验证**：该路径依赖特定 remote tool 配置，不跑真实工具无法目视检查。
+
 
 | 项 | 原因 | 需要什么 |
 |---|---|---|
