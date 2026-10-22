@@ -535,6 +535,12 @@ fn show_settings<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        // The window stops polling when it is hidden - `document.visibilityState` does
+        // not change for a Tauri hide, so the frontend listens for events. A `focus`
+        // listener also restarts it, but `set_focus` above can be refused when another
+        // window holds the foreground; this event comes from the one place that shows
+        // the window, so the refresh does not depend on the focus landing.
+        let _ = tauri::Emitter::emit(app, "conflux://window-shown", ());
     }
 }
 

@@ -483,6 +483,14 @@ export default function App() {
     const unlistenHidden = listen("conflux://window-hidden", () => {
       stopPolling();
     });
+    // The explicit pair to the above. `focus` already restarts polling - see `onWindow`
+    // - so this is not the only path back, but it is the deterministic one: `set_focus`
+    // can be refused when another window holds the foreground, and relying on a focus
+    // event that may not arrive is how "the window reopened and never refreshed" would
+    // happen. The backend sends it from the one place that shows the window.
+    const unlistenShown = listen("conflux://window-shown", () => {
+      startPolling();
+    });
     if (document.visibilityState === "visible") startPolling();
 
     return () => {
@@ -490,6 +498,7 @@ export default function App() {
       void unlistenRemote.then((fn) => fn());
       void unlistenExit.then((fn) => fn());
       void unlistenProgress.then((fn) => fn());
+      void unlistenShown.then((fn) => fn());
       void unlistenTopology.then((fn) => fn());
       void unlistenUpdate.then((fn) => fn());
       document.removeEventListener("visibilitychange", onVisibility);
