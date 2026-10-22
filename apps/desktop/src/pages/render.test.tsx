@@ -913,6 +913,33 @@ describe("pages render", () => {
     expect(html).toContain("1 条规则");
   });
 
+  test("the pending card says whether windows may already have moved", () => {
+    // The sentence carries a conditional clause, and the only fixture that set
+    // `may_have_moved: true` was used by the "no Chinese in English" sweep, which
+    // checks for stray characters rather than for this clause. Neither branch was
+    // asserted, so the clause could have been dropped or inverted unnoticed.
+    const moved = renderToStaticMarkup(
+      <PendingCard
+        pending={{ present: true, windows: 3, may_have_moved: true }}
+        busy={false}
+        onRestore={noop}
+        onDismiss={noop}
+      />,
+    );
+    expect(moved).toContain("其中部分可能已被移动");
+
+    const unmoved = renderToStaticMarkup(
+      <PendingCard
+        pending={{ present: true, windows: 3, may_have_moved: false }}
+        busy={false}
+        onRestore={noop}
+        onDismiss={noop}
+      />,
+    );
+    expect(unmoved).not.toContain("其中部分可能已被移动");
+    expect(unmoved).toContain("有 3 个窗口的快照仍待处理。");
+  });
+
   test("a hotkey that failed to register says so on its own row", () => {
     // The health card already lists a failed combination, but that is a summary on a
     // different card. The row next to the recorder is where a user looks after

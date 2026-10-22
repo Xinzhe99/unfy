@@ -1933,6 +1933,22 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 | `skipLabels` ↔ `SkipReason` | `Record<string, string>` + `?? reason` 兜底 | 5 个原因一致 |
 | `ACTIVITY_KINDS` ↔ `activity::Kind` | 上一轮已加 `?? entry.kind` 兜底 | 7 个类型一致 |
 
+### 未完成的整理卡片：两个分支都没被断言（本轮，已补）
+
+`PendingCard` 的正文带一个条件从句：`may_have_moved` 为真时插入「，其中部分可能已被移动」。
+夹具里只有一处 `may_have_moved: true`，而那处是「英文界面不残留中文」的扫描用例——它检查的是
+字符集，不是这句话。`false` 分支完全没有数据。
+
+补 `the pending card says whether windows may already have moved`，两个分支都断言。把条件反转后
+测试失败，说明它确实在验证行为而不是在走过场。
+
+### 又一次差点误判：PermissionPrompt 的「请求授权」
+
+我一度认为这个按钮在 Windows 上点了没用（`request_window_permission()` 在非 macOS 上直接返回
+`true`，不开任何对话框）。查证后：`has_window_permission()` 在非 macOS 上也恒为 `true`，所以
+`PermissionPrompt` **在 Windows 上根本不会渲染**。这个按钮只属于 macOS，而在那里它确实会打开系统
+授权对话框。逻辑正确。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
