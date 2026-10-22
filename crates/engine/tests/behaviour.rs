@@ -623,6 +623,61 @@ fn excluded_app_is_never_moved() {
 }
 
 #[test]
+fn the_engine_never_moves_its_own_windows() {
+    // The main window used to join the grid: it was enumerated like any other
+    // window, resized and pushed to another monitor while the user was clicking
+    // in it. Matching on the pid rather than "conflux.exe" keeps a second copy -
+    // another install, a debug build beside a release one - ordinary prey.
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        1,
+        Rect::new(100, 100, 900, 700),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.add_window(
+        2,
+        Rect::new(300, 200, 800, 600),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            // Window 2 belongs to pid 1000 + 2.
+            own_process_id: Some(1002),
+            ..config("own-window")
+        },
+    );
+
+    let report = engine.migrate(&target_key()).expect("migrate");
+    assert_eq!(report.outcomes.get(&id(1)), Some(&WindowOutcome::Applied));
+    assert!(
+        !report.outcomes.contains_key(&id(2)),
+        "the engine's own window must not be moved"
+    );
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.id.native_id == 2 && s.reason == conflux_domain::SkipReason::OwnWindow),
+        "skipping the own window must be reported as such, not as an invisible window"
+    );
+
+    let window = engine
+        .backend()
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id.native_id == 2)
+        .unwrap();
+    assert_eq!(window.visible_rect, Rect::new(300, 200, 800, 600));
+}
+
+#[test]
 fn exclusion_is_case_insensitive_and_ignores_unknown_names() {
     let mut backend = FakeBackend::with_two_displays();
     backend.add_window(

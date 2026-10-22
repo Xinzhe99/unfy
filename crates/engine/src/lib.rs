@@ -174,6 +174,16 @@ pub struct EngineConfig {
     /// escape hatch for applications the user does not want rearranged: media
     /// players, capture tools, games, a full-screen dashboard.
     pub excluded_apps: Vec<String>,
+    /// Process id of the application driving this engine, or `None`.
+    ///
+    /// Its own window is never moved. Dragging the tool along with the windows it
+    /// is arranging is both surprising and self-defeating: the user watches their
+    /// button disappear to another monitor mid-click, and a window that is being
+    /// resized while the user clicks in it produces a stray drag. Matching on the
+    /// pid rather than the executable name keeps a second copy of the app - a
+    /// different install, or a debug build next to a release one - out of the
+    /// rule.
+    pub own_process_id: Option<u32>,
 }
 
 impl std::fmt::Debug for EngineConfig {
@@ -194,6 +204,7 @@ impl std::fmt::Debug for EngineConfig {
                 &self.on_progress.as_ref().map(|_| "<callback>"),
             )
             .field("excluded_apps", &self.excluded_apps)
+            .field("own_process_id", &self.own_process_id)
             .finish()
     }
 }
@@ -210,6 +221,7 @@ impl Default for EngineConfig {
             min_reachable: conflux_domain::Size::new(64, 32),
             restore_delay_secs: 0,
             excluded_apps: Vec::new(),
+            own_process_id: None,
         }
     }
 }
@@ -599,6 +611,12 @@ impl<B: Backend> Engine<B> {
         window: &WindowSnapshot,
         displays: &[DisplaySnapshot],
     ) -> Result<Option<(DisplaySnapshot, Option<conflux_domain::Size>)>, SkipReason> {
+        // Before the exclusion rules and before `is_migratable`: this is not a
+        // setting the user can turn off, and reporting it as `Invisible` because
+        // the window happened to be minimised would hide the real reason.
+        if self.config.own_process_id == Some(window.id.process_id) {
+            return Err(SkipReason::OwnWindow);
+        }
         if self.is_excluded(window) {
             return Err(SkipReason::ExcludedApp);
         }

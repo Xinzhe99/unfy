@@ -91,12 +91,33 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
               />
               <text
                 x={placement.rect.left + placement.rect.width / 2}
-                y={placement.rect.top + placement.rect.height / 2}
+                // A squeezed window is drawn larger than its cell and therefore
+                // covers its neighbours. Keeping its label in the middle printed it
+                // on top of the label underneath, and both became unreadable - the
+                // drawing then showed a smudge exactly where the user needs to see
+                // which application is the problem. Sitting near the bottom edge
+                // separates the two, because the overlap grows upwards from the
+                // cell's top-left corner.
+                y={
+                  placement.clamped
+                    ? placement.rect.top + placement.rect.height - Math.max(work.width * 0.022, 8)
+                    : placement.rect.top + placement.rect.height / 2
+                }
                 textAnchor="middle"
-                dominantBaseline="central"
+                dominantBaseline={placement.clamped ? "auto" : "central"}
                 fontSize={Math.max(work.width * 0.028, 10)}
                 fill="var(--color-fg-soft)"
                 fontFamily="inherit"
+                // A squeezed rectangle is drawn over its neighbours, so two labels
+                // can land on the same few pixels no matter where each is anchored -
+                // moving the squeezed one to the bottom fixed one collision and left
+                // another. A thin outline in the card's own colour keeps whichever
+                // label is on top legible instead of relying on the geometry to
+                // separate them.
+                stroke="var(--color-surface)"
+                strokeWidth={Math.max(work.width * 0.006, 2)}
+                paintOrder="stroke"
+                strokeLinejoin="round"
               >
                 {/* The application name is what makes the drawing useful: a grid
                     of numbers tells the user nothing about where their work will
