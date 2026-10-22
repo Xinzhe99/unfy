@@ -248,6 +248,8 @@ export interface AppDto {
 }
 
 export const api = {
+  /** Whether the window is on screen; `visibilityState` cannot answer this under Tauri. */
+  windowVisible: () => invoke<boolean>("window_visible"),
   getStatus: () => invoke<StatusDto>("get_status"),
   listDisplays: () => invoke<DisplayDto[]>("list_displays"),
   preview: () => invoke<PreviewDto>("preview"),

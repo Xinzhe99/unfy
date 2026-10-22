@@ -2730,6 +2730,30 @@ guard 活到块末，而 `state` 更早被 drop。改用 `let ... = match ...` �
 `setBusy(phase !== "done" && phase !== "waiting")`。理论上 `done` 事件可能先于 `run()` 的
 `finally` 到达，让按钮短暂可点。窗口是微秒级（后端 emit 在命令返回前），未改动。
 
+### 开机自启动时轮询空转（本轮，已修并实测）
+
+`--tray` 启动（开机自启用的就是它）会立刻隐藏窗口，但前端启动时判断的是
+`document.visibilityState === "visible"`——而**这个值在 Tauri 隐藏窗口后仍是 `visible`**（上一轮实测
+确认）。
+
+于是每次开机登录后：窗口隐藏着，8 个命令却每 4 秒执行一次（含 journal 目录扫描和磁盘写探测），
+直到用户打开窗口再关闭。代码注释里明确写过要避免这一点：
+
+> an unconditional interval meant eight commands ... every four seconds for the entire life
+> of the machine
+
+后端事件也救不了：它在上方 setup 阶段发出，那时前端的监听器还不存在。
+
+**修法**：新增 `window_visible` 命令，前端挂载时查询窗口真实可见性再决定是否开始轮询。判断依据
+从「浏览器 API 猜」变成「问窗口」。
+
+实测（`--tray` 启动）：
+
+| 检查 | 结果 |
+|---|---|
+| `window_visible()` | **False** |
+| 10 秒内 `get_status` 调用 | **0** |
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

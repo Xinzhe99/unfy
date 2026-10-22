@@ -313,6 +313,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            commands::window_visible,
             commands::get_status,
             commands::identify_displays,
             commands::list_displays,

@@ -507,7 +507,17 @@ export default function App() {
     const unlistenShown = listen("conflux://window-shown", () => {
       startPolling();
     });
-    if (document.visibilityState === "visible") startPolling();
+    // Ask the window, not the page. `document.visibilityState` reports "visible" even
+    // when Tauri has hidden the window - measured - so an autostart launch (which hides
+    // immediately) began polling eight commands every four seconds for a window nobody
+    // had opened. The backend event cannot help here either: it fires during setup,
+    // before this listener exists.
+    void api
+      .windowVisible()
+      .catch(() => true)
+      .then((visible) => {
+        if (visible) startPolling();
+      });
 
     return () => {
       void unlistenAction.then((fn) => fn());

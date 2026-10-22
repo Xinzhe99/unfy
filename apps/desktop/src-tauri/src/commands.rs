@@ -228,6 +228,19 @@ fn window_label(id: &WindowId) -> String {
     format!("{}:{}", id.process_id, id.native_id)
 }
 
+/// Whether the settings window is on screen right now.
+///
+/// The frontend starts when the webview loads, which for an autostart launch is *after*
+/// the window was hidden. `document.visibilityState` stays "visible" through a Tauri
+/// hide, so the page cannot tell; asking the window is the only reliable answer. Without
+/// this the poll started anyway on every login and ran eight commands - including a
+/// journal scan and a disk write probe - every four seconds until the user opened the
+/// window and closed it again.
+#[tauri::command]
+pub fn window_visible<R: tauri::Runtime>(window: tauri::WebviewWindow<R>) -> bool {
+    window.is_visible().unwrap_or(true)
+}
+
 #[tauri::command]
 pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
     let engine = app.engine.lock().map_err(|e| e.to_string())?;
