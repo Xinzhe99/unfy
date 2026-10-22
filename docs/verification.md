@@ -2474,6 +2474,27 @@ Per-Monitor-V2——进程清单本身是 `system-aware`，线程级提升才能
 
 这是排查"窗口没回来"时第一个该看的东西——尾部被截断意味着原位置记录从未写入，重试再多次也没用。
 
+### 给锁规则补上「持锁调用」的检查（本轮）
+
+上一轮的死锁形态是**持锁时调用了一个会再取锁的函数**，而既有的 `lock_order` 测试只检查
+「先 settings 再 engine」的顺序，看不到这种。
+
+补 `a_held_guard_is_not_followed_by_a_call_that_locks`：先扫出所有会取锁的函数名，再检查持锁
+区间内是否调用了它们。
+
+**第一次跑出三条告警，全是误报**：
+
+| 告警 | 原因 |
+|---|---|
+| `get_status` 调用 `pending_work` | 实际是 `has_pending_work()`——子串匹配 |
+| `restore_now` 调用 `restore` | 实际是 `engine.restore()`——方法调用 |
+| `run_rescue` 调用 `rescue_offscreen` | 实际是 `engine.rescue_offscreen()` |
+
+加词边界检查（前一个字符不能是 `.` `_` `:` `>`）后三条消失。
+
+**验证它真能抓到那个死锁**：把 `pending_work(app.clone())` 放回 `diagnostics_report` 的持锁区间，
+测试精确报出 `commands.rs:diagnostics_report holds [engine, settings] then calls pending_work`。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

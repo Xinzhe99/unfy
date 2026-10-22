@@ -605,6 +605,107 @@ mod lock_order {
              against the status poll: take the engine first"
         );
     }
+
+    /// Which functions take either state lock, by name.
+    fn lock_takers(sources: &[(String, String)]) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (file, text) in sources {
+            let mut function = String::new();
+            for line in text.lines() {
+                if let Some(found) = function_name(line.trim_start()) {
+                    function = found;
+                }
+                if !function.is_empty()
+                    && (line.contains(".engine.lock()") || line.contains(".settings.lock()"))
+                {
+                    out.push((file.clone(), function.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Calling a function that takes a lock, while holding one, deadlocks the same way
+    /// a direct second `lock()` does - and the direct check above cannot see it.
+    ///
+    /// This is the shape that actually bit: `diagnostics_report` held both guards and
+    /// called `pending_work`, which takes them itself. The call sits eighty lines below
+    /// the guards, so nothing about the line looked wrong.
+    #[test]
+    fn a_held_guard_is_not_followed_by_a_call_that_locks() {
+        let all = sources();
+        let takers: Vec<String> = {
+            let mut v: Vec<String> = lock_takers(&all).into_iter().map(|(_, f)| f).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        assert!(takers.len() > 4, "the scan found only {} locking functions", takers.len());
+
+        let mut offenders = Vec::new();
+        for (name, text) in &all {
+            let mut function = String::from("(top level)");
+            let mut held: Vec<(String, usize)> = Vec::new();
+            for line in text.lines() {
+                if let Some(found) = function_name(line.trim_start()) {
+                    function = found;
+                    held.clear();
+                    continue;
+                }
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                if trimmed.starts_with('}') && trimmed.len() <= 2 {
+                    let here = indent(line);
+                    held.retain(|(_, bound)| *bound <= here);
+                }
+                if trimmed.contains(".settings.lock()") || trimmed.contains(".engine.lock()") {
+                    if let Some(guard) = bound_guard(line) {
+                        held.push((guard.to_string(), indent(line)));
+                    }
+                }
+                for (guard, _) in held.clone() {
+                    if line.contains(&format!("drop({guard})")) {
+                        held.retain(|(g, _)| g != &guard);
+                    }
+                }
+                if held.is_empty() {
+                    continue;
+                }
+                // A call to a function that locks, while a guard is alive. Skip the
+                // function's own name: recursion is not what this is about, and the
+                // `.lock()` lines themselves are handled above.
+                for taker in &takers {
+                    if taker == &function {
+                        continue;
+                    }
+                    // A call, not a method on something else: `engine.restore()` is the
+                    // engine's own method, and `has_pending_work()` merely ends with the
+                    // name `pending_work`. Both matched a plain substring test and
+                    // produced three false alarms before this.
+                    let call = format!("{taker}(");
+                    let at = match line.find(&call) {
+                        Some(at) => at,
+                        None => continue,
+                    };
+                    let before = line[..at].chars().next_back();
+                    if matches!(before, Some('.') | Some('_') | Some(':') | Some('>')) {
+                        continue;
+                    }
+                    offenders.push(format!("{name}:{function} holds {held:?} then calls {taker}"));
+                }
+            }
+        }
+        offenders.sort();
+        offenders.dedup();
+        assert_eq!(
+            offenders,
+            Vec::<String>::new(),
+            "these call a locking function while holding a guard: \n{}",
+            offenders.join("\n")
+        );
+    }
 }
 
 #[cfg(test)]
