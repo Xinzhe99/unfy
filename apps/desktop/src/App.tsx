@@ -86,6 +86,10 @@ export default function App() {
   const [settings, setSettings] = useState<SettingsDto | null>(null);
   const [preview, setPreview] = useState<PreviewDto | null>(null);
   const [pending, setPending] = useState<PendingWorkDto | null>(null);
+  // Applications whose windows the last restore could not put back. The backend
+  // already computes this; without it the overview could only say "a window did not
+  // come back", leaving the user to guess which application to close.
+  const [pendingApps, setPendingApps] = useState<string[]>([]);
   const [hotkeys, setHotkeys] = useState<HotkeyStatusDto | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, DisplayThumbnailDto>>({});
@@ -528,7 +532,9 @@ export default function App() {
       async () => {
         return api.restore();
       },
-      (report) => ({
+      (report) => {
+        setPendingApps(report.pending_apps);
+        return {
         tone: report.pending > 0 ? "warning" : "success",
         text:
           [
@@ -543,7 +549,8 @@ export default function App() {
           ]
             .filter(Boolean)
             .join(t("，")) + t("。"),
-      }),
+        };
+      },
     );
 
   if (settings && !settings.onboarding_done) {
@@ -742,6 +749,7 @@ export default function App() {
                 settings={settings}
                 preview={preview}
                 displays={displays}
+                pendingApps={pendingApps}
                 activity={activity}
                 progress={progress}
                 busy={busy}

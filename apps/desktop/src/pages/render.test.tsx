@@ -229,6 +229,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     expect(html.length).toBeGreaterThan(200);
@@ -265,6 +266,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // A degraded state must offer restore, not a gather that can only fail.
@@ -298,6 +300,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     expect(html).toContain("只检测到一块显示器");
@@ -328,6 +331,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // "working" alone is indistinguishable from "stuck" when one application
@@ -364,6 +368,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // The refusing app is offered; the already-excluded one is not, because a
@@ -400,6 +405,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // "ready" while five windows are displaced is the failure this row prevents.
@@ -432,6 +438,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // Without a shortcut and without detection, the feature is only reachable from
@@ -467,6 +474,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     expect(html).toContain("自动更新");
@@ -498,6 +506,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // The raw code is an implementation detail; the sentence is the product.
@@ -529,6 +538,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     expect(journalFailure).toContain("无法写入恢复记录");
@@ -566,6 +576,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     const idleBlock = html.slice(html.indexOf("就绪") - 400, html.indexOf("就绪"));
@@ -614,6 +625,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // The target is `displays[0]`: numbered 1 and primary.
@@ -646,6 +658,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     expect(inactive).toContain("标记为远程会话");
@@ -674,12 +687,48 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // The action must flip: a marker that cannot be cleared would claim a session
     // forever.
     expect(active).toContain("结束远程会话标记");
     expect(active).toContain("手动标记");
+  });
+
+  test("overview names the application that refused to restore", () => {
+    // "A window did not come back" leaves the user hunting through the taskbar; the
+    // backend knows which application it was, and the overview used to throw that
+    // away.
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={{ ...status, state: "degraded", captured_windows: 2 }}
+        settings={settings}
+        preview={null}
+        displays={displays}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        diagnosticsPreview={null}
+        onPreviewDiagnostics={noop}
+        onOpenConfigDir={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+        pendingApps={["clash-verge.exe"]}
+      />,
+    );
+    expect(html).toContain("clash-verge.exe");
+    expect(html).toContain("排除这些应用");
   });
 
   test("overview offers recovery, not a gather, when the engine is in error", () => {
@@ -707,6 +756,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // The engine refuses new gathers in this state. Offering the button anyway
@@ -741,6 +791,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     // Without this the exit barrier refuses to quit, forever, and the old copy
@@ -778,6 +829,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         onToggleRemote={noop}
+        pendingApps={[]}
       />,
     );
     expect(html).toContain("全部排除");
@@ -1025,6 +1077,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],
@@ -1159,6 +1212,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],
@@ -1189,6 +1243,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],
@@ -1219,6 +1274,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],
@@ -1249,6 +1305,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],
@@ -1279,6 +1336,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],
@@ -1309,6 +1367,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],
@@ -1343,6 +1402,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],
@@ -1373,6 +1433,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             onToggleRemote={noop}
+            pendingApps={[]}
           />,
         ),
     ],

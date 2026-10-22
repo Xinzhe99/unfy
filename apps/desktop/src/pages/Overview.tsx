@@ -47,6 +47,7 @@ export function OverviewPage({
   onKeepLayout,
   onDismissError,
   onToggleRemote,
+  pendingApps,
 }: {
   status: StatusDto | null;
   settings: SettingsDto | null;
@@ -59,6 +60,8 @@ export function OverviewPage({
   onPreview: () => void;
   onMigrate: () => void;
   onRestore: () => void;
+  /** Applications whose windows the last restore could not put back. */
+  pendingApps: string[];
   onPause: (paused: boolean) => void;
   onRescue: () => void;
   onIdentify: () => void;
@@ -210,13 +213,41 @@ export function OverviewPage({
         ) : null}
 
         {needsAttention ? (
-          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-            {t(
-              state === "error"
-                ? "出现了无法自动处理的问题。恢复与救援仍然可用；如果反复失败，请导出诊断包。"
-                : "有窗口没能恢复到原位。可以再试一次，或先关闭这些窗口。",
-            )}
-          </p>
+          <div className="mt-2 space-y-1.5">
+            <p className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
+              {t(
+                state === "error"
+                  ? "出现了无法自动处理的问题。恢复与救援仍然可用；如果反复失败，请导出诊断包。"
+                  : "有窗口没能恢复到原位。可以再试一次，或先关闭这些窗口。",
+              )}
+            </p>
+            {/* Naming the application is the difference between an explanation and a
+                puzzle: "a window did not come back" leaves the user hunting through
+                the taskbar, and the backend already knows which one it was. */}
+            {pendingApps.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-[var(--color-muted)]">
+                  {t("仍在原处：")}
+                </span>
+                {pendingApps.map((name) => (
+                  <span
+                    key={name}
+                    className="rounded-[var(--radius-control)] border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-[11px]"
+                  >
+                    {name}
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => onExclude(pendingApps)}
+                  disabled={busy}
+                  className="text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-fg)] disabled:opacity-55"
+                >
+                  {t("排除这些应用")}
+                </button>
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         {!settings?.hotkey_gather &&
@@ -225,11 +256,6 @@ export function OverviewPage({
           <p className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-border-strong)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">{t("现在只能从本窗口或托盘触发整理。设置一个快捷键、或打开远程检测，之后就不必先切回这个窗口。")}</p>
         ) : null}
 
-        {singleDisplay && !hasWork ? (
-          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-            {t("当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。")}
-          </p>
-        ) : null}
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {blocked ? (
@@ -312,6 +338,15 @@ export function OverviewPage({
             {t(settings?.remote_active ? "结束远程会话标记" : "标记为远程会话")}
           </Button>
         </div>
+        {/* Directly under the controls it explains. The gather button is disabled
+            with one display, and the sentence that says why used to sit between two
+            detail rows above - easy to miss, and easy to read as part of the layout
+            description rather than as the reason the button does nothing. */}
+        {singleDisplay && !hasWork ? (
+          <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+            {t("当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。")}
+          </p>
+        ) : null}
         <p className="mt-1.5 text-[11px] text-[var(--color-muted)]">{t("识别编号会在每块屏幕中央短暂显示数字，用来对照远程画面确认是哪一块。")}</p>
       </Card>
 
