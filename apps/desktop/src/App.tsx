@@ -190,8 +190,11 @@ export default function App() {
     if (!needsThumbnails) return;
     let cancelled = false;
     const capture = async () => {
-      const shots = await api.displayThumbnails();
-      if (cancelled) return;
+      // Screen capture can fail - a locked session, a display that vanished mid-call -
+      // and an uncaught rejection here fired every two seconds. The cards keep the
+      // pictures they already have; a blank capture is reported by the card itself.
+      const shots = await api.displayThumbnails().catch(() => null);
+      if (cancelled || shots === null) return;
       setThumbnails(Object.fromEntries(shots.map((s) => [s.native_id, s])));
     };
     captureShots.current = () => void capture();
@@ -221,8 +224,11 @@ export default function App() {
     if (page !== "exclusions") return;
     let cancelled = false;
     const load = async () => {
-      const apps = await api.runningApplications();
-      if (!cancelled) setRunningApps(apps);
+      // Same reasoning as the thumbnail poll: enumeration can fail, and a rejection
+      // every five seconds is noise. Keeping the previous list is better than emptying
+      // the picker while the user is choosing from it.
+      const apps = await api.runningApplications().catch(() => null);
+      if (!cancelled && apps !== null) setRunningApps(apps);
     };
     void load();
     const timer = window.setInterval(() => void load(), 5000);
@@ -253,9 +259,19 @@ export default function App() {
     if (!previewShown) return;
     let cancelled = false;
     const timer = window.setInterval(() => {
-      void api.preview().then((next) => {
-        if (!cancelled) setPreview(next);
-      });
+      // The rejection is caught, not ignored: `preview` refuses while the engine is
+      // mid-migration, and a display can be unplugged between two polls. Without this
+      // the promise rejected unhandled every four seconds and the drawing quietly
+      // stopped updating - the user saw a stale plan with nothing saying why.
+      void api
+        .preview()
+        .then((next) => {
+          if (!cancelled) setPreview(next);
+        })
+        .catch(() => {
+          // Keep the last good drawing; the next tick may succeed. Saying something
+          // here would flash a banner every four seconds during a gather.
+        });
     }, 4000);
     return () => {
       cancelled = true;
