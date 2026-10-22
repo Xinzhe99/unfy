@@ -428,7 +428,7 @@ export function errorMessage(error: unknown): string {
     return t("自动整理已暂停。在托盘菜单或概览页取消暂停后重试。");
   }
   if (raw.includes("TargetDisplayMissing") || raw.includes("no_displays")) {
-    return t("目标显示器当前不可用，请在「显示器与布局」里重新选择。");
+    return t("目标显示器当前不可用，请在「显示器」页重新选择。");
   }
   if (raw.includes("PermissionDenied") || raw.includes("permission")) {
     return t("系统拒绝了窗口操作权限，请检查授权后重试。");

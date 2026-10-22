@@ -542,7 +542,7 @@ const EN: Record<string, string> = {
   "窗口控制": "Window control",
   "无法写入恢复记录，为避免窗口位置丢失，整理已停止。请确认磁盘空间与目录权限，然后重启应用。":
     "The restore record could not be written, so gathering stopped rather than risk losing window positions. Check free disk space and folder permissions, then restart the app.",
-  "目标显示器当前不可用，请在「显示器与布局」里重新选择。":
+  "目标显示器当前不可用，请在「显示器」页重新选择。":
     "The target display is unavailable. Choose one on the Displays page.",
   "没有可用的显示器": "No display available",
   "没有检测到显示器": "No displays detected",
