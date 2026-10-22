@@ -49,7 +49,7 @@ export function Button({
       type="button"
       {...rest}
       disabled={rest.disabled || loading}
-      className={`inline-flex select-none items-center justify-center whitespace-nowrap rounded-[var(--radius-control)] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 ${sizeClass[size]} ${variantClass[variant]} ${rest.className ?? ""}`}
+      className={`inline-flex select-none items-center justify-center whitespace-nowrap rounded-[var(--radius-control)] font-medium transition-colors disabled:pointer-events-none disabled:opacity-55 ${sizeClass[size]} ${variantClass[variant]} ${rest.className ?? ""}`}
     >
       {loading ? <Spinner /> : icon}
       {children}

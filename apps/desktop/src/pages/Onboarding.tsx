@@ -179,20 +179,29 @@ export function Onboarding({
         >{t("跳过引导")}</button>
       </div>
 
-      <div className="flex flex-1 flex-col justify-center overflow-y-auto px-8 py-6">
-        <div className="mx-auto w-full max-w-lg">
+      {/* Vertically centred with a ceiling: the first step is three sentences, and
+          pinning it to the top left most of the window empty below it. `justify-center`
+          alone made the short steps float and the long ones clip, so the block gets a
+          maximum height and the container may scroll past it. The width is a
+          comfortable measure - 512 px inside a 912 px window read like a footnote. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-10 py-8">
+        {/* Centred with padding above rather than `justify-center`: a block that sits
+            exactly in the middle of a 718 px window leaves equal voids above and
+            below, which reads as an empty page. A third of the slack above and two
+            thirds below puts the text where the eye lands first. */}
+        <div className="mx-auto my-auto w-full max-w-xl">
           <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--color-muted)]">
             {t("第 {step} 步，共 {total} 步", {
               step: step + 1,
               total: steps.length,
             })}
           </p>
-          <h1 className="mt-1 text-lg font-semibold tracking-tight">
+          <h1 className="mt-1.5 text-xl font-semibold tracking-tight">
             {current.title}
           </h1>
-          <div className="mt-4">{current.body}</div>
+          <div className="mt-5">{current.body}</div>
 
-          <div className="mt-8 flex items-center justify-between">
+          <div className="mt-10 flex items-center justify-between">
             <Button
               variant="quiet"
               onClick={() => setStep(Math.max(0, step - 1))}
@@ -218,10 +227,13 @@ export function Onboarding({
             // Index, not the title: a translated title would change the key when
             // the language changes and remount the dots.
             key={index}
-            className={`size-1.5 rounded-full ${
+            // The current step is a short bar rather than a dot: at 6 px a filled
+            // circle among four hollow ones was almost invisible, so the guide gave
+            // no sense of how much was left.
+            className={`h-1.5 rounded-full transition-all ${
               index === step
-                ? "bg-[var(--color-accent)]"
-                : "bg-[var(--color-border-strong)]"
+                ? "w-4 bg-[var(--color-accent)]"
+                : "w-1.5 bg-[var(--color-border-strong)]"
             }`}
           />
         ))}

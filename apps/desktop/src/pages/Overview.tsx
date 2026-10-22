@@ -150,11 +150,11 @@ export function OverviewPage({
             value={targetDisplayName(displays, target)}
             muted={!target}
           />
-          <Detail
-            label={t("已收拢窗口")}
-            value={captured > 0 ? captured : "—"}
-            muted={captured === 0}
-          />
+          {/* Only when it has something to say. An em dash on an idle engine was a
+              row of pure noise between two rows that carry facts. */}
+          {captured > 0 ? (
+            <Detail label={t("已收拢窗口")} value={String(captured)} />
+          ) : null}
           {pending > 0 ? (
             <Detail
               label={t("待恢复窗口")}
@@ -175,18 +175,6 @@ export function OverviewPage({
           />
         </div>
 
-        {/* A tray icon can be hidden by the shell, and there is no keyboard route
-            into a tray menu. Without this, a user whose tray is hidden cannot tell
-            the app a session started. */}
-        <button
-          type="button"
-          onClick={onToggleRemote}
-          disabled={busy}
-          className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-[var(--color-fg-soft)] hover:text-[var(--color-fg)] disabled:opacity-40"
-        >
-          {t(settings?.remote_active ? "结束远程会话标记" : "标记为远程会话")}
-          <IconArrowRight className="size-3" />
-        </button>
 
         {target && !target.present ? (
           <div className="mt-2.5 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
@@ -311,6 +299,18 @@ export function OverviewPage({
             onClick={onIdentify}
             disabled={busy}
           >{t("识别屏幕编号")}</Button>
+          {/* A tray icon can be hidden by the shell and there is no keyboard route
+              into a tray menu, so this is the only way to tell the app a session
+              started. It used to be a text link under the status rows, which read as
+              a footnote to a control nobody could find. */}
+          <Button
+            variant="quiet"
+            size="sm"
+            onClick={onToggleRemote}
+            disabled={busy}
+          >
+            {t(settings?.remote_active ? "结束远程会话标记" : "标记为远程会话")}
+          </Button>
         </div>
         <p className="mt-1.5 text-[11px] text-[var(--color-muted)]">{t("识别编号会在每块屏幕中央短暂显示数字，用来对照远程画面确认是哪一块。")}</p>
       </Card>
