@@ -361,6 +361,7 @@ pub fn run() {
             // hide so a login launch keeps the geometry for when the user opens
             // the window later.
             restore_window_geometry(app.handle());
+            apply_window_theme(app.handle());
 
             // A manual launch opens the window; an autostart launch stays in the
             // tray. Users who double-click the app expect to see something.
@@ -408,6 +409,34 @@ pub fn run() {
 /// `document.visibilityState` does not change when Tauri hides a window: measuring
 /// CPU while hidden showed the polling rate unchanged. The frontend therefore
 /// cannot rely on the web `visibilitychange` event and needs an explicit signal.
+/// Match the window frame to the saved theme, before the webview draws anything.
+///
+/// The frame is drawn by the operating system, and the frontend only reaches
+/// `setTheme` after the settings arrive over IPC - so a dark-theme user watched a light
+/// title bar until then. Measured on this machine: the first capture after launch shows
+/// the title bar as (243,243,243), the next as (32,32,32). The settings are already in
+/// hand here, so the gap shrinks to however long Tauri takes to create the window.
+fn apply_window_theme(app: &tauri::AppHandle) {
+    let theme = {
+        let state = app.state::<AppState>();
+        let Ok(settings) = state.settings.lock() else {
+            return;
+        };
+        settings.theme
+    };
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let value = match theme {
+        conflux_settings::ThemeName::Light => Some(tauri::Theme::Light),
+        conflux_settings::ThemeName::Dark => Some(tauri::Theme::Dark),
+        // `null` hands the decision back to the system, which is what "follow the
+        // system" means at this level.
+        conflux_settings::ThemeName::System => None,
+    };
+    let _ = window.set_theme(value);
+}
+
 /// Show the settings window and tell the UI it is back.
 ///
 /// Three places reveal this window - the tray's settings item, the tray's left-click
