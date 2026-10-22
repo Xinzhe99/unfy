@@ -490,6 +490,8 @@ const EN: Record<string, string> = {
   "记录了每次整理、恢复与救援的时间与窗口数量。清除后无法恢复，其他设置不受影响":
     "Records the time and window count of every gather, restore and rescue. Clearing it cannot be undone; no other setting is affected",
   "清除历史": "Clear history",
+  "这些窗口没有接受新的位置：有的会自己纠正，有的大到放不进格子。排除它们可以避免每次都重试。":
+    "These windows did not take the new position: some snap back on their own, others are too large for the cell. Excluding them stops the retry.",
   "仍在原处：": "Still in place:",
   "排除这些应用": "Exclude these apps",
   "显示全部 {count} 条": "Show all {count}",

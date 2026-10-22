@@ -371,7 +371,12 @@ export function OverviewPage({
       {lastRefused.length > 0 ? (
         <Card
           title={t("没有接受位置调整的应用")}
-          description={t("这些应用会自己纠正窗口位置。排除它们可以避免每次都重试。")}
+          // Two things cause this, and the copy used to assert only one of them:
+          // an application that snaps its own windows back, and a window whose
+          // minimum size is larger than the cell it was given. The second is common
+          // in terminals and IDEs, and telling those users "it corrects itself" is
+          // simply wrong. Both lead to the same offer: a rule stops the retry.
+          description={t("这些窗口没有接受新的位置：有的会自己纠正，有的大到放不进格子。排除它们可以避免每次都重试。")}
           aside={
             lastRefused.length > 1 ? (
               <Button
