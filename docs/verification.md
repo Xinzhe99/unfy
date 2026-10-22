@@ -1754,6 +1754,34 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 
 `EngineConfig::excluded_apps` 的文档现在写明它拦什么、不拦什么，以及为什么。
 
+### 「恢复默认设置」的两步确认与真实效果（本轮，实机核对）
+
+先把设置改乱（`auto_detect: off`、延迟 45、`preserve_order`、边距 40、间距 30、排除 `notepad.exe`），
+再走完整流程。
+
+**两步确认**：点「恢复默认设置」后原位换成「确认清除」+「取消」，点确认才执行。用的是页面内
+状态而非 `window.confirm`——代码注释说明了原因：原生对话框在 Tauri webview 里渲染不可靠，
+破坏性操作不能依赖可能不出现的对话框。
+
+**重置结果**与 `Settings::default()` 逐项一致：
+
+| 项 | 重置后 | 默认 |
+|---|---|---|
+| auto_detect | balanced | balanced |
+| auto_gather / auto_restore | false / false | false / false |
+| autostart | false | false |
+| layout_mode | grid | grid |
+| margin / gap | 12 / 8 | 12 / 8 |
+| restore_delay_secs | 15 | 15 |
+| excluded_apps | [] | [] |
+
+目标显示器保留（`\.\DISPLAY1`），符合界面说明。默认值全部在安全侧——重置不会让用户意外开始
+自动移动窗口。
+
+**一次自我纠错**：我一度认为 `restore_delay_secs` 应为 0，据此判定重置有 bug。查证后
+`Settings::default()` 里它就是 15（第 217 行），重置完全正确。`reset_settings` 里写 `0` 的是
+引擎配置，不落盘。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
