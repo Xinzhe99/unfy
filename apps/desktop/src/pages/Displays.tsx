@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import { targetState } from "../lib/target";
 import { commitNumber } from "../lib/numeric";
 import type {
   DisplayThumbnailDto, DisplayDto, SettingsDto, TargetDto } from "../api";
@@ -39,14 +40,9 @@ export function DisplaysPage({
     return <p className="text-xs text-[var(--color-muted)]">{t("正在读取设置…")}</p>;
   }
 
-  const weak = displays.find(
-    (d) => d.native_id === target?.native_id && !d.restorable,
-  );
-  // The saved target can be gone entirely - unplugged, or a virtual display whose
-  // driver stopped. The overview warns about that; this page did not, so a user who
-  // opened it to check "which screen am I targeting" saw a normal page and no hint
-  // that the answer was stale.
-  const targetGone = Boolean(target && !target.present);
+  // Both facts come from one place: the overview and this page used to test the
+  // "target is gone" condition separately, and only one of them did it.
+  const { gone: targetGone, weak: targetWeak } = targetState(target, displays);
 
   return (
     <>
@@ -75,7 +71,7 @@ export function DisplaysPage({
             {t("保存的目标显示器已断开，整理时会改用主显示器。在下面重新选择一块屏即可恢复。")}
           </p>
         ) : null}
-        {weak ? (
+        {targetWeak ? (
           <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-warning)]">{t("这块显示器的身份只能靠分辨率识别，恢复时会放回可见区域，而不是精确的原位置。")}</p>
         ) : null}
       </Card>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { t } from "../i18n";
+import { targetState } from "../lib/target";
 import { renderMessage, renderNotice, stateLabels } from "../api";
 import type {
   ActivityEntryDto,
@@ -119,6 +120,7 @@ export function OverviewPage({
   // Applications that refused the last gather, minus those already excluded.
   // Showing an application whose rule already exists would offer an action that
   // does nothing.
+  const targetIsGone = targetState(target, displays).gone;
   const lastRefused = (settings?.last_refused_apps ?? []).filter(
     (app) => !settings?.excluded_apps.some((rule) => rule.toLowerCase() === app.toLowerCase()),
   );
@@ -187,7 +189,7 @@ export function OverviewPage({
         </div>
 
 
-        {target && !target.present ? (
+        {targetIsGone && target ? (
           <div className="mt-2.5 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
             <p className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
               {t("保存的目标显示器（{display}）已断开，整理时会改用主显示器。", {
