@@ -2235,6 +2235,25 @@ Ctrl+W 全都不响应——和"应用卡死"无法区分，唯一的线索是�
 **这几轮我反复把脚本自身的缺陷当成产品缺陷**——第 3 条尤其典型：报错说页面打不开，实际是上一次
 运行留下的状态。
 
+### 托盘菜单的启用规则（本轮，已提取并测试）
+
+「未验证」清单里托盘一项原本写的是"需要人工点击或加测试入口"。其中**启用规则**这一半不需要外部
+条件：它是纯数据推导，被埋在 `build_menu` 里，与 `AppHandle` 耦合所以测不了。
+
+抽成 `menu_enabled(paused, has_layout, display_count) -> MenuEnabled`，`build_menu` 改为调用它。
+三条规则现在有测试：
+
+| 规则 | 断言 |
+|---|---|
+| 无布局时「恢复」「暂停」禁用 | `!idle.restore && !idle.pause` |
+| 暂停时「整理」禁用但「恢复」保持可用 | `!paused.gather && paused.restore` |
+| 「切换显示器」需要两块屏以上 | 0/1 禁用，2 启用 |
+
+把 `gather: !paused` 改成 `gather: true` 后测试失败（`assertion failed: !paused.gather`）。
+
+仍未验证的是**点击链路**：托盘图标不被无障碍接口识别，无法自动点击；`handle_menu_event` 的
+`AppHandle` 在单元测试里构造不出来（`tauri` 未启用 `test` feature）。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
@@ -2242,7 +2261,7 @@ Ctrl+W 全都不响应——和"应用卡死"无法区分，唯一的线索是�
 | macOS 全部功能 | 无 Mac 硬件 | 真机：TCC 授权、AX 移动、`CGDisplayCreateUUIDFromDisplayID`、Retina 坐标 |
 | 自动更新安装 | `plugins.updater.pubkey` 与 `endpoints` 为空；界面会如实显示"未配置" | 生成 minisign 密钥 + 托管更新清单 |
 | 代码签名与公证 | 无证书 | Windows Authenticode 证书；Apple Developer Program |
-| 托盘菜单点击 | 托盘图标无法被 UI 自动化识别 | 人工点击验证，或加一个测试专用的命令触发入口 |
+| 托盘菜单**点击** | 托盘图标无法被 UI 自动化识别 | 人工点击验证。**启用规则已测**（见下），未测的是点击后 Tauri 是否真的调用了 `handle_menu_event` |
 | 混合 DPI | 本机两块屏都是 100% | 一台 150% 的屏 |
 | 提权窗口 | 未构造高完整性测试窗口 | 以管理员启动一个记事本作为目标 |
 | 大规模窗口 | 最多测过 13 个 | 100 窗压力测试 |

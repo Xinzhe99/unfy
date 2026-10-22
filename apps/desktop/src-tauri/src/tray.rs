@@ -328,15 +328,14 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         text.gather
     };
 
-    let gather = MenuItem::with_id(app, ID_GATHER, gather_label, !paused, None::<&str>)?;
-    let restore = MenuItem::with_id(app, ID_RESTORE, text.restore, has_layout, None::<&str>)?;
+    let enabled = menu_enabled(paused, has_layout, display_count);
+    let gather = MenuItem::with_id(app, ID_GATHER, gather_label, enabled.gather, None::<&str>)?;
+    let restore = MenuItem::with_id(app, ID_RESTORE, text.restore, enabled.restore, None::<&str>)?;
     let rescue = MenuItem::with_id(app, ID_RESCUE, text.rescue, true, None::<&str>)?;
     let pause =
-        CheckMenuItem::with_id(app, ID_PAUSE, text.pause, has_layout, paused, None::<&str>)?;
+        CheckMenuItem::with_id(app, ID_PAUSE, text.pause, enabled.pause, paused, None::<&str>)?;
     let identify = MenuItem::with_id(app, ID_IDENTIFY, text.identify, true, None::<&str>)?;
-    // Only meaningful with more than one display; disabled otherwise rather than
-    // hidden, so the item does not appear and disappear between setups.
-    let cycle = MenuItem::with_id(app, ID_CYCLE, text.cycle, display_count > 1, None::<&str>)?;
+    let cycle = MenuItem::with_id(app, ID_CYCLE, text.cycle, enabled.cycle, None::<&str>)?;
     let remote = MenuItem::with_id(
         app,
         ID_REMOTE,
@@ -369,6 +368,31 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &quit_item,
         ],
     )
+}
+
+/// Which menu items are enabled, given the state they depend on.
+///
+/// Split out because the tray itself cannot be driven by the accessibility harness -
+/// the icon is not exposed as a control - so the enable rules were the one part of the
+/// tray nobody could check. They are the part that matters: an item enabled in the
+/// wrong state either does nothing or does the wrong thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuEnabled {
+    pub gather: bool,
+    pub restore: bool,
+    pub pause: bool,
+    pub cycle: bool,
+}
+
+pub fn menu_enabled(paused: bool, has_layout: bool, display_count: usize) -> MenuEnabled {
+    MenuEnabled {
+        gather: !paused,
+        restore: has_layout,
+        pause: has_layout,
+        // Only meaningful with more than one display; disabled rather than hidden, so
+        // the item does not appear and disappear between setups.
+        cycle: display_count > 1,
+    }
 }
 
 /// Run an engine action from the tray and surface the outcome.
@@ -570,12 +594,50 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
 
 #[cfg(test)]
 mod icon_tests {
-    //! Tinting arithmetic. The first implementation used `u16` for the luminance
-    //! weights and panicked on the first pixel (`255 * 1000` overflows `u16`);
-    //! in release that would have silently wrapped and tinted the icon wrong.
+    //! Tinting arithmetic and menu enable rules.
+    //!
+    //! The first tinting implementation used `u16` for the luminance weights and
+    //! panicked on the first pixel (`255 * 1000` overflows `u16`); in release that
+    //! would have silently wrapped and tinted the icon wrong.
+    //!
+    //! The menu rules live here because the tray icon is not exposed to the
+    //! accessibility harness, so clicking the menu is the one part of the app that
+    //! cannot be driven automatically.
+
+    use super::menu_enabled;
 
     fn luma(r: u8, g: u8, b: u8) -> u32 {
         (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000
+    }
+
+    #[test]
+    fn restore_and_pause_need_a_layout_to_act_on() {
+        // Without a layout there is nothing to restore and nothing to pause; an enabled
+        // item would be a button that does nothing.
+        let idle = menu_enabled(false, false, 2);
+        assert!(!idle.restore);
+        assert!(!idle.pause);
+
+        let gathered = menu_enabled(false, true, 2);
+        assert!(gathered.restore);
+        assert!(gathered.pause);
+    }
+
+    #[test]
+    fn pausing_disables_gather_but_not_restore() {
+        // Paused means "stop moving windows", not "stranded where you are": restoring
+        // must stay available, which is the whole point of pausing before a restore.
+        let paused = menu_enabled(true, true, 2);
+        assert!(!paused.gather);
+        assert!(paused.restore);
+        assert!(paused.pause);
+    }
+
+    #[test]
+    fn cycling_needs_a_second_display() {
+        assert!(!menu_enabled(false, false, 0).cycle);
+        assert!(!menu_enabled(false, false, 1).cycle);
+        assert!(menu_enabled(false, false, 2).cycle);
     }
 
     #[test]
