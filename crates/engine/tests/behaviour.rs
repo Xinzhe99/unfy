@@ -623,6 +623,57 @@ fn excluded_app_is_never_moved() {
 }
 
 #[test]
+fn rescue_leaves_excluded_applications_alone() {
+    // Rescue exists for windows stranded off every display. An exclusion rule says
+    // "never move this application", and there is no clause for stranded windows -
+    // the exclusions page tells the user these applications will not be moved, full
+    // stop. Rescue ignored the rule, so the one command a user reaches for when
+    // something is wrong would drag the applications they had protected.
+    let mut backend = FakeBackend::with_two_displays();
+    // Fully outside both displays (which span 0..4480).
+    backend.add_window(
+        1,
+        Rect::new(9000, 9000, 9600, 9600),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.add_window(
+        2,
+        Rect::new(9200, 9000, 9800, 9600),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    backend.set_app_name(2, "obs64.exe");
+
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            excluded_apps: vec!["OBS64.EXE".into()],
+            ..config("rescue-excluded")
+        },
+    );
+
+    let rescued = engine.rescue_offscreen().expect("rescue");
+    let ids: Vec<u64> = rescued.iter().map(|(id, _)| id.native_id).collect();
+    assert_eq!(ids, vec![1], "only the unexcluded window may be rescued");
+
+    let window = engine
+        .backend()
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id.native_id == 2)
+        .unwrap();
+    assert_eq!(
+        window.visible_rect,
+        Rect::new(9200, 9000, 9800, 9600),
+        "the excluded window must stay where it was"
+    );
+}
+
+#[test]
 fn exclusion_is_case_insensitive_and_ignores_unknown_names() {
     let mut backend = FakeBackend::with_two_displays();
     backend.add_window(

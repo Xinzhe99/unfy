@@ -1347,6 +1347,15 @@ impl<B: Backend> Engine<B> {
             if !window.is_migratable() {
                 continue;
             }
+            // An exclusion rule means "do not move this application's windows",
+            // without an exception for windows that are hard to reach. Rescue used
+            // to ignore it, so the one feature a user reaches for when a window
+            // misbehaves would drag around the applications they had explicitly
+            // asked it to leave alone - and the exclusions page promises the
+            // opposite.
+            if self.is_excluded(&window) {
+                continue;
+            }
             let reachable = displays.iter().any(|d| {
                 window.visible_rect.reachable_in(
                     &d.work_area,
