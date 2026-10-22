@@ -12,18 +12,68 @@ import { skipLabel } from "../api";
  * rectangles rather than a tidy grid.
  */
 /**
- * Smallest cell, in work-area pixels, that still gets a label.
+ * Cells smaller than this, in work-area pixels, do not influence the label size.
  *
- * At 1920 wide a grid cell for fifty windows is roughly 260x130; the label needs about
- * 11 px of height to read, and a cell under this threshold cannot hold even that once
- * the text is scaled down. Measured from the fifty-seven-window case that turned the
- * preview into a smear.
+ * It is a first filter, not the final rule: the median of the surviving cells sets one
+ * font size for the drawing, and each cell is then checked against that size. A cell
+ * below this threshold could not hold even the 10 px floor, so letting it vote on the
+ * size would drag every label down with it.
  */
 const MIN_LABEL_CELL = 96;
 
 export function PlanPreview({ preview }: { preview: PreviewDto }) {
   const work = preview.target_work;
   const placed = preview.placements.length;
+  // One size for every label in the drawing. Sizing each label from its own cell made
+  // `python` (a large window) print at twice the size of `Notepad #4` next to it, which
+  // reads as a rendering fault rather than as emphasis. The smallest cell that still
+  // gets a label sets the size for all of them.
+  // Cells that overlap their neighbours get no labels at all. In a cascade every cell is
+  // full size - they are merely offset - so a size test passes for all of them and the
+  // labels print on top of each other into an unreadable block. Overlap is the condition
+  // that actually decides whether a label can be read, not area.
+  // "Overlap" means a real intersection, not a shared edge. Tiled cells touch on every
+  // side, and the naive `a.left < b.right` test counts a shared border as overlap - which
+  // stripped the labels from a perfectly ordinary six-window grid. A cell must intrude by
+  // at least a few pixels to count.
+  const OVERLAP_TOLERANCE = 4;
+  const overlaps = (
+    a: { left: number; top: number; width: number; height: number },
+    b: { left: number; top: number; width: number; height: number },
+  ) =>
+    a.left < b.left + b.width - OVERLAP_TOLERANCE &&
+    b.left < a.left + a.width - OVERLAP_TOLERANCE &&
+    a.top < b.top + b.height - OVERLAP_TOLERANCE &&
+    b.top < a.top + a.height - OVERLAP_TOLERANCE;
+  // Which cells collide with a neighbour. One overlapping window should not silence the
+  // labels on a grid that is otherwise clean; the drawing only drops labels wholesale when
+  // most cells overlap (a cascade), where no per-cell rule could help.
+  const collides = preview.placements.map((a, i) =>
+    preview.placements.some((b, j) => i !== j && overlaps(a.rect, b.rect)),
+  );
+  // Only a cascade silences the whole drawing: there every cell is full-size and merely
+  // offset, so all of them collide. A grid with one oversized window makes a handful of
+  // cells collide, and that is not a reason to strip the labels from the other four.
+  const overlapping = placed > 1 && collides.every(Boolean);
+  const labelCells = overlapping
+    ? []
+    : preview.placements.filter(
+        (p) => p.rect.width >= MIN_LABEL_CELL && p.rect.height >= MIN_LABEL_CELL,
+      );
+  // The median labelled cell sets the size, not the smallest: taking the minimum let a
+  // single short cell shrink every label on the drawing to the floor. A cell that cannot
+  // hold the chosen size simply goes unlabelled - that check is per cell below.
+  //
+  // The floor is 32 work-area units, not 10. The SVG is drawn at its real proportions and
+  // then scaled down to the card: a 1920-wide viewBox inside roughly 600 px of card is a
+  // factor of ~0.31, so 10 units renders at 3 px. 32 units renders at ~10 px, which is
+  // the smallest size worth printing; the earlier "10" was legible in the DOM and
+  // invisible on screen.
+  const sizes = labelCells
+    .map((p) => Math.min(p.rect.width, p.rect.height))
+    .sort((a, b) => a - b);
+  const median = sizes.length > 0 ? sizes[Math.floor(sizes.length / 2)]! : 0;
+  const labelSize = median > 0 ? Math.max(32, Math.min(median * 0.3, 48)) : 32;
   const squeezed = preview.placements.filter((p) => p.clamped).length;
 
   // Two windows of the same application are indistinguishable in the drawing
@@ -106,7 +156,10 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
                   became a grey smear. Below a legible threshold the labels are dropped
                   and the rectangles speak for themselves; the `<title>` still names
                   every window on hover. */}
-              {placement.rect.height >= MIN_LABEL_CELL && placement.rect.width >= MIN_LABEL_CELL ? (
+              {!overlapping &&
+              !collides[index] &&
+              placement.rect.height >= labelSize * 2.2 &&
+              placement.rect.width >= labelSize * 3 ? (
               <text
                 x={placement.rect.left + placement.rect.width / 2}
                 // A squeezed window is drawn larger than its cell and therefore
@@ -123,10 +176,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
                 }
                 textAnchor="middle"
                 dominantBaseline={placement.clamped ? "auto" : "central"}
-                fontSize={Math.max(
-                  10,
-                  Math.min(placement.rect.width, placement.rect.height) * 0.22,
-                )}
+                fontSize={labelSize}
                 fill="var(--color-fg-soft)"
                 fontFamily="inherit"
                 // A squeezed rectangle is drawn over its neighbours, so two labels
