@@ -33,12 +33,15 @@ function display(overrides: Partial<DisplayDto> & { native_id: string }): Displa
   };
 }
 
-function render(displays: DisplayDto[]): string {
+function render(
+  displays: DisplayDto[],
+  thumbnails: Record<string, { native_id: string; data_url: string; blank: boolean }> = {},
+): string {
   return renderToStaticMarkup(
     <DisplayCards
       displays={displays}
       target={null}
-      thumbnails={{}}
+      thumbnails={thumbnails}
       onSelect={() => {}}
       disabled={false}
     />,
@@ -109,6 +112,35 @@ describe("display cards", () => {
 
   test("reports an empty topology instead of rendering an empty box", () => {
     expect(render([])).toContain("未检测到显示器");
+  });
+
+  test("a captured display shows its picture", () => {
+    const html = render([display({ native_id: "A" })], {
+      A: { native_id: "A", data_url: "data:image/png;base64,AAAA", blank: false },
+    });
+    expect(html).toContain("<img");
+    expect(html).not.toContain("没有画面");
+    expect(html).not.toContain("无法截取画面");
+  });
+
+  test("a black capture says there is nothing on that screen", () => {
+    // A monitor that is off, on another input, or a virtual display with no client
+    // captures as solid black. Saying so separates "nothing is there" from a broken
+    // preview - the two look identical otherwise.
+    const html = render([display({ native_id: "A" })], {
+      A: { native_id: "A", data_url: "data:image/png;base64,AAAA", blank: true },
+    });
+    expect(html).toContain("<img");
+    expect(html).toContain("没有画面");
+  });
+
+  test("a display with no capture says the picture could not be taken", () => {
+    // Distinct from "no picture": here the capture itself failed, so the card has no
+    // image at all and must not pretend the screen is blank.
+    const html = render([display({ native_id: "A" })]);
+    expect(html).not.toContain("<img");
+    expect(html).toContain("无法截取画面");
+    expect(html).not.toContain("没有画面");
   });
 
   test("marks the selected display", () => {
