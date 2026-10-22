@@ -339,6 +339,12 @@ export default function App() {
         });
         return;
       }
+      // The user told the app the remote client already shows every screen, so there is
+      // nothing hidden to gather. Say nothing: they configured this, and a flash on every
+      // remote session would be noise. Falling through to the branch below was worse than
+      // silence - it claimed "自动整理已关闭" and pointed at a switch that is already on,
+      // which is a different setting entirely.
+      if (suppressed === "all_screens") return;
       if (active && evidence) {
         flash({
           tone: "neutral",
