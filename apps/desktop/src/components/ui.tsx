@@ -125,18 +125,20 @@ export function SettingRow({
   label,
   hint,
   children,
-  disabled,
 }: {
   label: string;
   hint?: string;
   children: ReactNode;
-  disabled?: boolean;
 }) {
   return (
-    <div
-      className={`flex items-start justify-between gap-6 py-3 ${disabled ? "opacity-50" : ""}`}
-    >
+    <div className="flex items-start justify-between gap-6 py-3">
       <div className="min-w-0">
+        {/* The row is not faded. Two rows use `disabled` for a long-lived reason -
+            the automation switches while detection is off - and `opacity-50` on the
+            row took the hint from 5.03:1 to 2.21:1, so the sentence explaining why
+            the control is unavailable was the hardest thing on the page to read.
+            The label keeps its colour, the hint keeps `muted`, and the control inside
+            shows its own disabled state. */}
         <span className="block text-[13px] font-medium leading-5">{label}</span>
         {hint ? (
           <span className="mt-0.5 block text-xs leading-relaxed text-[var(--color-muted)]">

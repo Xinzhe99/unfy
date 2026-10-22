@@ -156,7 +156,6 @@ export function GeneralPage({
               ? t("关闭时会先把窗口恢复原位，再停止自动整理")
               : t("关闭时只提示，不移动窗口")
           }
-          disabled={settings.auto_detect === "off"}
         >
           <Switch
             checked={settings.auto_gather}
@@ -171,7 +170,6 @@ export function GeneralPage({
         <SettingRow
           label={t("断开后自动恢复")}
           hint={t("远程会话结束后把窗口放回原位")}
-          disabled={settings.auto_detect === "off"}
         >
           <Switch
             checked={settings.auto_restore}
