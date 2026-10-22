@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import { commitNumber } from "../lib/numeric";
 import type {
   DisplayThumbnailDto, DisplayDto, SettingsDto, TargetDto } from "../api";
 import { DisplayCards } from "../components/DisplayCards";
@@ -159,14 +160,11 @@ function NumberInput({
         max={max}
         disabled={disabled}
         onBlur={(event) => {
-          const typed = Number(event.currentTarget.value);
-          const next = Number.isFinite(typed)
-            ? Math.min(max, Math.max(min, Math.round(typed)))
-            : value;
+          const commit = commitNumber(event.currentTarget.value, value, min, max);
           // Always write back, even when nothing changed: an empty or malformed
           // field would otherwise stay blank while a real value is in effect.
-          event.currentTarget.value = String(next);
-          if (next !== value) onCommit(next);
+          event.currentTarget.value = commit.display;
+          if (commit.changed) onCommit(commit.value);
         }}
         className="h-7 w-16 rounded-[var(--radius-control)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 text-right text-xs tabular-nums outline-none focus:border-[var(--color-accent)]"
       />

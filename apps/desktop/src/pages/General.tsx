@@ -9,6 +9,7 @@ import type {
 import { Button, Card, Segmented, SettingRow, Status, Switch } from "../components/ui";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import { t } from "../i18n";
+import { commitNumber } from "../lib/numeric";
 import { renderMessage } from "../api";
 import { IconDownload } from "../components/icons";
 
@@ -282,14 +283,18 @@ export function GeneralPage({
               max={120}
               disabled={busy}
               onBlur={(event) => {
-                const next = Number(event.currentTarget.value);
-                if (Number.isFinite(next) && next !== settings.restore_delay_secs) {
-                  onSave({
-                    // Spec range is 15-120 s; 0 stays legal because a user may
-                    // prefer an immediate restore and accept the risk of two
-                    // migrations on a flapping connection.
-                    restore_delay_secs: Math.min(120, Math.max(0, Math.round(next))),
-                  });
+                const commit = commitNumber(
+                  event.currentTarget.value,
+                  settings.restore_delay_secs,
+                  0,
+                  120,
+                );
+                event.currentTarget.value = commit.display;
+                if (commit.changed) {
+                  // Spec range is 15-120 s; 0 stays legal because a user may
+                  // prefer an immediate restore and accept the risk of two
+                  // migrations on a flapping connection.
+                  onSave({ restore_delay_secs: commit.value });
                 }
               }}
               className="h-7 w-16 rounded-[var(--radius-control)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 text-right text-xs tabular-nums outline-none focus:border-[var(--color-accent)]"
