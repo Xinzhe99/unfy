@@ -110,6 +110,7 @@ const status: StatusDto = {
   last_error: null,
   paused: false,
   captured_windows: 0,
+  settings_recovered: false,
 };
 
 const preview: PreviewDto = {
@@ -911,6 +912,43 @@ describe("pages render", () => {
     );
     expect(html).toContain("msedge.exe");
     expect(html).toContain("1 条规则");
+  });
+
+  test("a recovered settings file is announced, not silently replaced", () => {
+    // Falling back to defaults without a word leaves the user staring at an
+    // onboarding guide they already finished, with every rule and shortcut gone -
+    // indistinguishable from data loss.
+    const render = (recovered: boolean) =>
+      renderToStaticMarkup(
+        <OverviewPage
+          status={{ ...status, settings_recovered: recovered }}
+          settings={settings}
+          preview={preview}
+          displays={displays}
+          activity={activity}
+          progress={null}
+          busy={false}
+          onPreview={noop}
+          onMigrate={noop}
+          onRestore={noop}
+          onPause={noop}
+          onRescue={noop}
+          onIdentify={noop}
+          onExport={noop}
+          diagnosticsPreview={null}
+          onPreviewDiagnostics={noop}
+          onOpenConfigDir={noop}
+          onOpenDisplays={noop}
+          onExclude={noop}
+          onKeepLayout={noop}
+          onDismissError={noop}
+          onToggleRemote={noop}
+          pendingApps={[]}
+        />,
+      );
+
+    expect(render(true)).toContain("settings.json.invalid");
+    expect(render(false)).not.toContain("settings.json.invalid");
   });
 
   test("the pending card says whether windows may already have moved", () => {

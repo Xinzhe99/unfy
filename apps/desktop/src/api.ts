@@ -43,6 +43,8 @@ export interface StatusDto {
   last_error: MessageDto | null;
   paused: boolean;
   captured_windows: number;
+  /** The settings file could not be read; defaults are in effect. */
+  settings_recovered: boolean;
 }
 
 export interface DisplayDto {

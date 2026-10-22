@@ -197,6 +197,14 @@ export function OverviewPage({
           </div>
         ) : null}
 
+        {status?.settings_recovered ? (
+          <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
+            <p className="min-w-0 flex-1 text-xs leading-relaxed text-[var(--color-fg-soft)]">
+              {t("读取设置文件失败，已改用默认设置。原文件保留为 settings.json.invalid，可以手工修复后重启。")}
+            </p>
+          </div>
+        ) : null}
+
         {status?.last_error ? (
           <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-danger)] px-3 py-2">
             <p className="min-w-0 flex-1 text-xs leading-relaxed text-[var(--color-fg-soft)]">

@@ -44,6 +44,15 @@ pub struct AppState {
     /// marker that survived a restart would claim a remote session that ended
     /// with the previous process.
     pub manual_remote: Arc<std::sync::atomic::AtomicBool>,
+    /// True when the settings file could not be read at startup and the app fell
+    /// back to defaults.
+    ///
+    /// The window has to say so. Without it the first thing the user sees is the
+    /// onboarding guide they already completed, every exclusion rule gone and the
+    /// shortcuts unset - indistinguishable from the app having thrown their
+    /// configuration away. The original file is kept as `settings.json.invalid`,
+    /// and the banner is how they learn it exists.
+    pub settings_recovered: bool,
     /// When the last automatic gather ran, for the spec's 30-second cooldown.
     ///
     /// A session that flaps - connect, drop, connect - produces a sequence of
@@ -97,7 +106,9 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         let settings_path = Settings::default_path();
+        let mut settings_recovered = false;
         let settings = Settings::load(&settings_path).unwrap_or_else(|e| {
+            settings_recovered = true;
             // Do not silently overwrite the user's file: it may be recoverable
             // by hand, and the next save would destroy the evidence. Keep a copy
             // next to it and start from defaults.
@@ -156,6 +167,7 @@ impl AppState {
             ))),
             last_observation: Arc::new(std::sync::Mutex::new(None)),
             manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            settings_recovered,
             last_auto_gather: Arc::new(std::sync::Mutex::new(None)),
             storage_probe: Arc::new(std::sync::Mutex::new(None)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),

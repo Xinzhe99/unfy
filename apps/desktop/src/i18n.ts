@@ -155,6 +155,8 @@ const EN: Record<string, string> = {
   "标记为远程会话": "Mark as remote session",
   "结束远程会话标记": "End remote-session marker",
   "远程会话": "Remote session",
+  "读取设置文件失败，已改用默认设置。原文件保留为 settings.json.invalid，可以手工修复后重启。":
+    "The settings file could not be read, so defaults are in use. The original is kept as settings.json.invalid - fix it by hand and restart to recover.",
   "上次操作失败：{message}": "Last operation failed: {message}",
   "知道了": "Dismiss",
   "有窗口没能恢复到原位。可以再试一次，或先关闭这些窗口。":

@@ -32,6 +32,9 @@ pub struct StatusDto {
     pub paused: bool,
     /// How many windows the open transaction holds.
     pub captured_windows: usize,
+    /// The settings file could not be read, so defaults are in effect and the
+    /// original is kept as `settings.json.invalid`.
+    pub settings_recovered: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -295,6 +298,7 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
         last_error,
         paused: engine.is_paused(),
         captured_windows: engine.captured_window_count(),
+        settings_recovered: app.settings_recovered,
     })
 }
 
