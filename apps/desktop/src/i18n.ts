@@ -26,8 +26,29 @@ export type Locale = "zh" | "en";
 export type LanguageSetting = "system" | "zh" | "en";
 
 const STORAGE_KEY = "conflux.locale";
+/** Persisted across launches, unlike `STORAGE_KEY`; see `readCachedLocale`. */
+const CACHE_KEY = "conflux-locale";
 
-let active: Locale = "zh";
+/**
+ * The language the last run ended in.
+ *
+ * The settings file is the source of truth, but it arrives over IPC - after the first
+ * render. With `active` hardcoded to `zh`, an English user watched the navigation paint in
+ * Chinese for a frame and then swap; measured with a per-frame recorder, the two texts
+ * appear in consecutive frames. Reading the cache at module load means the first render is
+ * already right, and `applyLocale` corrects it if the two disagree.
+ */
+function readCachedLocale(): Locale | null {
+  try {
+    const stored = localStorage.getItem(CACHE_KEY);
+    return stored === "zh" || stored === "en" ? stored : null;
+  } catch {
+    // Storage disabled: fall through to the source language.
+    return null;
+  }
+}
+
+let active: Locale = readCachedLocale() ?? "zh";
 
 /** Detect the OS language once, at module load. */
 function detectSystem(): Locale {
@@ -67,6 +88,11 @@ export function currentLocale(): Locale {
  */
 export function applyLocale(locale: Locale): void {
   active = locale;
+  try {
+    localStorage.setItem(CACHE_KEY, locale);
+  } catch {
+    // Storage disabled: the cache is an optimisation, not the source of truth.
+  }
   if (typeof document !== "undefined") {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
   }
