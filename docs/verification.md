@@ -1996,6 +1996,22 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 
 实测日志：`activity entries could not be read and were skipped dropped=2 path=...`。
 
+### 恢复 journal 失败时引擎仍显示「就绪」（本轮，已修，未测）
+
+`recover()` 在 `JournalCorrupt` 时直接 `?` 返回，**没有设置 `self.state = Error`**。引擎保持初始的
+`Idle`，界面显示「就绪」——而一份读不出来的 journal 意味着可能有窗口停在错误位置。
+
+两处都改为先设 `Error` 再返回。
+
+**这个分支的测试构造不出来，原因值得记录**：`conflux_journal::recover` 把任何解码失败都当作
+「尾部截断」（`truncated`），因为那是写入被打断的正常形态，随后返回 `Clean` 或 `Unfinished`。
+所以损坏的**内容**永远不会走到 `Err`。`JournalCorrupt` 只在文件打不开时出现——被删除、被锁、
+权限不足，那是 IO 状态而不是字节模式，无法用一段固定内容复现。
+
+我先后写了两个测试试图覆盖它：第一个用乱码，失败（`recover` 返回 Ok）；第二个用"先写后删"，
+通过了但断言的是"缺失文件返回 Idle"，与被测函数名和意图相反，**没有价值**，已删除。最终选择不
+伪造测试，而是在代码注释里写清为什么这里没有测试。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

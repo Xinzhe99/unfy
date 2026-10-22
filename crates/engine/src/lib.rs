@@ -425,8 +425,25 @@ impl<B: Backend> Engine<B> {
     /// nothing to restore and keeping it would block every future migration.
     pub fn recover(&mut self, path: impl AsRef<std::path::Path>) -> Result<Recovered, EngineError> {
         let path = path.as_ref();
-        let recovered = conflux_journal::recover(path)
-            .map_err(|e| EngineError::JournalCorrupt(e.to_string()))?;
+        // A journal that cannot be read may describe windows that were already
+        // moved. Leaving the engine in `Idle` after this failure told the window
+        // "就绪" while a batch of preimages was unrecoverable, so the user saw a
+        // healthy tool over a desktop it could not put back. `Error` is what the
+        // state means here: no new writes, recovery and rescue still offered.
+        //
+        // Unreachable by corrupt *content*: `conflux_journal::recover` treats a
+        // failed record as a torn tail, which is the normal shape of an interrupted
+        // write, and returns `Clean`. This branch fires when the file cannot be read
+        // at all - locked, removed, or permission-denied underneath the app - which
+        // is why there is no unit test constructing it: the failure is an IO state,
+        // not a byte pattern.
+        let recovered = match conflux_journal::recover(path) {
+            Ok(recovered) => recovered,
+            Err(e) => {
+                self.state = EngineState::Error;
+                return Err(EngineError::JournalCorrupt(e.to_string()));
+            }
+        };
 
         let Recovered::Unfinished(tx) = &recovered else {
             return Ok(recovered);
@@ -440,8 +457,13 @@ impl<B: Backend> Engine<B> {
             return Ok(Recovered::Clean);
         }
 
-        let journal = Journal::reopen(path, tx.transaction)
-            .map_err(|e| EngineError::JournalCorrupt(e.to_string()))?;
+        let journal = match Journal::reopen(path, tx.transaction) {
+            Ok(journal) => journal,
+            Err(e) => {
+                self.state = EngineState::Error;
+                return Err(EngineError::JournalCorrupt(e.to_string()));
+            }
+        };
 
         self.preimages = tx
             .preimages
