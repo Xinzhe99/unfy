@@ -87,15 +87,19 @@ impl WindowOutcome {
 /// Why a window was skipped. Surfaced verbatim in the UI, so each variant maps
 /// to one Chinese sentence in `apps/desktop`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Why a window was skipped, in the cases a user can actually observe.
+///
+/// Seven variants were removed here after an audit: `OwnWindow`, `ToolWindow`,
+/// `ShellWindow`, `ModalChild`, `ZeroSize` and `OtherVirtualDesktop` were never
+/// constructed anywhere. Their filtering happens in the platform layer, which
+/// drops the process's own windows, hidden windows, tool windows and cloaked
+/// windows before the engine is handed a list at all - so a reason the engine
+/// could never produce also produced a wire code and a translated label the user
+/// could never see. `Invisible` remains because it is reachable: it is what
+/// `classify` reports for a window whose display cannot be found.
 pub enum SkipReason {
-    OwnWindow,
     Invisible,
-    ZeroSize,
-    ToolWindow,
-    ShellWindow,
-    ModalChild,
     Fullscreen,
-    OtherVirtualDesktop,
     PermissionDenied,
     Minimized,
     /// The user excluded this application from automation.
@@ -105,14 +109,8 @@ pub enum SkipReason {
 impl SkipReason {
     pub fn code(self) -> &'static str {
         match self {
-            SkipReason::OwnWindow => "own_window",
             SkipReason::Invisible => "invisible",
-            SkipReason::ZeroSize => "zero_size",
-            SkipReason::ToolWindow => "tool_window",
-            SkipReason::ShellWindow => "shell_window",
-            SkipReason::ModalChild => "modal_child",
             SkipReason::Fullscreen => "fullscreen",
-            SkipReason::OtherVirtualDesktop => "other_virtual_desktop",
             SkipReason::PermissionDenied => "permission_denied",
             SkipReason::Minimized => "minimized",
             SkipReason::ExcludedApp => "excluded_app",
@@ -211,14 +209,8 @@ mod tests {
     #[test]
     fn skip_codes_are_unique() {
         let all = [
-            SkipReason::OwnWindow,
             SkipReason::Invisible,
-            SkipReason::ZeroSize,
-            SkipReason::ToolWindow,
-            SkipReason::ShellWindow,
-            SkipReason::ModalChild,
             SkipReason::Fullscreen,
-            SkipReason::OtherVirtualDesktop,
             SkipReason::PermissionDenied,
             SkipReason::Minimized,
             SkipReason::ExcludedApp,

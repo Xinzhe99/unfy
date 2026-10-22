@@ -1473,6 +1473,33 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 最终按通用手段处理：给所有标签加 `stroke` 光晕（`paintOrder="stroke"`，颜色取卡片底色）。
 实测两处都能读清。几何上仍紧贴，但强行拉开会让标签跑出自己的矩形，得不偿失。
 
+### 撤回上一轮的 `own_process_id`（判断错误）
+
+上一轮我声称"工具会移动自己的窗口"，并据此加了 `EngineConfig::own_process_id`。**这个判断是错的。**
+
+证据：`crates/platform/win/src/windows_impl.rs` 的 `enumerate()` 里一直有
+`if raw.snapshot.id.process_id == self.own_process { continue; }`，而 `WinPlatform::enumerate`
+正是应用自己走的那条路（`WinPlatform::new()` 在应用进程内构造）。应用从来不会移动自己的窗口。
+
+我犯的错是**用 `probe`（独立进程）的枚举结果当作应用行为的证据**：probe 的 `own_process` 是 probe
+自己的 pid，所以它列出 `conflux.exe` 是正确的，这不能说明应用会移动自己的窗口。
+
+已撤回 `own_process_id`、对应测试与文案。标签光晕那部分（同样是那一轮提交的）是有效的，予以保留。
+
+### 六个从未被构造的跳过原因（本轮审计，已删）
+
+按"定义了但从未产生"这条线索系统扫了一遍 `SkipReason`：`OwnWindow`、`ZeroSize`、`ToolWindow`、
+`ShellWindow`、`ModalChild`、`OtherVirtualDesktop` 在业务代码里**没有任何构造点**，只出现在
+`code()` 的匹配和 `skip_codes_are_unique` 的清单里。
+
+它们的过滤发生在平台层（隐藏窗口、工具窗口、cloaked 窗口、自身进程），引擎根本拿不到这类窗口。
+于是这六个变体连同 `api.ts` 里的六条中文标签，都是用户永远看不到的死代码。
+
+`Invisible` **保留**：它在 `classify` 里是活的（显示器找不到时的兜底），审计时一度想把它一起合并，
+跑构建前复核发现它是可达的，已恢复。
+
+删除后：Rust 全套通过、clippy 干净、前端 96 测试通过，实机预览正常（标签光晕仍在生效）。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

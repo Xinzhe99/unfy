@@ -121,10 +121,6 @@ impl AppState {
             journal_dir: conflux_settings::config_dir().join("journal"),
             restore_delay_secs: settings.restore_delay_secs,
             excluded_apps: settings.excluded_apps.clone(),
-            // The tool arranges other people's windows, not its own. Without this
-            // the main window joins the grid, moves off the monitor the user is
-            // clicking on, and can be resized mid-click.
-            own_process_id: Some(std::process::id()),
             ..Default::default()
         };
 

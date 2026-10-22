@@ -319,14 +319,8 @@ export const stateLabels: Record<EngineStateName, string> = {
 
 /** Skip reasons, as catalogue keys. `skipLabel` translates them. */
 export const skipLabels: Record<string, string> = {
-  own_window: "本应用的窗口",
   invisible: "不可见",
-  zero_size: "尺寸为零",
-  tool_window: "工具窗口",
-  shell_window: "系统外壳",
-  modal_child: "附属于主窗口",
   fullscreen: "全屏",
-  other_virtual_desktop: "其他虚拟桌面",
   permission_denied: "权限不足",
   minimized: "已最小化",
   excluded_app: "已排除此应用",
