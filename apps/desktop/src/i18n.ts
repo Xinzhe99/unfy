@@ -466,6 +466,7 @@ const EN: Record<string, string> = {
     "Some windows were not restored, so quitting was cancelled. Retry from the overview, or press Keep current layout.",
   "已整理 {count} 个窗口": "Gathered {count} windows",
   "，{count} 个已关闭": ", {count} closed",
+  "，{count} 个放不下留在原位": ", {count} did not fit and stayed put",
   "，跳过 {count} 个": ", skipped {count}",
   "；{apps} 没有接受位置调整": "; {apps} refused to move",
   "已恢复 {count} 个窗口": "Restored {count} windows",

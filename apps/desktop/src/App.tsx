@@ -798,7 +798,14 @@ export default function App() {
                           ? t("；{apps} 没有接受位置调整", { apps: result.refused_apps.join(", ") })
                           : "";
                       return {
-                        tone: result.rejected > 0 ? "warning" : "success",
+                        // `unplaced` belongs in the same condition as `rejected`: those
+                        // windows were left where they were because they did not fit,
+                        // and reporting a plain success told the user the gather had
+                        // covered everything when it had not.
+                        tone:
+                          result.rejected > 0 || result.unplaced > 0
+                            ? "warning"
+                            : "success",
                         text:
                           // Each clause carries its own separator: concatenating the
                           // fragments read "Gathered 5 windowsskipped 7." in English
@@ -809,6 +816,9 @@ export default function App() {
                             : "") +
                           (result.skipped > 0
                             ? t("，跳过 {count} 个", { count: result.skipped })
+                            : "") +
+                          (result.unplaced > 0
+                            ? t("，{count} 个放不下留在原位", { count: result.unplaced })
                             : "") +
                           refused +
                           t("。"),
