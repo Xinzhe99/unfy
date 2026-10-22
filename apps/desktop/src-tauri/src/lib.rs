@@ -106,7 +106,7 @@ impl AppState {
             if let Err(copy_err) = std::fs::copy(&settings_path, &backup) {
                 tracing::warn!(error = %copy_err, "could not preserve the unreadable file");
             } else {
-                tracing::info!(path = %backup.display(), "unreadable settings preserved");
+                tracing::info!(path = %redact_home(&backup), "unreadable settings preserved");
             }
             Settings::default()
         });
@@ -179,6 +179,29 @@ impl AppState {
 /// Rotation keeps five files of 2 MiB. Logs contain only state transitions,
 /// counts and window handles — never titles, paths or screen content — so a
 /// bounded history is safe to keep and to attach to a support request.
+/// A path with the user's home directory replaced by `~`.
+///
+/// The logs are what a user attaches to a support request, and the policy they are
+/// written under says no paths. The useful part of these two is which binary and
+/// which file, not whose profile directory they sit in - and a profile directory
+/// carries the user's name.
+pub(crate) fn redact_home(path: &std::path::Path) -> String {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok();
+    redact_home_in(path, home.as_deref())
+}
+
+/// The same rule with the home directory supplied, so it can be tested without
+/// touching the process environment.
+fn redact_home_in(path: &std::path::Path, home: Option<&str>) -> String {
+    let text = path.display().to_string();
+    match home {
+        Some(home) if !home.is_empty() => text.replacen(home, "~", 1),
+        _ => text,
+    }
+}
+
 fn init_logging() {
     let dir = conflux_settings::config_dir().join("logs");
     let file = std::fs::create_dir_all(&dir).ok().and_then(|()| {
@@ -568,5 +591,36 @@ mod lock_order {
             "these hold the settings guard while taking the engine, which deadlocks \n\
              against the status poll: take the engine first"
         );
+    }
+}
+
+#[cfg(test)]
+mod redaction {
+    use super::*;
+
+    #[test]
+    fn the_home_directory_becomes_a_tilde() {
+        let path = std::path::Path::new(r"C:\Users\ana\AppData\Roaming\Conflux\settings.json");
+        assert_eq!(
+            redact_home_in(path, Some(r"C:\Users\ana")),
+            r"~\AppData\Roaming\Conflux\settings.json",
+        );
+    }
+
+    #[test]
+    fn a_path_outside_home_is_left_alone() {
+        // A path that merely starts with the same letters must not be rewritten.
+        let path = std::path::Path::new(r"D:\builds\conflux.exe");
+        assert_eq!(
+            redact_home_in(path, Some(r"C:\Users\ana")),
+            r"D:\builds\conflux.exe",
+        );
+    }
+
+    #[test]
+    fn a_missing_home_still_returns_the_path() {
+        let path = std::path::Path::new("conflux.exe");
+        assert_eq!(redact_home_in(path, None), "conflux.exe");
+        assert_eq!(redact_home_in(path, Some("")), "conflux.exe");
     }
 }

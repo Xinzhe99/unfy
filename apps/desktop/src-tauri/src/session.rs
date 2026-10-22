@@ -181,7 +181,7 @@ pub fn set_autostart<R: Runtime>(app: &AppHandle<R>, desired: bool) {
     // one. Seeing the path is the difference between "the registry write failed"
     // and "it wrote the wrong binary".
     let exe = std::env::current_exe()
-        .map(|p| p.display().to_string())
+        .map(|p| crate::redact_home(&p))
         .unwrap_or_else(|_| "<unknown>".into());
     let current = manager.is_enabled().unwrap_or(false);
     tracing::info!(desired, current, %exe, "reconciling autostart");
