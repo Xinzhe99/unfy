@@ -425,9 +425,15 @@ export function OverviewPage({
           // Three rows by default, the rest behind a disclosure. The list is the
           // answer to "what did it just do", which three rows already give; the full
           // history is there for anyone who wants it.
+          //
+          // "All" means all. The button promises `activity.length` rows and the list
+          // used to stop at 40, so a user with 58 entries pressed "show all 58" and
+          // silently got 40 - eighteen records they could never reach from the
+          // window. The store is capped at 200 entries, which the scroll container
+          // handles comfortably.
           <>
           <ul>
-            {activity.slice(0, expanded ? 40 : 3).map((entry) => (
+            {activity.slice(0, expanded ? activity.length : 3).map((entry) => (
               <li
                 key={`${entry.at}-${entry.kind}-${entry.affected}`}
                 className="flex items-baseline justify-between gap-3 border-t border-[var(--color-border)] py-1.5 first:border-t-0 first:pt-0"
