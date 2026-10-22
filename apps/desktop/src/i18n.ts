@@ -576,6 +576,8 @@ const EN: Record<string, string> = {
   "（托盘）": " (tray)",
   "{name}{trigger} · {count} 个窗口": "{name}{trigger} · {count} windows",
 
+  "{year}年{month}月{day}日 {time}":
+    "{year}-{month}-{day} {time}",
   "{month}月{day}日 {time}": "{month}/{day} {time}",
 
 

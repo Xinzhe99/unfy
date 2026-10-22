@@ -574,6 +574,18 @@ function relativeTime(at: number): string {
     then.getMinutes(),
   ).padStart(2, "0")}`;
   if (sameDay) return t("今天 {time}", { time });
+  // The log keeps 200 entries, which on a machine used across a new year can hold
+  // dates from both. "10月22日 18:19" then names two different days, so an older
+  // year is spelled out. Months and days are compared rather than the year alone,
+  // because "last December" is still a different year.
+  if (then.getFullYear() !== now.getFullYear()) {
+    return t("{year}年{month}月{day}日 {time}", {
+      year: then.getFullYear(),
+      month: then.getMonth() + 1,
+      day: then.getDate(),
+      time,
+    });
+  }
   return t("{month}月{day}日 {time}", {
     month: then.getMonth() + 1,
     day: then.getDate(),
