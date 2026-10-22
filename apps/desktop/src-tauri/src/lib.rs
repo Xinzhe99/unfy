@@ -502,8 +502,14 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
     // Keep the whole window on the monitor it is being restored to. The overlap test
     // above only asks for a draggable strip; a saved position near the far edge would
     // otherwise leave most of the window past it.
-    let max_x = origin.x + bounds.width as i32 - width;
-    let max_y = origin.y + bounds.height as i32 - height;
+    //
+    // `set_position` places the *outer* top-left, so the limits use the outer size:
+    // subtracting the inner width instead put the right edge `frame.0` pixels past the
+    // screen - which is why the measured window sat at (16,39) rather than (0,0).
+    let outer_w = width + frame.0;
+    let outer_h = height + frame.1;
+    let max_x = origin.x + bounds.width as i32 - outer_w;
+    let max_y = origin.y + bounds.height as i32 - outer_h;
     let x = x.clamp(origin.x, max_x.max(origin.x));
     let y = y.clamp(origin.y, max_y.max(origin.y));
 
