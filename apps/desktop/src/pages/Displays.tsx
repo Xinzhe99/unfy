@@ -42,6 +42,11 @@ export function DisplaysPage({
   const weak = displays.find(
     (d) => d.native_id === target?.native_id && !d.restorable,
   );
+  // The saved target can be gone entirely - unplugged, or a virtual display whose
+  // driver stopped. The overview warns about that; this page did not, so a user who
+  // opened it to check "which screen am I targeting" saw a normal page and no hint
+  // that the answer was stale.
+  const targetGone = Boolean(target && !target.present);
 
   return (
     <>
@@ -65,6 +70,11 @@ export function DisplaysPage({
           disabled={busy}
         />
         <p className="mt-2.5 text-[11px] leading-relaxed text-[var(--color-muted)]">{t("卡片上的数字与「在屏幕上显示编号」时出现的一致，用远程画面里的数字对照即可。")}</p>
+        {targetGone ? (
+          <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-warning)]">
+            {t("保存的目标显示器已断开，整理时会改用主显示器。在下面重新选择一块屏即可恢复。")}
+          </p>
+        ) : null}
         {weak ? (
           <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-warning)]">{t("这块显示器的身份只能靠分辨率识别，恢复时会放回可见区域，而不是精确的原位置。")}</p>
         ) : null}

@@ -218,6 +218,8 @@ const EN: Record<string, string> = {
   "使用中": "In use",
   "卡片上的数字与「在屏幕上显示编号」时出现的一致，用远程画面里的数字对照即可。":
     "The numbers on these cards match the ones shown on the screens, so you can compare them against the remote view.",
+  "保存的目标显示器已断开，整理时会改用主显示器。在下面重新选择一块屏即可恢复。":
+    "The saved target display is disconnected; gathering will fall back to the primary. Pick a screen below to fix it.",
   "这块显示器的身份只能靠分辨率识别，恢复时会放回可见区域，而不是精确的原位置。":
     "This display is identified only by resolution, so a restore will place windows somewhere visible rather than exactly where they were.",
   "排列方式": "Arrangement",

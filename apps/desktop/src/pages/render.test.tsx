@@ -880,6 +880,25 @@ describe("pages render", () => {
     expect(html).toContain("全部排除");
   });
 
+  test("the displays page warns when the saved target is gone", () => {
+    // The overview has warned about this for a while; this page did not, so opening it
+    // to check "which screen am I targeting" showed a normal page and a stale answer.
+    const html = renderToStaticMarkup(
+      <DisplaysPage
+        displays={displays}
+        settings={settings}
+        target={{ native_id: "GONE", label: "DISPLAY9", present: false, number: 3 }}
+        thumbnails={{}}
+        busy={false}
+        onSelect={noop}
+        onIdentify={noop}
+        onCycle={noop}
+        onSave={noop}
+      />,
+    );
+    expect(html).toContain("保存的目标显示器已断开");
+  });
+
   test("displays page", () => {
     const html = renderToStaticMarkup(
       <DisplaysPage
