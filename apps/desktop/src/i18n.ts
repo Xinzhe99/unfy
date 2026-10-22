@@ -138,6 +138,7 @@ const EN: Record<string, string> = {
   "布局": "Layout",
   "远程检测": "Remote detection",
   "已关闭": "Off",
+  "监视中（已暂停，不会自动操作）": "Watching (paused, no automation)",
   "监视中（{level}）": "Watching ({level})",
   "监视中（{level}，未启用自动操作）":
     "Watching ({level}, automation off)",

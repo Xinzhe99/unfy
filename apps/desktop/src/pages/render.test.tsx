@@ -954,6 +954,41 @@ describe("pages render", () => {
     expect(html).toContain("1 条规则");
   });
 
+  test("the detection row does not say watching while automation is paused", () => {
+    // The badge above says paused; the row used to keep saying "监视中（均衡）", which
+    // reads as two different answers to the same question. Pausing stops the
+    // automation, not the detector, so the row has to say both things.
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={{ ...status, paused: true }}
+        settings={{ ...settings, auto_detect: "balanced", auto_gather: true }}
+        preview={preview}
+        displays={displays}
+        activity={activity}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        diagnosticsPreview={null}
+        onPreviewDiagnostics={noop}
+        onOpenConfigDir={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+        pendingApps={[]}
+      />,
+    );
+    expect(html).toContain("已暂停");
+    expect(html).not.toContain("监视中（均衡）");
+  });
+
   test("the overview does not claim ready before the first status arrives", () => {
     // `state` falls back to "idle" while `status` is null, which used to render a green
     // ready badge before the page had asked the engine anything. The sidebar had the

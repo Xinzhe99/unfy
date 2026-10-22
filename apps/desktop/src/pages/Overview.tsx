@@ -182,7 +182,7 @@ export function OverviewPage({
                 ? settings.remote_evidence
                   ? renderMessage(settings.remote_evidence)
                   : t("已检测到")
-                : detectStatusLabel(settings)
+                : detectStatusLabel(settings, paused)
             }
             muted={!settings?.remote_active}
           />
@@ -620,9 +620,14 @@ function relativeTime(at: number): string {
   });
 }
 
-function detectStatusLabel(settings: SettingsDto | null): string {
+function detectStatusLabel(settings: SettingsDto | null, paused: boolean): string {
   if (!settings) return "—";
   if (settings.auto_detect === "off") return t("已关闭");
+  if (paused) return t("监视中（已暂停，不会自动操作）");
+  // Paused stops the automation, not the detector: the row would otherwise say
+  // "watching (balanced)" while the badge above says paused, which reads as two
+  // different answers to the same question.
+
   const level = t(
     settings.auto_detect === "conservative"
       ? "保守"
