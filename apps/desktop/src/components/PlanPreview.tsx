@@ -11,6 +11,16 @@ import { skipLabel } from "../api";
  * cascade because the screen is too small, the preview has to show overlapping
  * rectangles rather than a tidy grid.
  */
+/**
+ * Smallest cell, in work-area pixels, that still gets a label.
+ *
+ * At 1920 wide a grid cell for fifty windows is roughly 260x130; the label needs about
+ * 11 px of height to read, and a cell under this threshold cannot hold even that once
+ * the text is scaled down. Measured from the fifty-seven-window case that turned the
+ * preview into a smear.
+ */
+const MIN_LABEL_CELL = 96;
+
 export function PlanPreview({ preview }: { preview: PreviewDto }) {
   const work = preview.target_work;
   const placed = preview.placements.length;
@@ -89,6 +99,14 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
                 strokeWidth={Math.max(2, work.width * 0.0025)}
                 strokeDasharray={placement.clamped ? "8 6" : undefined}
               />
+              {/* The label is sized against the cell, not the work area. It used to
+                  use `work.width * 0.028`, which is 54 px on a 1920-wide screen
+                  regardless of how many windows there are - so fifty-seven cells drew
+                  fifty-seven 54 px labels into a few hundred pixels and the preview
+                  became a grey smear. Below a legible threshold the labels are dropped
+                  and the rectangles speak for themselves; the `<title>` still names
+                  every window on hover. */}
+              {placement.rect.height >= MIN_LABEL_CELL && placement.rect.width >= MIN_LABEL_CELL ? (
               <text
                 x={placement.rect.left + placement.rect.width / 2}
                 // A squeezed window is drawn larger than its cell and therefore
@@ -105,7 +123,10 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
                 }
                 textAnchor="middle"
                 dominantBaseline={placement.clamped ? "auto" : "central"}
-                fontSize={Math.max(work.width * 0.028, 10)}
+                fontSize={Math.max(
+                  10,
+                  Math.min(placement.rect.width, placement.rect.height) * 0.22,
+                )}
                 fill="var(--color-fg-soft)"
                 fontFamily="inherit"
                 // A squeezed rectangle is drawn over its neighbours, so two labels
@@ -126,6 +147,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
                     bug. */}
                 {label(placement.app_name, index, duplicates)}
               </text>
+              ) : null}
             </g>
           ))}
         </svg>
