@@ -203,6 +203,16 @@ export function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
+      // Only the selected option changes when disabled: it drops from `fg` to
+      // `muted`. Unselected options are muted already and stay as they are.
+      //
+      // Fading the whole group was the obvious move and the wrong one - muted text
+      // on this surface is 5.44:1, and 60 % opacity drops it to 2.71:1, under the
+      // floor. The border is already the faintest token in the palette, so there is
+      // no dimmer-but-legal state to reach for. The result is that a disabled group
+      // reads as "the current choice is inactive" rather than "the whole control is
+      // unavailable"; `disabled` still blocks the click, and `busy` lasts about
+      // 11 ms, so this is a smaller problem than an unreadable label would be.
       className="inline-flex rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-[2px]"
     >
       {options.map((option) => {
@@ -217,7 +227,9 @@ export function Segmented<T extends string>({
             onClick={() => onChange(option.value)}
             className={`rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors ${
               active
-                ? "bg-[var(--color-surface)] text-[var(--color-fg)] shadow-sm"
+                ? `bg-[var(--color-surface)] shadow-sm ${
+                    disabled ? "text-[var(--color-muted)]" : "text-[var(--color-fg)]"
+                  }`
                 : "text-[var(--color-muted)] hover:text-[var(--color-fg-soft)]"
             }`}
           >
