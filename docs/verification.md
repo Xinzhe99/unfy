@@ -1402,6 +1402,14 @@ Orca 点击三种方式都试过，前台始终回到宿主进程），因此无
 `grid_puts_the_focused_window_first` 与 `preserve_order_ignores_focus` 两个单元测试固定，
 且从 `GetForegroundWindow` 到布局的链路已在代码层核对完整。
 
+### 两块同分辨率显示器被画成不同宽度（本轮目视）
+
+引导第 2 步的两块屏都是 1920×1080，卡片却明显不等宽——左窄右宽。原因不在区间计算
+（两列都是 1920），而在 CSS：裸 `Nfr` 等价于 `minmax(auto, Nfr)`，其自动最小值是该列的
+min-content 宽度。右侧卡片多一个「使用中」标签，min-content 更大，于是从邻列偷走了宽度。
+
+改为 `minmax(0, Nfr)`。实测：两卡各约 283px，等宽、比例一致。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |

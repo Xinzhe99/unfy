@@ -220,8 +220,14 @@ function relativeLayout(displays: DisplayDto[]) {
   const trackOf = (bandList: { start: number; end: number }[], at: number) =>
     bandList.findIndex((b) => at >= b.start && at < b.end);
 
+  // `minmax(0, Nfr)`, not bare `Nfr`: a bare `fr` is `minmax(auto, Nfr)`, whose
+  // automatic minimum is the track's min-content size. A caption that happens to be
+  // wider - "显示器 2（主）" plus the "使用中" label on the same row - then steals
+  // width from its neighbour, so two identical monitors rendered at different sizes.
   const template = (bandList: { start: number; end: number }[]) =>
-    bandList.map((b) => `${Math.max(1, Math.round(b.end - b.start))}fr`).join(" ");
+    bandList
+      .map((b) => `minmax(0, ${Math.max(1, Math.round(b.end - b.start))}fr)`)
+      .join(" ");
 
   return {
     columnTemplate: template(columns),
