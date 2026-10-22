@@ -268,7 +268,7 @@ export const api = {
   setPaused: (paused: boolean) => invoke<PauseDto>("set_paused", { paused }),
   hotkeyStatus: () => invoke<HotkeyStatusDto>("hotkey_status"),
   identifyDisplays: (seconds?: number) =>
-    invoke<boolean>("identify_displays", { seconds }),
+    invoke<IdentifyOutcome>("identify_displays", { seconds }),
   displayThumbnails: () =>
     invoke<DisplayThumbnailDto[]>("display_thumbnails"),
   runningApplications: () => invoke<AppDto[]>("running_applications"),
@@ -318,6 +318,9 @@ export const stateLabels: Record<EngineStateName, string> = {
 };
 
 /** Skip reasons, as catalogue keys. `skipLabel` translates them. */
+/** Result of asking for the numbered badges on each display. */
+export type IdentifyOutcome = "shown" | "already_showing" | "unavailable";
+
 export const skipLabels: Record<string, string> = {
   invisible: "不可见",
   fullscreen: "全屏",

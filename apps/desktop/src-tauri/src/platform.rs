@@ -117,16 +117,31 @@ pub fn open_directory(path: &str) -> bool {
 /// physical screen is the remote client actually showing? The user sees "2" in
 /// the remote window and picks display 2. Without it, "choose the target
 /// display" is a guess based on resolution labels the remote view does not show.
-pub fn flash_display_labels(seconds: u64) -> bool {
+pub fn flash_display_labels(seconds: u64) -> FlashOutcome {
     #[cfg(target_os = "windows")]
     {
-        conflux_platform_win::flash_display_labels(seconds)
+        match conflux_platform_win::flash_display_labels(seconds) {
+            conflux_platform_win::FlashOutcome::Shown => FlashOutcome::Shown,
+            conflux_platform_win::FlashOutcome::AlreadyShowing => FlashOutcome::AlreadyShowing,
+            conflux_platform_win::FlashOutcome::Unavailable => FlashOutcome::Unavailable,
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = seconds;
-        false
+        // macOS has no badge overlay yet; saying "unavailable" is the truth, and
+        // the window tells the user the numbers cannot be shown rather than
+        // implying they were.
+        FlashOutcome::Unavailable
     }
+}
+
+/// Whether the numbered badges were drawn, are still on screen, or cannot be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlashOutcome {
+    Shown,
+    AlreadyShowing,
+    Unavailable,
 }
 
 /// Screenshot of one display.

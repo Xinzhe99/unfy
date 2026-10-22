@@ -44,21 +44,36 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 ///
 /// Returns `false` when a flash is already running or the display list cannot be
 /// read; the caller should treat that as "nothing shown" rather than an error.
-pub fn flash(seconds: u64) -> bool {
+/// Outcome of a request to draw the display numbers.
+///
+/// "Already showing" is not a failure: the badges are on screen and the user is
+/// asking again before they faded. Reporting it as an error sent people to check
+/// their monitors for a fault that did not exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlashOutcome {
+    /// Badges were created and are on screen.
+    Shown,
+    /// Badges from an earlier request are still visible; nothing was started.
+    AlreadyShowing,
+    /// No displays, or the topology could not be read.
+    Unavailable,
+}
+
+pub fn flash(seconds: u64) -> FlashOutcome {
     if ACTIVE.swap(true, Ordering::SeqCst) {
-        return false;
+        return FlashOutcome::AlreadyShowing;
     }
 
     let displays = match conflux_platform::DisplayProvider::topology(&crate::WinDisplays::new()) {
         Ok(displays) => displays,
         Err(_) => {
             ACTIVE.store(false, Ordering::SeqCst);
-            return false;
+            return FlashOutcome::Unavailable;
         }
     };
     if displays.is_empty() {
         ACTIVE.store(false, Ordering::SeqCst);
-        return false;
+        return FlashOutcome::Unavailable;
     }
 
     let seconds = seconds.clamp(1, 30);
@@ -86,7 +101,7 @@ pub fn flash(seconds: u64) -> bool {
         ACTIVE.store(false, Ordering::SeqCst);
     });
 
-    true
+    FlashOutcome::Shown
 }
 
 fn run_badge(bounds: conflux_domain::Rect, number: usize, seconds: u64, _active: Arc<AtomicBool>) {

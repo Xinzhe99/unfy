@@ -574,11 +574,16 @@ export default function App() {
           await run(() => api.setTargetDisplay(nativeId));
         }}
         onIdentify={() =>
-          void run(() => api.identifyDisplays(4), (shown) => ({
-            tone: shown ? "neutral" : "warning",
-            text: shown
-              ? t("已在每块屏幕上显示编号。")
-              : t("无法显示编号，请检查屏幕状态。"),
+          void run(() => api.identifyDisplays(4), (outcome) => ({
+            tone: outcome === "unavailable" ? "warning" : "neutral",
+            text:
+              outcome === "shown"
+                ? t("已在每块屏幕上显示编号。")
+                : outcome === "already_showing"
+                  ? // Asking twice inside the four seconds the badges live used to
+                    // report a failure and send people to check their monitors.
+                    t("编号正在显示，请对照屏幕确认。")
+                  : t("无法显示编号，请检查屏幕状态。"),
           }))
         }
         onSetDetect={async (level, auto) => {
@@ -939,11 +944,14 @@ export default function App() {
                   )
                 }
                 onIdentify={() =>
-                  void run(() => api.identifyDisplays(4), (shown) => ({
-                    tone: shown ? "neutral" : "warning",
-                    text: shown
-                      ? t("已在每块屏幕上显示编号。")
-                      : t("无法显示编号，请检查屏幕状态。"),
+                  void run(() => api.identifyDisplays(4), (outcome) => ({
+                    tone: outcome === "unavailable" ? "warning" : "neutral",
+                    text:
+                      outcome === "shown"
+                        ? t("已在每块屏幕上显示编号。")
+                        : outcome === "already_showing"
+                          ? t("编号正在显示，请对照屏幕确认。")
+                          : t("无法显示编号，请检查屏幕状态。"),
                   }))
                 }
                 onCycle={() =>

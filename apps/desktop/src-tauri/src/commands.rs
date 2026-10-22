@@ -2039,8 +2039,18 @@ pub fn hotkey_status(app: State<'_, AppState>) -> Result<HotkeyStatusDto, String
 /// Flash a numbered badge on every display so the user can identify which screen
 /// the remote client is showing.
 #[tauri::command]
-pub fn identify_displays(seconds: Option<u64>) -> bool {
-    platform::flash_display_labels(seconds.unwrap_or(4))
+/// Draw the display numbers.
+///
+/// Returns `"shown"`, `"already_showing"` or `"unavailable"` rather than a bool:
+/// pressing the button twice within the four seconds the badges live is a normal
+/// thing to do, and the old `false` told those users their screens had a problem.
+pub fn identify_displays(seconds: Option<u64>) -> String {
+    match platform::flash_display_labels(seconds.unwrap_or(4)) {
+        platform::FlashOutcome::Shown => "shown",
+        platform::FlashOutcome::AlreadyShowing => "already_showing",
+        platform::FlashOutcome::Unavailable => "unavailable",
+    }
+    .into()
 }
 
 #[derive(Debug, Serialize)]

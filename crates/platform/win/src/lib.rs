@@ -106,10 +106,11 @@ impl WindowBackend for WinPlatform {
 /// The badge is a borderless, click-through, topmost window per display. It is
 /// removed automatically, so it cannot be left behind even if the app crashes
 /// (the thread that owns it is detached and exits on its own timer).
-pub fn flash_display_labels(seconds: u64) -> bool {
+pub fn flash_display_labels(seconds: u64) -> crate::labels::FlashOutcome {
     crate::labels::flash(seconds)
 }
 
+pub use labels::FlashOutcome;
 pub use thumbnails::DisplayThumbnail;
 
 /// Capture a thumbnail of every display, for the display picker.

@@ -235,6 +235,7 @@ const EN: Record<string, string> = {
   "窗口间距": "Gap",
   "相邻窗口之间的距离": "Distance between neighbouring windows",
   "未检测到显示器。": "No displays detected.",
+  "编号正在显示，请对照屏幕确认。": "The numbers are on screen - check them against the remote view.",
   "已在每块屏幕上显示编号。": "Numbers are showing on every screen.",
   "无法显示编号，请检查屏幕状态。":
     "Could not show the numbers; check the display state.",
