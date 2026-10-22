@@ -30,6 +30,8 @@ export function ExclusionsPage({
   onNotice: (text: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  // Arming state for "clear every rule", which is destructive and irreversible.
+  const [clearArmed, setClearArmed] = useState(false);
 
   if (!settings) {
     return <p className="text-xs text-[var(--color-muted)]">{t("正在读取设置…")}</p>;
@@ -71,12 +73,35 @@ export function ExclusionsPage({
                 is present, styled like an action and does nothing is worse than no
                 control. */}
             {rules.length > 0 ? (
-              <Button
-                size="sm"
-                variant="quiet"
-                disabled={busy}
-                onClick={() => onSave({ excluded_apps: [] })}
-              >{t("清空规则")}</Button>
+              clearArmed ? (
+                <div className="flex shrink-0 gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={busy}
+                    onClick={() => {
+                      setClearArmed(false);
+                      onSave({ excluded_apps: [] });
+                    }}
+                  >{t("确认清空")}</Button>
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    disabled={busy}
+                    onClick={() => setClearArmed(false)}
+                  >{t("取消")}</Button>
+                </div>
+              ) : (
+                // Two-step, like the reset row and the history row. Clearing wipes
+                // every rule at once and cannot be undone, so a single click is out
+                // of line with the app's own standard for destructive actions.
+                <Button
+                  size="sm"
+                  variant="quiet"
+                  disabled={busy}
+                  onClick={() => setClearArmed(true)}
+                >{t("清空规则")}</Button>
+              )
             ) : null}
           </div>
         }

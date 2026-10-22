@@ -259,6 +259,7 @@ const EN: Record<string, string> = {
   "正在运行": "Running now",
   "从当前有窗口的应用中选择，避免手写文件名出错。":
     "Pick from the applications that currently own a window, instead of typing a name.",
+  "确认清空": "Clear all",
   "清空规则": "Clear rules",
   "没有检测到有窗口的应用。应用打开后回到这一页会自动刷新。":
     "No applications with windows right now. This page refreshes itself when you come back after opening one.",

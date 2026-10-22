@@ -901,6 +901,27 @@ describe("pages render", () => {
     expect(html).toContain("无法截取画面");
   });
 
+  test("clearing every rule asks first", () => {
+    // Clearing wipes the whole list at once and cannot be undone. The reset row and
+    // the history row both require a second click; this one used to fire on the
+    // first, which is out of line with the app's own standard.
+    //
+    // `renderToStaticMarkup` cannot click, so this only pins the unarmed state: the
+    // button says 清空规则 and no confirmation is on screen until something arms it.
+    // The click path itself was checked in the running window.
+    const html = renderToStaticMarkup(
+      <ExclusionsPage
+        settings={{ ...settings, excluded_apps: ["msedge.exe", "notepad.exe"] }}
+        runningApps={apps}
+        busy={false}
+        onSave={noop}
+        onNotice={noop}
+      />,
+    );
+    expect(html).toContain("清空规则");
+    expect(html).not.toContain("确认清空");
+  });
+
   test("exclusions page with running apps", () => {
     const html = renderToStaticMarkup(
       <ExclusionsPage
@@ -908,6 +929,7 @@ describe("pages render", () => {
         runningApps={apps}
         busy={false}
         onSave={noop}
+        onNotice={noop}
       />,
     );
     expect(html).toContain("msedge.exe");
@@ -1249,6 +1271,7 @@ describe("English mode", () => {
             runningApps={apps}
             busy={false}
             onSave={noop}
+            onNotice={noop}
           />,
         ),
     ],
