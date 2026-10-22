@@ -29,6 +29,7 @@ export function GeneralPage({
   onCheckUpdate,
   onReset,
   onShowGuide,
+  onClearHistory,
 }: {
   settings: SettingsDto | null;
   hotkeys: HotkeyStatusDto | null;
@@ -41,10 +42,15 @@ export function GeneralPage({
   onReset: () => void;
   /** Walk through the first-run guide again. */
   onShowGuide: () => void;
+  /** Forget the activity history (spec P0-15: it is the user's record to erase). */
+  onClearHistory: () => void;
 }) {
   // The reset row is the one destructive action in the app; arming it is local
   // state so a stray click cannot wipe a configuration built over weeks.
   const [resetArmed, setResetArmed] = useState(false);
+  // Same two-step as the reset row: erasing the history is not destructive to the
+  // configuration, but it is not undoable either.
+  const [historyArmed, setHistoryArmed] = useState(false);
 
   if (!settings) {
     return <p className="text-xs text-[var(--color-muted)]">{t("正在读取设置…")}</p>;
@@ -436,6 +442,43 @@ export function GeneralPage({
             label={t("使用统计")}
             onChange={(telemetry) => onSave({ telemetry })}
           />
+        </SettingRow>
+
+        <div className="border-t border-[var(--color-border)]" />
+
+        <SettingRow
+          label={t("活动历史")}
+          hint={t("记录了每次整理、恢复与救援的时间与窗口数量。清除后无法恢复，其他设置不受影响")}
+        >
+          <div className="flex items-center gap-1.5">
+            {historyArmed ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => {
+                    onClearHistory();
+                    setHistoryArmed(false);
+                  }}
+                  disabled={busy}
+                >
+                  {t("确认清除")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="quiet"
+                  disabled={busy}
+                  onClick={() => setHistoryArmed(false)}
+                >
+                  {t("取消")}
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" onClick={() => setHistoryArmed(true)} disabled={busy}>
+                {t("清除历史")}
+              </Button>
+            )}
+          </div>
         </SettingRow>
       </Card>
     </>

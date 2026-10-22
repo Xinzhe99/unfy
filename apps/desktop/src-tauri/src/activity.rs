@@ -97,6 +97,16 @@ impl Activity {
         &self.entries
     }
 
+    /// Forget every entry, on disk as well as in memory.
+    ///
+    /// The history says what this tool did to the user's windows. That is the user's
+    /// own record, and they are entitled to erase it - the same reason the diagnostics
+    /// bundle is previewable.
+    pub fn clear(&mut self) -> Result<(), std::io::Error> {
+        self.entries.clear();
+        self.rewrite()
+    }
+
     /// Append one entry, newest last, and persist.
     pub fn record(&mut self, entry: Entry) {
         self.entries.push(entry);
@@ -301,5 +311,42 @@ mod diagnostics_privacy_tests {
         }
         assert!(json.contains("\"affected\":3"));
         assert!(json.contains("\"kind\":\"gather\""));
+    }
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn clearing_empties_memory_and_disk() {
+        let dir = std::env::temp_dir().join(format!("conflux-activity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("activity.jsonl");
+
+        let mut log = Activity::load(&path);
+        log.record(Entry {
+            at: 1,
+            kind: Kind::Gather,
+            affected: 3,
+            unsettled: 0,
+            note: None,
+            trigger: "window".into(),
+        });
+        assert_eq!(log.entries().len(), 1);
+        assert!(std::fs::metadata(&path)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false));
+
+        log.clear().expect("clear");
+
+        // A reopened log reads nothing back: the file was emptied, not just the copy
+        // in memory, or the next launch would show the history the user deleted.
+        assert!(log.entries().is_empty());
+        let reloaded = Activity::load(&path);
+        assert!(reloaded.entries().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

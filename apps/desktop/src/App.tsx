@@ -945,6 +945,12 @@ export default function App() {
                 updateStatus={updateStatus}
                 busy={busy}
                 onSave={(patch) => void saveSettings(patch)}
+                onClearHistory={() =>
+                  void run(
+                    () => api.clearActivity(),
+                    () => ({ tone: "neutral", text: t("活动历史已清除。") }),
+                  )
+                }
                 onShowGuide={() =>
                   void run(
                     async () => {

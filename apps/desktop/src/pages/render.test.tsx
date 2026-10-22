@@ -835,6 +835,7 @@ describe("pages render", () => {
         onCheckUpdate={noop}
         onReset={noop}
         onShowGuide={noop}
+        onClearHistory={noop}
       />,
     );
     expect(configured).toContain("已配置更新源");
@@ -861,6 +862,7 @@ describe("pages render", () => {
         onCheckUpdate={noop}
         onReset={noop}
         onShowGuide={noop}
+        onClearHistory={noop}
       />,
     );
     expect(unconfigured).toContain("未配置更新源");
@@ -1082,6 +1084,8 @@ describe("English mode", () => {
             onCheckUpdate={noop}
             onReset={noop}
             onShowGuide={noop}
+            onClearHistory={noop}
+        onClearHistory={noop}
           />,
         ),
     ],
@@ -1393,6 +1397,8 @@ describe("English mode", () => {
             onCheckUpdate={noop}
             onReset={noop}
             onShowGuide={noop}
+            onClearHistory={noop}
+        onClearHistory={noop}
           />,
         ),
     ],
@@ -1417,6 +1423,8 @@ describe("English mode", () => {
             onCheckUpdate={noop}
             onReset={noop}
             onShowGuide={noop}
+            onClearHistory={noop}
+        onClearHistory={noop}
           />,
         ),
     ],

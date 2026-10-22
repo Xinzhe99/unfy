@@ -327,6 +327,7 @@ pub fn run() {
             commands::running_applications,
             commands::identify_displays,
             commands::activity_log,
+            commands::clear_activity,
             commands::health_check,
             commands::keep_current_layout,
             commands::dismiss_last_error,

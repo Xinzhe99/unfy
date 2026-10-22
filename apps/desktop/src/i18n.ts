@@ -486,6 +486,11 @@ const EN: Record<string, string> = {
     "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
   "已结束远程会话标记。": "Remote-session marker cleared.",
   "用户": "User",
+  "活动历史": "Activity history",
+  "记录了每次整理、恢复与救援的时间与窗口数量。清除后无法恢复，其他设置不受影响":
+    "Records the time and window count of every gather, restore and rescue. Clearing it cannot be undone; no other setting is affected",
+  "清除历史": "Clear history",
+  "活动历史已清除。": "Activity history cleared.",
   "虚线框的窗口比格子需要更大，会略微压到相邻窗口（{count} 个）":
     "Dashed windows need more room than their cell and will overlap their neighbours slightly ({count})",
   "：比它的格子需要更大，会压到相邻窗口":

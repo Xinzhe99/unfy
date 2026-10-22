@@ -1636,6 +1636,17 @@ pub struct ActivityEntryDto {
     pub trigger: String,
 }
 
+/// Forget the activity history.
+///
+/// Spec P0-15: the history is the user's own record of what this tool did to their
+/// windows, so they can erase it without resetting the rest of their configuration.
+#[tauri::command]
+pub fn clear_activity(app: State<'_, AppState>) -> Result<(), String> {
+    let activity = app.activity.clone();
+    let mut log = activity.lock().map_err(|e| e.to_string())?;
+    log.clear().map_err(|e| e.to_string())
+}
+
 /// Recent history, newest first, for the overview.
 #[tauri::command]
 pub fn activity_log(app: State<'_, AppState>) -> Vec<ActivityEntryDto> {
