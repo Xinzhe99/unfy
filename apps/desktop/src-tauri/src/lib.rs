@@ -459,10 +459,8 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
 
     let bounds = monitor.size();
     let origin = monitor.position();
-    // `width`/`height` are inner sizes - `set_size` calls `set_inner_size` - so clamping
-    // them to the monitor makes the *outer* window 16x39 larger than the screen. Leave
-    // room for the frame: the difference between the outer and inner size is exactly the
-    // border, and it is measured rather than assumed.
+    // The border the window adds around its content. Measured rather than assumed: it is
+    // 16x39 on this machine but differs with theme and DPI.
     let frame = window
         .outer_size()
         .ok()
@@ -474,47 +472,65 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
             )
         })
         .unwrap_or((0, 0));
-    // Never go below the window's own minimum: on a display smaller than that - an
-    // 800x600 virtual screen, a headless RDP session - the upper clamp alone would ask
-    // for a size the window refuses, and the two constraints fight. A window slightly
-    // too large for such a screen is the lesser problem, and the position clamp below
-    // still keeps its title bar reachable.
-    //
-    // The minimum is read from the same config the window was built from, so changing
+    // The minimum comes from the same config the window was built from, so changing
     // `minWidth` in tauri.conf.json cannot leave this function behind.
     let config = app.config();
     let window_cfg = config.app.windows.first();
-    let min_w = window_cfg
-        .and_then(|w| w.min_width)
-        .map(|v| v as i32)
-        .unwrap_or(0);
-    let min_h = window_cfg
-        .and_then(|w| w.min_height)
-        .map(|v| v as i32)
-        .unwrap_or(0);
-    let width = width
-        .min(bounds.width as i32 - frame.0)
-        .max(min_w.min(bounds.width as i32 - frame.0));
-    let height = height
-        .min(bounds.height as i32 - frame.1)
-        .max(min_h.min(bounds.height as i32 - frame.1));
+    let minimum = (
+        window_cfg.and_then(|w| w.min_width).map(|v| v as i32).unwrap_or(0),
+        window_cfg
+            .and_then(|w| w.min_height)
+            .map(|v| v as i32)
+            .unwrap_or(0),
+    );
 
-    // Keep the whole window on the monitor it is being restored to. The overlap test
-    // above only asks for a draggable strip; a saved position near the far edge would
-    // otherwise leave most of the window past it.
-    //
-    // `set_position` places the *outer* top-left, so the limits use the outer size:
-    // subtracting the inner width instead put the right edge `frame.0` pixels past the
-    // screen - which is why the measured window sat at (16,39) rather than (0,0).
-    let outer_w = width + frame.0;
-    let outer_h = height + frame.1;
-    let max_x = origin.x + bounds.width as i32 - outer_w;
-    let max_y = origin.y + bounds.height as i32 - outer_h;
-    let x = x.clamp(origin.x, max_x.max(origin.x));
-    let y = y.clamp(origin.y, max_y.max(origin.y));
+    let (x, y, width, height) = clamp_to_monitor(
+        (x, y, width, height),
+        (origin.x, origin.y),
+        (bounds.width as i32, bounds.height as i32),
+        frame,
+        minimum,
+    );
 
     let _ = window.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// Where a restored window should land, given the saved geometry and the monitor.
+///
+/// Pure so the four constraints can be tested without a window: the size must fit the
+/// monitor's inner area, must not drop below the window's own minimum, and the position
+/// must keep the *outer* frame on screen. Each of those was found separately by measuring
+/// a running window, which is why they are all in one place now.
+///
+/// `frame` is the outer-minus-inner difference: the border the window adds around its
+/// content. `bounds` is the monitor's size, `origin` its top-left corner.
+fn clamp_to_monitor(
+    saved: (i32, i32, i32, i32),
+    origin: (i32, i32),
+    bounds: (i32, i32),
+    frame: (i32, i32),
+    minimum: (i32, i32),
+) -> (i32, i32, i32, i32) {
+    let (x, y, width, height) = saved;
+    let (ox, oy) = origin;
+    let (bw, bh) = bounds;
+    let (fw, fh) = frame;
+    let (min_w, min_h) = minimum;
+
+    let room_w = bw - fw;
+    let room_h = bh - fh;
+    // Upper bound first, then the floor: on a monitor smaller than the minimum the two
+    // would otherwise fight, and a window slightly too large is the lesser problem.
+    let width = width.min(room_w).max(min_w.min(room_w));
+    let height = height.min(room_h).max(min_h.min(room_h));
+
+    // `set_position` places the outer top-left, so the limits use the outer size.
+    let max_x = ox + bw - (width + fw);
+    let max_y = oy + bh - (height + fh);
+    let x = x.clamp(ox, max_x.max(ox));
+    let y = y.clamp(oy, max_y.max(oy));
+    (x, y, width, height)
 }
 
 /// Remember the window's size and position.
@@ -762,6 +778,69 @@ mod lock_order {
             "these call a locking function while holding a guard: \n{}",
             offenders.join("\n")
         );
+    }
+}
+
+#[cfg(test)]
+mod geometry {
+    //! Window placement constraints.
+    //!
+    //! Each of these was found separately by measuring a running window across four
+    //! rounds - the size overflowing a smaller screen, the frame not being subtracted,
+    //! the missing floor, and the position clamp using the inner size. They are pure
+    //! arithmetic, so all four can be pinned without a window.
+
+    use super::clamp_to_monitor;
+
+    const SCREEN: ((i32, i32), (i32, i32)) = ((0, 0), (1920, 1080));
+    const FRAME: (i32, i32) = (16, 39);
+    const MIN: (i32, i32) = (720, 520);
+
+    #[test]
+    fn a_window_larger_than_the_screen_is_shrunk() {
+        // A 4K-sized window reopened on a laptop panel.
+        let (_, _, w, h) = clamp_to_monitor((100, 100, 4000, 2200), SCREEN.0, SCREEN.1, FRAME, MIN);
+        assert_eq!((w, h), (1920 - 16, 1080 - 39));
+    }
+
+    #[test]
+    fn the_outer_frame_stays_on_screen() {
+        // The position clamp has to account for the border: using the inner size left the
+        // right edge 16 px past the screen, which is where the measured (16,39) came from.
+        let (x, y, w, h) = clamp_to_monitor((100, 100, 4000, 2200), SCREEN.0, SCREEN.1, FRAME, MIN);
+        assert_eq!((x, y), (0, 0));
+        assert!(x + w + FRAME.0 <= 1920);
+        assert!(y + h + FRAME.1 <= 1080);
+    }
+
+    #[test]
+    fn a_small_window_keeps_its_size_and_position() {
+        let got = clamp_to_monitor((504, 161, 896, 679), SCREEN.0, SCREEN.1, FRAME, MIN);
+        assert_eq!(got, (504, 161, 896, 679));
+    }
+
+    #[test]
+    fn the_minimum_wins_over_a_tiny_screen() {
+        // 800x600 leaves 784x561 of inner room, below the 720x520 minimum only in width.
+        // The floor wins: asking for less than the minimum makes the two constraints
+        // fight, and a window slightly too large is the lesser problem.
+        let (_, _, w, h) = clamp_to_monitor((0, 0, 100, 100), (0, 0), (800, 600), FRAME, MIN);
+        assert_eq!((w, h), (720, 520));
+    }
+
+    #[test]
+    fn a_window_on_a_second_monitor_uses_that_monitors_origin() {
+        // The second screen here starts at x = -1920.
+        let (x, y, w, h) = clamp_to_monitor(
+            (-3000, -500, 1000, 800),
+            (-1920, -78),
+            (1920, 1080),
+            FRAME,
+            MIN,
+        );
+        assert_eq!((x, y), (-1920, -78));
+        assert!(x + w + FRAME.0 <= 0);
+        assert!(y + h + FRAME.1 <= -78 + 1080);
     }
 }
 
