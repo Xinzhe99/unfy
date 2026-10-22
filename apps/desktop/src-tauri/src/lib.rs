@@ -314,6 +314,7 @@ pub fn run() {
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::identify_displays,
             commands::list_displays,
             commands::preview,
             commands::migrate,
@@ -335,7 +336,6 @@ pub fn run() {
             commands::hotkey_status,
             commands::display_thumbnails,
             commands::running_applications,
-            commands::identify_displays,
             commands::activity_log,
             commands::clear_activity,
             commands::health_check,

@@ -210,6 +210,28 @@ describe("coverage", () => {
     expect([...frontend].filter((e) => !backend.has(e))).toEqual([]);
   });
 
+  /**
+   * Every command the window invokes must be registered, and vice versa.
+   *
+   * A missing registration is a button that throws "command not found" the moment it is
+   * pressed; a registered command nobody calls is dead surface. Both are invisible to the
+   * compiler because the name is a string on one side and an identifier on the other.
+   */
+  test("the window and the backend agree on every command", () => {
+    const root = `${import.meta.dir}/..`;
+    const api = readFileSync(`${root}/api.ts`, "utf8");
+    const invoked = new Set(
+      [...api.matchAll(/invoke(?:<[^>]*>)?\("([a-z_]+)"/g)].map((m) => m[1]!),
+    );
+    const lib = readFileSync(`${root}/../src-tauri/src/lib.rs`, "utf8");
+    const block = lib.split("tauri::generate_handler![")[1]?.split("]")[0] ?? "";
+    const registered = new Set([...block.matchAll(/commands::(\w+)/g)].map((m) => m[1]!));
+
+    expect(registered.size).toBeGreaterThan(20);
+    expect([...invoked].filter((c) => !registered.has(c))).toEqual([]);
+    expect([...registered].filter((c) => !invoked.has(c))).toEqual([]);
+  });
+
   test("every Chinese literal in the UI has an English entry", () => {
     // Reads the source rather than the catalogue so a new hardcoded string is
     // caught even if nobody remembers to add it to the dictionary.

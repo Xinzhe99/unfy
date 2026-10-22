@@ -2682,6 +2682,20 @@ guard 活到块末，而 `state` 更早被 drop。改用 `let ... = match ...` �
 新增 `every backend event has a listener and every listener an event`：两侧事件集合必须相同。
 注入一个 `conflux://orphan-event` 后测试精确报出。
 
+### 命令名的两侧对齐（本轮，已加测试）
+
+沿着上一轮"事件名两侧对齐"的思路，检查了 Tauri 命令：前端 `invoke("name")` 的字符串与后端
+`generate_handler!` 里的标识符。
+
+结果 **32 对 32，完全对齐**，没有缺陷。但两侧都是字符串/标识符，编译器管不到：
+漏注册是「点了就报 command not found」，多注册是死代码。
+
+新增 `the window and the backend agree on every command`。从前端删掉一个注册后，测试报出
+`identify_displays`。
+
+（过程中我的第一次统计漏了 `identify_displays`——正则要求 `#[tauri::command]` 紧跟 `pub fn`，
+而它中间隔着文档注释。改为从 `generate_handler!` 列表提取才是权威来源。）
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
