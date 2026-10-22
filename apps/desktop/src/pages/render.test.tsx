@@ -935,6 +935,41 @@ describe("pages render", () => {
     expect(html).toContain("1 条规则");
   });
 
+  test("the overview does not claim ready before the first status arrives", () => {
+    // `state` falls back to "idle" while `status` is null, which used to render a green
+    // ready badge before the page had asked the engine anything. The sidebar had the
+    // same guard already; the badge did not.
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={null}
+        settings={settings}
+        preview={null}
+        displays={[]}
+        activity={[]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        diagnosticsPreview={null}
+        onPreviewDiagnostics={noop}
+        onOpenConfigDir={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+        pendingApps={[]}
+      />,
+    );
+    expect(html).toContain("正在载入…");
+    expect(html).not.toContain(">就绪<");
+  });
+
   test("a recovered settings file is announced, not silently replaced", () => {
     // Falling back to defaults without a word leaves the user staring at an
     // onboarding guide they already finished, with every rule and shortcut gone -

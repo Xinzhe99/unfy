@@ -149,7 +149,7 @@ export function OverviewPage({
             // open; this is the same mistake at the other end of the lifecycle.
             // Normally invisible, because the answer arrives within a frame - but on a
             // slow disk or a scanned executable it is the first thing the user reads.
-            <Status tone="neutral">{t("正在读取…")}</Status>
+            <Status tone="neutral">{t("正在载入…")}</Status>
           ) : (
             <Status tone="success">{t("就绪")}</Status>
           )
