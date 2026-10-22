@@ -224,12 +224,12 @@ const EN: Record<string, string> = {
   "这块显示器的身份只能靠分辨率识别，恢复时会放回可见区域，而不是精确的原位置。":
     "This display is identified only by resolution, so a restore will place windows somewhere visible rather than exactly where they were.",
   "排列方式": "Arrangement",
-  "等分排列，列数按窗口数量自动选择。":
-    "Even grid; the column count follows the number of windows.",
+  "等分排列，列数按窗口数量自动选择；焦点窗口放第一格。":
+    "Even grid; the column count follows the number of windows, and the focused window takes the first cell.",
   "焦点窗口占主区域，其余在侧栏排列。":
     "The focused window takes the main area; the rest fill a side column.",
-  "按原屏幕上的位置顺序依次放入。":
-    "Windows are placed in the order they occupied on their original screens.",
+  "按原屏幕上的位置顺序依次放入，不受焦点影响。":
+    "Windows are placed in the order they occupied on their original screens, whatever has focus.",
   "布局方式": "Arrangement",
   "网格": "Grid",
   "主次": "Main + side",

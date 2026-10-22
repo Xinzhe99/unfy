@@ -122,9 +122,9 @@ function layoutDescription(mode: SettingsDto["layout_mode"]): string {
     case "primary_side":
       return t("焦点窗口占主区域，其余在侧栏排列。");
     case "preserve_order":
-      return t("按原屏幕上的位置顺序依次放入。");
+      return t("按原屏幕上的位置顺序依次放入，不受焦点影响。");
     default:
-      return t("等分排列，列数按窗口数量自动选择。");
+      return t("等分排列，列数按窗口数量自动选择；焦点窗口放第一格。");
   }
 }
 

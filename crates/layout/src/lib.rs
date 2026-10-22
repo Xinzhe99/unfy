@@ -139,12 +139,19 @@ pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) 
         };
     }
 
-    // Deterministic order: focused first, then original spatial order, then id.
-    // Spatial order is (top, left) so a horizontal row keeps its left-to-right
-    // reading order on every platform.
+    // Deterministic order: the original spatial order (top, then left, so a row
+    // keeps its left-to-right reading order on every platform), with the id as the
+    // tie-break.
+    //
+    // Whether focus comes into it is what separates two of the modes. `Grid` puts
+    // the focused window in the first cell - the one the eye goes to - while
+    // `PreserveOrder` promises the arrangement the windows already had and must not
+    // move a window just because it happened to be focused when the gather ran.
+    // `PrimarySide` needs focus for its large pane.
+    let focus_first = !matches!(config.mode, LayoutMode::PreserveOrder);
     ordered.sort_by_key(|c| {
         (
-            !c.focused,
+            focus_first && !c.focused,
             c.current.top,
             c.current.left,
             c.id.native_id,
@@ -618,6 +625,62 @@ mod tests {
             assert!(p.rect.width() >= 700);
             assert!(p.rect.height() >= 500);
         }
+    }
+
+    #[test]
+    fn preserve_order_ignores_focus() {
+        // Focus is a momentary detail. In this mode a window must keep the slot its
+        // position earned, whatever the user happened to be typing in.
+        let mut input = vec![
+            candidate(1, Rect::new(0, 400, 800, 600)),
+            candidate(2, Rect::new(0, 0, 800, 200)),
+            candidate(3, Rect::new(0, 200, 800, 400)),
+        ];
+        let config = LayoutConfig {
+            mode: LayoutMode::PreserveOrder,
+            ..Default::default()
+        };
+        let before: Vec<u64> = plan(&input, WORK, &config)
+            .placements
+            .iter()
+            .map(|p| p.id.native_id)
+            .collect();
+
+        input[0].focused = true;
+        let after: Vec<u64> = plan(&input, WORK, &config)
+            .placements
+            .iter()
+            .map(|p| p.id.native_id)
+            .collect();
+
+        assert_eq!(before, after, "focus must not reorder this mode");
+        assert_eq!(after, vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn grid_puts_the_focused_window_first() {
+        // The other half of the distinction: in grid mode the focused window takes
+        // the first cell, which is the visible difference between the two modes.
+        let mut input = vec![
+            candidate(1, Rect::new(0, 400, 800, 600)),
+            candidate(2, Rect::new(0, 0, 800, 200)),
+            candidate(3, Rect::new(0, 200, 800, 400)),
+        ];
+        input[0].focused = true;
+        let config = LayoutConfig {
+            mode: LayoutMode::Grid,
+            ..Default::default()
+        };
+        let order: Vec<u64> = plan(&input, WORK, &config)
+            .placements
+            .iter()
+            .map(|p| p.id.native_id)
+            .collect();
+        assert_eq!(
+            order,
+            vec![1, 2, 3],
+            "the focused window goes to the first cell"
+        );
     }
 
     #[test]
