@@ -236,6 +236,51 @@ describe("pages render", () => {
     expect(html).toContain("整理到目标屏");
   });
 
+  test("an unknown activity kind still names what happened", () => {
+    // The kind table mirrors a Rust enum. A new variant there used to render as an
+    // empty label, because `t(undefined)` returns undefined and React draws nothing:
+    // the row read "· 5 个窗口" with no verb. The raw code is not pretty, but it says
+    // something and names the string that needs a translation.
+    const html = renderToStaticMarkup(
+      <OverviewPage
+        status={status}
+        settings={settings}
+        preview={preview}
+        displays={displays}
+        activity={[
+          {
+            at: 1761148800,
+            kind: "brand_new_kind",
+            affected: 5,
+            unsettled: 0,
+            note: null,
+            trigger: "window",
+          },
+        ]}
+        progress={null}
+        busy={false}
+        onPreview={noop}
+        onMigrate={noop}
+        onRestore={noop}
+        onPause={noop}
+        onRescue={noop}
+        onIdentify={noop}
+        onExport={noop}
+        diagnosticsPreview={null}
+        onPreviewDiagnostics={noop}
+        onOpenConfigDir={noop}
+        onOpenDisplays={noop}
+        onExclude={noop}
+        onKeepLayout={noop}
+        onDismissError={noop}
+        onToggleRemote={noop}
+        pendingApps={[]}
+      />,
+    );
+    expect(html).toContain("brand_new_kind");
+    expect(html).toContain("5 个窗口");
+  });
+
   test("overview with active layout, history and a lost target", () => {
     const html = renderToStaticMarkup(
       <OverviewPage

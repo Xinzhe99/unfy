@@ -532,18 +532,23 @@ export function targetDisplayName(
 }
 
 /** One line per history entry: what happened and how many windows it touched. */
+/** Human label for each activity kind the backend can send. */
+const ACTIVITY_KINDS: Record<string, string> = {
+  gather: "整理",
+  restore: "恢复",
+  rescue: "救援越界窗口",
+  auto_gather: "自动整理",
+  auto_restore: "自动恢复",
+  pause: "暂停状态变更",
+  keep_layout: "保留当前布局",
+};
+
 function activityLabel(entry: ActivityEntryDto): string {
-  const name = t(
-    {
-      gather: "整理",
-      restore: "恢复",
-      rescue: "救援越界窗口",
-      auto_gather: "自动整理",
-      auto_restore: "自动恢复",
-      pause: "暂停状态变更",
-      keep_layout: "保留当前布局",
-    }[entry.kind],
-  );
+  // `t(undefined)` returns undefined, which React renders as nothing - so a kind
+  // added on the Rust side without a line here produced a row reading "· 5 个窗口"
+  // with the verb missing. Showing the raw code is ugly but says what happened and
+  // names the string that needs a label.
+  const name = t(ACTIVITY_KINDS[entry.kind] ?? entry.kind);
   const trigger =
     entry.trigger === "hotkey"
       ? t("（快捷键）")

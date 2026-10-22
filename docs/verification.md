@@ -1901,6 +1901,20 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 
 验证后已还原 `activity.jsonl`（58 条）。
 
+### 未知活动类型会渲染成空白（本轮，已修并测试）
+
+`activityLabel` 的 kind 表与 Rust 的 `Kind` 枚举一一对应（7 个）。但如果后端新增一个变体，前端
+会执行 `t(undefined)`——实测返回 `undefined`，React 渲染为空，那一行就变成「· 5 个窗口」，
+动词消失。
+
+改为查表失败时显示原始 code：不好看，但说了发生了什么，也点名了需要补的那条文案。
+
+新增 `an unknown activity kind still names what happened`，验证去掉兜底它会失败
+（`Expected to contain: "brand_new_kind"`）。
+
+**一次自伤**：插入测试时我把新块放在了一个 `test(` 声明行之后，导致原测试缺少开头、文件末尾
+括号不闭合，测试数从 103 掉到 53。修好后恢复 104（103 + 新增 1）。
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
