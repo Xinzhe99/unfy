@@ -145,6 +145,11 @@ function NumberInput({
 }) {
   // Commit on blur, not per keystroke: each save rewrites the file, so typing "20"
   // would otherwise persist "2" first.
+  //
+  // The committed value is clamped, so the field has to show the clamped number:
+  // it used to keep whatever was typed, and typing 999 left "999" on screen while
+  // the setting held 200. Nothing else corrected it until the page was reloaded, so
+  // the number the user was looking at was not the number in effect.
   return (
     <div className="flex items-center gap-1.5">
       <input
@@ -154,10 +159,14 @@ function NumberInput({
         max={max}
         disabled={disabled}
         onBlur={(event) => {
-          const next = Number(event.currentTarget.value);
-          if (Number.isFinite(next) && next !== value) {
-            onCommit(Math.min(max, Math.max(min, Math.round(next))));
-          }
+          const typed = Number(event.currentTarget.value);
+          const next = Number.isFinite(typed)
+            ? Math.min(max, Math.max(min, Math.round(typed)))
+            : value;
+          // Always write back, even when nothing changed: an empty or malformed
+          // field would otherwise stay blank while a real value is in effect.
+          event.currentTarget.value = String(next);
+          if (next !== value) onCommit(next);
         }}
         className="h-7 w-16 rounded-[var(--radius-control)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 text-right text-xs tabular-nums outline-none focus:border-[var(--color-accent)]"
       />
