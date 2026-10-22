@@ -174,7 +174,18 @@ export function Onboarding({
         <span className="text-[13px] font-semibold tracking-tight">Conflux</span>
         <button
           type="button"
-          onClick={onFinish}
+          onClick={() => {
+            // Skipping is "stop explaining", not "discard what I already told you".
+            // The display picked on step two used to be thrown away unless the user
+            // pressed 下一步, so someone who chose the right screen and then skipped
+            // the rest ended up with the previous target - the guide's whole point
+            // undone by its own exit.
+            if (step === 1 && chosen) {
+              void onSelectTarget(chosen).then(onFinish);
+              return;
+            }
+            onFinish();
+          }}
           className="text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"
         >{t("跳过引导")}</button>
       </div>
