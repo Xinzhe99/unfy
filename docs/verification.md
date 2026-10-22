@@ -1847,6 +1847,28 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 
 删除时用 `toLowerCase()` 比较，所以不会因为大小写不同而残留一条规则。
 
+### 错误字符串的可达性（本轮）
+
+`humanError` 的 `default` 分支把未知错误原样显示。查了 Rust 侧会返回给界面的错误字符串：
+
+| 字符串 | 是否可达 | 结论 |
+|---|---|---|
+| `no_displays` / `no_displays_found` / `already_active` / `paused` / `restore_cancelled` | 是 | 已映射 |
+| `single_display` | **否** | 界面只在 `displays.length > 1` 时渲染该按钮，与后端的 `len() < 2` 一致 |
+| `path_outside_app_dirs` | **否** | `openPath` 的唯一调用方传 `undefined`，走配置目录分支 |
+| `unknown theme` / `unknown language` / `unknown layout_mode` / `unknown remote_screens` / `unknown detection level` | **否** | 由 TypeScript 类型约束的枚举值，前端传不出非法值 |
+
+为不可达的分支补映射是给不可能的情况堆代码，未改动。
+
+### 预览：又一次把"没滚到"当成缺陷
+
+点击「预览」后我用 `main.innerText.indexOf('布局预览')` 判断，读到 False，一度以为预览没渲染。直接调
+`preview` 命令返回 `placements: 4`，说明后端正常；再单独重跑并只打印四个布尔量，
+`HAS_PREVIEW=True`——预览是显示的。
+
+问题在于我那次把整段 `main.innerText` 打印出来，输出被长文本冲掉，读到了别的内容。**这是本轮
+第二次因为"读取方式"而不是"产品行为"得出错误结论。**
+
 ## 未验证
 
 | 项 | 原因 | 需要什么 |
