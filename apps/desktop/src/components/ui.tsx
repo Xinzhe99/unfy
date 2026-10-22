@@ -17,10 +17,11 @@ type Size = "sm" | "md";
 
 const variantClass: Record<Variant, string> = {
   primary:
-    "bg-[var(--color-accent)] text-[var(--color-accent-fg)] hover:bg-[var(--color-accent-hover)]",
+    "bg-[var(--color-accent)] text-[var(--color-accent-fg)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-accent-soft)] disabled:text-[var(--color-muted)]",
   secondary:
-    "border border-[var(--color-border-strong)] bg-[var(--color-surface)] text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)]",
-  quiet: "text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)]",
+    "border border-[var(--color-border-strong)] bg-[var(--color-surface)] text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)] disabled:text-[var(--color-muted)]",
+  quiet:
+    "text-[var(--color-fg-soft)] hover:bg-[var(--color-surface-sunken)] disabled:text-[var(--color-muted)]",
   danger:
     "border border-[var(--color-border-strong)] text-[var(--color-danger)] hover:bg-[var(--color-surface-hover)]",
 };
@@ -49,7 +50,13 @@ export function Button({
       type="button"
       {...rest}
       disabled={rest.disabled || loading}
-      className={`inline-flex select-none items-center justify-center whitespace-nowrap rounded-[var(--radius-control)] font-medium transition-colors disabled:pointer-events-none disabled:opacity-55 ${sizeClass[size]} ${variantClass[variant]} ${rest.className ?? ""}`}
+      // A disabled button states a fact ("not yet"), it is not a disabled control
+      // that vanished. Whole-element opacity made its label fade with the fill: at
+      // 55 % the guide's "back" button on step one measured about 2.9:1 against a
+      // dark surface, below the 4.5:1 floor, and read as missing rather than as
+      // unavailable. The fill is dimmed instead, and the label keeps the muted
+      // colour, which clears the floor in both themes.
+      className={`inline-flex select-none items-center justify-center whitespace-nowrap rounded-[var(--radius-control)] font-medium transition-colors disabled:pointer-events-none ${sizeClass[size]} ${variantClass[variant]} ${rest.className ?? ""}`}
     >
       {loading ? <Spinner /> : icon}
       {children}

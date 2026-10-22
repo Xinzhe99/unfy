@@ -80,7 +80,9 @@
   --conflux-dark-muted: oklch(0.63 0.008 265);
   /* A near-white primary button in dark mode reads as "disabled" next to the
      real disabled buttons, which are the same shape at 40 % opacity. A mid grey
-     keeps the fill distinct from the surface while staying monochrome. */
+     keeps the fill distinct from the surface while staying monochrome - and the
+     monochrome accent is a product decision (a blue one was rejected), so the
+     grey stands rather than gaining a hue to look more "primary". */
   --conflux-dark-accent: oklch(0.80 0.004 265);
   --conflux-dark-accent-hover: oklch(0.87 0.004 265);
   --conflux-dark-accent-fg: oklch(0.16 0.006 265);
