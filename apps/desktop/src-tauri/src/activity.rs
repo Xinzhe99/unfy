@@ -167,11 +167,25 @@ fn read_entries(path: &Path) -> Vec<Entry> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
-    let mut entries: Vec<Entry> = text
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
+    // Count what cannot be parsed instead of dropping it in silence. Entries are
+    // appended, never rewritten mid-file, so a line that fails here means the file
+    // was edited or damaged - and the window would otherwise show a shorter history
+    // than the user actually has, with nothing anywhere saying a row was lost.
+    let mut dropped = 0usize;
+    let mut entries: Vec<Entry> = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        match serde_json::from_str(line) {
+            Ok(entry) => entries.push(entry),
+            Err(_) => dropped += 1,
+        }
+    }
+    if dropped > 0 {
+        tracing::warn!(
+            dropped,
+            path = %path.display(),
+            "activity entries could not be read and were skipped"
+        );
+    }
     if entries.len() > MAX_ENTRIES {
         let excess = entries.len() - MAX_ENTRIES;
         entries.drain(..excess);
