@@ -51,7 +51,26 @@ export function ExclusionsPage({
       <Card
         title={t("排除的应用")}
         description={t("这些应用的窗口不会在整理时被移动，也不会在恢复时被处理。")}
-        aside={<span className="text-[11px] tabular-nums text-[var(--color-muted)]">{t("{count} 条规则", { count: rules.length })}</span>}
+        aside={
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] tabular-nums text-[var(--color-muted)]">
+              {t("{count} 条规则", { count: rules.length })}
+            </span>
+            {/* It clears this card's rules, so it belongs to this card - it sat on
+                the "running" card, where it read as "clear the list below". Hidden
+                rather than disabled when there is nothing to clear: a control that
+                is present, styled like an action and does nothing is worse than no
+                control. */}
+            {rules.length > 0 ? (
+              <Button
+                size="sm"
+                variant="quiet"
+                disabled={busy}
+                onClick={() => onSave({ excluded_apps: [] })}
+              >{t("清空规则")}</Button>
+            ) : null}
+          </div>
+        }
       >
         {rules.length === 0 ? (
           <p className="py-1 text-xs text-[var(--color-muted)]">{t("还没有排除任何应用。")}</p>
@@ -97,14 +116,6 @@ export function ExclusionsPage({
       <Card
         title={t("正在运行")}
         description={t("从当前有窗口的应用中选择，避免手写文件名出错。")}
-        aside={
-          <Button
-            size="sm"
-            variant="quiet"
-            disabled={busy || rules.length === 0}
-            onClick={() => onSave({ excluded_apps: [] })}
-          >{t("清空规则")}</Button>
-        }
       >
         {runningApps.length === 0 ? (
           <p className="py-1 text-xs text-[var(--color-muted)]">{t("没有检测到有窗口的应用。应用打开后回到这一页会自动刷新。")}</p>
