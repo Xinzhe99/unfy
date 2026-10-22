@@ -142,6 +142,14 @@ export function OverviewPage({
             </Status>
           ) : hasWork ? (
             <Status tone="live">{t("布局已启用")}</Status>
+          ) : status === null ? (
+            // Before the first status arrives, claiming the engine is ready is a
+            // statement the page cannot make: it has not asked yet. The comment above
+            // records the earlier version showing ready while a journal was still
+            // open; this is the same mistake at the other end of the lifecycle.
+            // Normally invisible, because the answer arrives within a frame - but on a
+            // slow disk or a scanned executable it is the first thing the user reads.
+            <Status tone="neutral">{t("正在读取…")}</Status>
           ) : (
             <Status tone="success">{t("就绪")}</Status>
           )

@@ -118,6 +118,7 @@ const EN: Record<string, string> = {
   "设置": "Settings",
   "使用": "Use",
   "主导航": "Main navigation",
+  "正在读取…": "Reading…",
   "就绪": "Ready",
   "正在计划": "Planning",
   "正在整理": "Gathering",
