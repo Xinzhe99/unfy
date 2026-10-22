@@ -31,6 +31,12 @@ pub enum FakeBehaviour {
     Vanishes,
     /// Never shrinks below `min_size`, but accepts any position.
     MinSize(u32, u32),
+    /// Takes the new size and keeps its own position.
+    ///
+    /// clash-verge on Windows behaves this way: it accepts `SetWindowPos`'s
+    /// dimensions but snaps back to the corner it pins itself to, so a gather that
+    /// cannot place it still changes what the user sees.
+    SizeOnly,
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +235,15 @@ impl WindowBackend for FakeBackend {
         w.applies += 1;
 
         let mut target = plan.visible_rect;
+        if w.behaviour == FakeBehaviour::SizeOnly {
+            // Keep the position it already had; take only the requested size.
+            target = Rect::new(
+                w.snapshot.visible_rect.left,
+                w.snapshot.visible_rect.top,
+                w.snapshot.visible_rect.left + plan.visible_rect.width(),
+                w.snapshot.visible_rect.top + plan.visible_rect.height(),
+            );
+        }
         if let FakeBehaviour::MinSize(min_w, min_h) = w.behaviour {
             let width = target.width().max(min_w as i32);
             let height = target.height().max(min_h as i32);

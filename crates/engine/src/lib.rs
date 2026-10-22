@@ -677,12 +677,15 @@ impl<B: Backend> Engine<B> {
 
         let t1 = std::time::Instant::now();
         // 1. Durable preimages for every window we are about to touch.
+        // One id, used for the filename and for every record inside it.
+        let transaction_id = uuid::Uuid::new_v4();
         let journal_path = self
             .config
             .journal_dir
-            .join(format!("{}.journal", uuid::Uuid::new_v4()));
-        let mut journal = Journal::begin(
+            .join(format!("{transaction_id}.journal"));
+        let mut journal = Journal::begin_named(
             &journal_path,
+            transaction_id,
             &format!(
                 "target={} displays={}",
                 preview.target.native_id,
@@ -1009,8 +1012,55 @@ impl<B: Backend> Engine<B> {
         }
     }
 
+    /// Put a rejected window back to the size it had before we touched it.
+    ///
+    /// A window that refuses the position often accepts the size: clash-verge pins
+    /// itself to the corner of the screen while still honouring `SetWindowPos`'s
+    /// dimensions, so a failed gather left it smaller or larger than the user had
+    /// it. A move we could not complete must not leave a visible change behind -
+    /// "it did not work" should look like nothing happened.
+    ///
+    /// Best effort: a window that refuses both is left alone, and the journal still
+    /// holds the original rectangle for the restore path.
+    fn revert_size(&self, id: &WindowId) {
+        let Some(preimage) = self.preimages.get(id) else {
+            return;
+        };
+        let Ok(observed) = self.backend.read_back(id) else {
+            return;
+        };
+        if same_geometry(&observed.visible_rect, &preimage.visible_rect) {
+            return;
+        }
+        let mut plan = WindowPlan {
+            visible_rect: preimage.visible_rect,
+            mode: preimage.mode,
+        };
+        // Keep where it actually is: only the size is being corrected, and asking
+        // for the old position again is the move that already failed.
+        plan.visible_rect = Rect::new(
+            observed.visible_rect.left,
+            observed.visible_rect.top,
+            observed.visible_rect.left + preimage.visible_rect.width(),
+            observed.visible_rect.top + preimage.visible_rect.height(),
+        );
+        if self.backend.apply(id, &plan).is_err() {
+            tracing::debug!(window = ?id, "could not restore a rejected window's size");
+        } else {
+            tracing::info!(window = ?id, "restored size of a window that refused to move");
+        }
+    }
+
     /// Retry a window that did not settle on the first pass.
     fn apply_with_retry(&self, id: &WindowId, plan: &WindowPlan) -> WindowOutcome {
+        let outcome = self.apply_with_retry_inner(id, plan);
+        if matches!(outcome, WindowOutcome::Rejected | WindowOutcome::Unknown) {
+            self.revert_size(id);
+        }
+        outcome
+    }
+
+    fn apply_with_retry_inner(&self, id: &WindowId, plan: &WindowPlan) -> WindowOutcome {
         for attempt in 1..=self.config.max_attempts {
             match self.backend.apply(id, plan) {
                 Ok(()) => {}

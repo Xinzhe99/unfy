@@ -1022,3 +1022,46 @@ fn a_failed_preview_returns_to_idle() {
         "gathering must still be possible after a failed preview"
     );
 }
+
+/// A window that takes the new size but not the new position - clash-verge, as seen
+/// on a real desktop - must end up the size it started.
+///
+/// The user's report: "clash failed to move, but its window was resized". A gather
+/// that cannot place a window has done nothing to it, and it must look that way; a
+/// half-applied move leaves the desktop changed for no benefit, and the user has to
+/// undo it by hand.
+#[test]
+fn a_window_that_refuses_the_position_keeps_its_size() {
+    let mut backend = FakeBackend::with_two_displays();
+    let before = Rect::new(100, 100, 700, 600);
+    let id = backend.add_window(
+        21,
+        before,
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::SizeOnly,
+    );
+
+    // What the window actually looks like before anything is asked of it.
+    let original = backend.read_back(&id).expect("read back").visible_rect;
+    assert_eq!(original, before);
+
+    let mut engine = Engine::new(backend, config("sizeonly"));
+    let report = engine.migrate(&target_key()).expect("migrate");
+
+    assert_eq!(
+        report.outcomes.get(&id),
+        Some(&WindowOutcome::Rejected),
+        "a window that stays put was not placed"
+    );
+
+    let after = engine
+        .backend()
+        .read_back(&id)
+        .expect("read back")
+        .visible_rect;
+    assert_eq!(
+        after, original,
+        "a rejected move must not resize the window"
+    );
+}

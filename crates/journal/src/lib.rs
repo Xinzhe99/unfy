@@ -182,6 +182,22 @@ impl Journal {
     /// The `Begin` record is flushed before this returns, so a crash immediately
     /// afterwards still leaves a recoverable (empty) transaction.
     pub fn begin(path: impl AsRef<Path>, display_summary: &str) -> Result<Self> {
+        Self::begin_named(path, Uuid::new_v4(), display_summary)
+    }
+
+    /// Start a journal for a transaction the caller has already named.
+    ///
+    /// The caller owns the id because it also names the file: `pending_work` finds
+    /// unfinished work by scanning the directory and skipping the one the engine
+    /// currently owns, and it compares transaction ids. Two different ids - one in
+    /// the filename, one inside the file - made that comparison fail for every
+    /// transaction, so a layout that was in progress (or already finished) was
+    /// reported as "the last gather did not finish", permanently.
+    pub fn begin_named(
+        path: impl AsRef<Path>,
+        transaction: Uuid,
+        display_summary: &str,
+    ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -194,7 +210,6 @@ impl Journal {
             .truncate(true)
             .open(&path)?;
 
-        let transaction = Uuid::new_v4();
         let mut journal = Journal {
             path,
             file: file.try_clone()?,

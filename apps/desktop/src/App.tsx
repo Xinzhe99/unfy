@@ -89,6 +89,9 @@ export default function App() {
   const [hotkeys, setHotkeys] = useState<HotkeyStatusDto | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, DisplayThumbnailDto>>({});
+  // A ref, not state: the topology listener is registered once and must be able to
+  // ask for a fresh capture without re-subscribing every time the setter changes.
+  const captureShots = useRef<() => void>(() => {});
   const [runningApps, setRunningApps] = useState<AppDto[]>([]);
   const [activity, setActivity] = useState<ActivityEntryDto[]>([]);
   const [health, setHealth] = useState<HealthItemDto[]>([]);
@@ -187,12 +190,20 @@ export default function App() {
       if (cancelled) return;
       setThumbnails(Object.fromEntries(shots.map((s) => [s.native_id, s])));
     };
-    // Captured on entry and then kept current: the picture has to agree with the
-    // screen the user is looking at, and one capture taken when the page opened
-    // went on showing windows that had since been closed and content that had
-    // moved. Re-entering the page re-captures as well, which it did not before.
+    captureShots.current = () => void capture();
+    // Captured on entry, then whenever the desktop says it changed.
+    //
+    // This used to poll every five seconds. Each poll is a full capture of every
+    // display plus a base64 payload over the IPC bridge, which is why the picture
+    // lagged behind the screen: it was up to five seconds old, and the round trip
+    // added to that. A capture is only stale when the screen changed, and the
+    // backend already watches the topology; it says so.
     void capture();
-    const timer = window.setInterval(() => void capture(), 5000);
+    // Two seconds is a compromise: fast enough that a window opened on the host
+    // shows up while the user is still looking at the page, cheap enough that the
+    // capture does not compete with the rest of the polling. The topology event
+    // below refreshes it immediately when the displays themselves change.
+    const timer = window.setInterval(() => void capture(), 2000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -387,6 +398,8 @@ export default function App() {
       "conflux://topology-changed",
       (event) => {
         void refresh();
+        // The displays just changed, so every screenshot is wrong until recaptured.
+        captureShots.current();
         const { rescued, needs_regather } = event.payload;
         if (rescued > 0) {
           flash({

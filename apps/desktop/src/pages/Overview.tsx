@@ -278,26 +278,29 @@ export function OverviewPage({
               >{t("保留当前布局")}</Button>
             </>
           ) : (
-            <>
-              <Button
-                variant="primary"
-                onClick={onMigrate}
-                disabled={busy || !supported || singleDisplay}
-                loading={busy}
-              >
-                {progress
-                  ? t("正在整理 {done}/{total}…", { done: progress.done, total: progress.total })
-                  : busy
-                    ? t("正在整理…")
-                    : t("整理到目标屏")}
-              </Button>
-              <Button
-                onClick={onPreview}
-                disabled={busy || !supported}
-                icon={<IconEye className="size-3.5" />}
-              >{t("预览")}</Button>
-            </>
+            <Button
+              variant="primary"
+              onClick={onMigrate}
+              disabled={busy || !supported || singleDisplay}
+              loading={busy}
+            >
+              {progress
+                ? t("正在整理 {done}/{total}…", { done: progress.done, total: progress.total })
+                : busy
+                  ? t("正在整理…")
+                  : t("整理到目标屏")}
+            </Button>
           )}
+          {/* Read-only, so it is offered whatever the engine is doing: the plan is
+              the only way to see where the windows would land, and hiding it while a
+              layout is active left the user with no way to look before acting. */}
+          <Button
+            variant={blocked || hasWork ? "primary" : "secondary"}
+            size="sm"
+            onClick={onPreview}
+            disabled={busy || !supported}
+            icon={<IconEye className="size-3.5" />}
+          >{t("预览")}</Button>
           <Button
             variant="quiet"
             size="sm"

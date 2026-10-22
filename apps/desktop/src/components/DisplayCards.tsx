@@ -45,19 +45,19 @@ export function DisplayCards({
   const ordered = displays;
   const layout = relativeLayout(ordered);
 
-  // Each row gets a fixed height, and the box is that many rows tall. Deriving
-  // the height from a percentage of the arrangement's aspect ratio produced a
-  // 40 px card for a side-by-side pair, because two 16:9 monitors in one box
-  // leave only a quarter of the height each. A pixel budget per row cannot
-  // collapse: the layout above it decides only horizontal placement.
-  // 11 rem rather than 9: the caption under each card carries a name and a
-  // resolution line, and in English the name wraps to two lines ("Display 2
-  // (primary)"), which at 9 rem squeezed the screenshot down to a strip.
-  const ROW_HEIGHT_REM = 11;
   return (
     <div
-      className="relative w-full"
-      style={{ height: `${ROW_HEIGHT_REM * layout.rows}rem` }}
+      className="w-full"
+      style={{
+        display: "grid",
+        // One column per distinct x-origin, one row per distinct y-origin, sized by
+        // how much of the desktop each track covers. A pair of 16:9 monitors side by
+        // side therefore gets two equal columns and *one* row, and the cards agree
+        // in height by construction rather than by a shared rem guess.
+        gridTemplateColumns: layout.columnTemplate,
+        gridTemplateRows: layout.rowTemplate,
+        gap: "0.5rem",
+      }}
     >
       {ordered.map((display, index) => {
         const selected = target?.native_id === display.native_id;
@@ -67,15 +67,8 @@ export function DisplayCards({
         return (
           <div
             key={display.native_id}
-            className="absolute p-1"
-            style={{
-              left: `${cell.left * 100}%`,
-              top: `${cell.top * 100}%`,
-              width: `${cell.width * 100}%`,
-              // Height stays proportional to the real display when there is more
-              // than one row, but never below a readable minimum.
-              height: `${Math.max(78, cell.height * 100)}%`,
-            }}
+            className="min-w-0"
+            style={{ gridColumn: cell.column, gridRow: cell.row }}
           >
             <button
               type="button"
@@ -95,13 +88,26 @@ export function DisplayCards({
                   : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]"
               }`}
             >
-              <div className="relative min-h-0 flex-1 bg-[var(--color-surface-sunken)]">
+              {/* The screenshot box is the display's own shape. The card is as wide
+                  as the grid track and this box sets its height, so a 16:9 monitor is
+                  shown at 16:9 with no letterboxing and nothing cropped. */}
+              <div
+                className="relative w-full bg-[var(--color-surface-sunken)]"
+                style={{
+                  aspectRatio: `${display.width} / ${Math.max(1, display.height)}`,
+                }}
+              >
                 {shot ? (
                   <>
+                    {/* `object-contain`, not `cover`: the box is already the
+                        display's ratio, so this fills it exactly, and if a capture
+                        ever comes back at another ratio it is letterboxed rather than
+                        silently cropped. Cropping was what made the picture disagree
+                        with the resolution printed underneath it. */}
                     <img
                       src={shot.data_url}
                       alt=""
-                      className="size-full object-cover"
+                      className="size-full object-contain"
                       draggable={false}
                     />
                     {/* A black capture is a monitor that is off, on another input,
@@ -166,30 +172,63 @@ export function DisplayCards({
  * left of the primary has a negative x), so the origin is translated to the
  * top-left of the bounding box first.
  */
+/**
+ * Place the displays on a grid that mirrors where they physically are.
+ *
+ * Each distinct x-origin becomes a column and each distinct y-origin becomes a row,
+ * weighted by the span that origin covers. Displays are assigned to the track their
+ * origin falls in, not to the index of that origin in a sorted list, because a
+ * monitor can sit at a negative offset (a left-hand display often does) and the
+ * tracks then start before zero.
+ *
+ * The alternative - absolute percentages inside a container with a guessed height -
+ * made a card's shape depend on that guess: the screenshot was cropped to it, so a
+ * 16:9 monitor appeared at some other ratio.
+ */
 function relativeLayout(displays: DisplayDto[]) {
-  const minX = Math.min(...displays.map((d) => d.origin_x));
-  const minY = Math.min(...displays.map((d) => d.origin_y));
-  const maxX = Math.max(...displays.map((d) => d.origin_x + d.width));
-  const maxY = Math.max(...displays.map((d) => d.origin_y + d.height));
+  // Rows and columns are found by overlap, not by exact origin. Two monitors side by
+  // side rarely share a y-origin: one is 78 px lower here because its taskbar sits
+  // somewhere else. Treating every distinct origin as its own track turned a
+  // left/right pair into a diagonal, which is a picture of a desktop that does not
+  // exist.
+  const spans = displays.map((d) => ({
+    id: d.native_id,
+    left: d.origin_x,
+    right: d.origin_x + d.width,
+    top: d.origin_y,
+    bottom: d.origin_y + d.height,
+  }));
 
-  // One denominator for both axes keeps the aspect ratio honest: dividing each
-  // axis by its own extent would stretch a stacked pair into a wide box.
-  const extent = Math.max(1, maxX - minX, maxY - minY);
+  const bands = (from: (s: (typeof spans)[number]) => number, to: (s: (typeof spans)[number]) => number) => {
+    const sorted = [...spans].sort((a, b) => from(a) - from(b));
+    const out: { start: number; end: number }[] = [];
+    for (const span of sorted) {
+      const last = out[out.length - 1];
+      // Overlapping or touching: the same band.
+      if (last && from(span) < last.end) {
+        last.end = Math.max(last.end, to(span));
+      } else {
+        out.push({ start: from(span), end: to(span) });
+      }
+    }
+    return out;
+  };
 
-  // Vertical span measured in "rows" of the tallest display, so the caller can
-  // size the container for a single row of cards or a stacked pair.
-  const tallest = Math.max(...displays.map((d) => d.height));
-  const rows = Math.max(1, Math.ceil((maxY - minY) / Math.max(1, tallest)));
+  const columns = bands((s) => s.left, (s) => s.right);
+  const rows = bands((s) => s.top, (s) => s.bottom);
+
+  const trackOf = (bandList: { start: number; end: number }[], at: number) =>
+    bandList.findIndex((b) => at >= b.start && at < b.end);
+
+  const template = (bandList: { start: number; end: number }[]) =>
+    bandList.map((b) => `${Math.max(1, Math.round(b.end - b.start))}fr`).join(" ");
 
   return {
-    rows,
-    boxWidth: (maxX - minX) / extent,
-    boxHeight: (maxY - minY) / extent,
-    cells: displays.map((d) => ({
-      left: (d.origin_x - minX) / extent,
-      top: (d.origin_y - minY) / extent,
-      width: d.width / extent,
-      height: d.height / extent,
+    columnTemplate: template(columns),
+    rowTemplate: template(rows),
+    cells: spans.map((span) => ({
+      column: trackOf(columns, span.left) + 1,
+      row: trackOf(rows, span.top) + 1,
     })),
   };
 }

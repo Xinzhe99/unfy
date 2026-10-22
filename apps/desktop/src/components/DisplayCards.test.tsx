@@ -68,15 +68,42 @@ describe("display cards", () => {
       display({ native_id: "top", origin_y: 0, number: 1 }),
       display({ native_id: "bottom", origin_y: 1080, number: 2 }),
     ]);
-    // The second card is below: its `top` offset is non-zero.
-    expect(html).toMatch(/top:\s*50%/);
+    // One column, two rows: the second card is on grid row 2 and there is no second
+    // column for it to sit in.
+    expect(html).toMatch(/grid-column:\s*1/);
+    expect(html).toMatch(/grid-row:\s*2/);
+    expect(html).not.toMatch(/grid-column:\s*2/);
     expect(html).toContain("显示器 1");
     expect(html).toContain("显示器 2");
   });
 
+  test("a side-by-side pair occupies one row in two columns", () => {
+    // The shape the old absolute layout got wrong: two 16:9 monitors in one box were
+    // each squeezed to a quarter of the height.
+    const html = render([
+      display({ native_id: "left", number: 1 }),
+      display({ native_id: "right", origin_x: 1920, number: 2 }),
+    ]);
+    expect(html).toMatch(/grid-column:\s*2/);
+    expect(html).not.toMatch(/grid-row:\s*2/);
+  });
+
+  test("a left/right pair with mismatched y origins is still one row", () => {
+    // The desktop this was written on: the right-hand monitor is the primary at
+    // y=0, the left-hand one sits at y=-78 because its taskbar is elsewhere. Keying
+    // rows on exact origins put them on different rows and drew a diagonal.
+    const html = render([
+      display({ native_id: "left", origin_x: -1920, origin_y: -78, number: 1 }),
+      display({ native_id: "right", origin_x: 0, origin_y: 0, primary: true, number: 2 }),
+    ]);
+    expect(html).toMatch(/grid-column:\s*1/);
+    expect(html).toMatch(/grid-column:\s*2/);
+    expect(html).not.toMatch(/grid-row:\s*2/);
+  });
+
   test("keeps a single display at full width", () => {
     const html = render([display({ native_id: "only", primary: true, number: 1 })]);
-    expect(html).toMatch(/width:\s*100%/);
+    expect(html).toMatch(/grid-column:\s*1/);
     expect(html).toContain("显示器 1（主）");
   });
 
