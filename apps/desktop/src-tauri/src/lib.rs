@@ -459,8 +459,23 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
 
     let bounds = monitor.size();
     let origin = monitor.position();
-    let width = width.min(bounds.width as i32);
-    let height = height.min(bounds.height as i32);
+    // `width`/`height` are inner sizes - `set_size` calls `set_inner_size` - so clamping
+    // them to the monitor makes the *outer* window 16x39 larger than the screen. Leave
+    // room for the frame: the difference between the outer and inner size is exactly the
+    // border, and it is measured rather than assumed.
+    let frame = window
+        .outer_size()
+        .ok()
+        .zip(window.inner_size().ok())
+        .map(|(outer, inner)| {
+            (
+                outer.width.saturating_sub(inner.width) as i32,
+                outer.height.saturating_sub(inner.height) as i32,
+            )
+        })
+        .unwrap_or((0, 0));
+    let width = width.min(bounds.width as i32 - frame.0);
+    let height = height.min(bounds.height as i32 - frame.1);
 
     // Keep the whole window on the monitor it is being restored to. The overlap test
     // above only asks for a draggable strip; a saved position near the far edge would
