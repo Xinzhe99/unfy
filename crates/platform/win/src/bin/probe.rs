@@ -15,12 +15,17 @@ use std::io::Write;
 
 use conflux_domain::{rescale_between, WindowMode};
 use conflux_platform::{DisplayProvider, WindowBackend, WindowPlan};
-use conflux_platform_win::{WinDisplays, WinWindows};
+use conflux_platform_win::{WinDisplays, WinPlatform, WinWindows};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--host") {
         run_host();
+        return;
+    }
+
+    if args.iter().any(|a| a == "--mins") {
+        dump_min_sizes();
         return;
     }
 
@@ -293,6 +298,40 @@ fn run_host() {
 
 /// Print every visible top-level window as one JSON object per line.
 ///
+/// Print each candidate window's own minimum size.
+///
+/// The layout refuses to build a grid when the windows' minimums cannot tile the
+/// work area, and falls back to a cascade instead. That decision is only as good as
+/// the minimums, which come from `WM_GETMINMAXINFO` - an answer the application
+/// controls, and one that can come back as the window's current size.
+fn dump_min_sizes() {
+    use conflux_platform::WindowBackend as _;
+
+    let platform = WinPlatform::new();
+    let raw = WinWindows::new().enumerate_raw().expect("enumerate");
+    for w in raw {
+        if !w.style_flags.visible || w.style_flags.tool_window || w.style_flags.cloaked {
+            continue;
+        }
+        let id = &w.snapshot.id;
+        let caps = platform.capabilities(id);
+        let rect = w.snapshot.visible_rect;
+        let min = caps
+            .min_size
+            .map(|m| format!("{}x{}", m.width, m.height))
+            .unwrap_or_else(|| "unknown".to_string());
+        println!(
+            "{{\"app\":\"{}\",\"x\":{},\"y\":{},\"w\":{},\"h\":{},\"min\":\"{}\"}}",
+            w.snapshot.app_name,
+            rect.left,
+            rect.top,
+            rect.width(),
+            rect.height(),
+            min
+        );
+    }
+}
+
 /// Used by the end-to-end verification to compare window positions before and
 /// after a migration, so a restore can be checked for pixel fidelity rather than
 /// "the app said it worked".

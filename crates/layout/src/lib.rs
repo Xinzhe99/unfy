@@ -159,7 +159,23 @@ pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) 
 
     let capacity = capacity(&usable, config, candidates, &effective_min);
     if capacity == 0 || candidates.len() > capacity {
-        return cascade(&ordered, &usable, config, &effective_min);
+        // The windows' own minimums do not lay out at those sizes. That is a
+        // preference, not a prohibition: `grid` ranks arrangements by how many
+        // windows they would squeeze below their own minimum and marks those places
+        // `clamped_to_min`, so it can still produce something usable. Cascade only
+        // when even the planner's floor cannot hold everyone, which is what the
+        // cascade is for.
+        //
+        // Measured on a real Windows 11 desktop: eight windows, every one reporting
+        // its *current* size as its minimum (Notepad, Terminal, Explorer and the
+        // Calculator all do this through their composition layer), so no grid could
+        // satisfy any of them and a gather piled all eight diagonally - overlapping,
+        // which is the opposite of what "gather onto one screen" is for. A 3x3 grid
+        // squeezes two of those eight and shows all of them.
+        let floor = |_: &Candidate| config.fallback_min;
+        if crate::capacity(&usable, config, candidates, &floor) < candidates.len() {
+            return cascade(&ordered, &usable, config, &effective_min);
+        }
     }
 
     match config.mode {
@@ -620,6 +636,67 @@ mod tests {
         // Reading order of slots is row-major, so the top window must come first.
         let order: Vec<u64> = plan.placements.iter().map(|p| p.id.native_id).collect();
         assert_eq!(order, vec![2, 3, 1]);
+    }
+
+    /// The minimum sizes measured on a real Windows 11 desktop, in physical pixels.
+    ///
+    /// Every one of them equals the window's current size, which is what a
+    /// composition-based window reports when asked: `WM_GETMINMAXINFO` comes back
+    /// with "I am this big now" rather than a limit the application enforces.
+    fn desktop_of_eight() -> Vec<Candidate> {
+        let sizes: [(Rect, Size); 8] = [
+            (Rect::new(180, 180, 660, 283), Size::new(480, 103)),
+            (Rect::new(152, 152, 484, 354), Size::new(332, 202)),
+            (Rect::new(124, 124, 456, 326), Size::new(332, 202)),
+            (Rect::new(40, 40, 376, 580), Size::new(336, 540)),
+            (Rect::new(208, 208, 540, 410), Size::new(332, 202)),
+            (Rect::new(68, 68, 400, 270), Size::new(332, 202)),
+            (Rect::new(96, 96, 257, 339), Size::new(161, 243)),
+            (Rect::new(12, 12, 628, 420), Size::new(616, 408)),
+        ];
+        sizes
+            .into_iter()
+            .enumerate()
+            .map(|(index, (rect, min))| Candidate {
+                id: id(index as u64),
+                current: rect,
+                min_size: Some(min),
+                focused: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn minimums_that_equal_the_current_size_do_not_force_a_cascade() {
+        // The bug: `plan` declined to lay anything out because no grid could satisfy
+        // every window's self-reported minimum, and piled all eight diagonally
+        // instead. A cascade overlaps - each window covers the previous one - so
+        // gathering eight windows showed the user one.
+        let plan = plan(&desktop_of_eight(), WORK, &LayoutConfig::default());
+        assert!(
+            !plan.cascaded,
+            "a usable arrangement exists and must be used instead of a pile",
+        );
+        assert_eq!(plan.placements.len(), 8);
+        assert!(plan.unplaced.is_empty());
+
+        // Only the two genuinely large windows are squeezed; the rest keep their
+        // own minimum.
+        let squeezed = plan.placements.iter().filter(|p| p.clamped_to_min).count();
+        assert!(squeezed <= 3, "squeezed {squeezed} of eight windows");
+    }
+
+    #[test]
+    fn a_desktop_with_more_windows_than_the_floor_can_hold_still_cascades() {
+        // The cascade keeps its purpose: when the work area cannot hold this many
+        // windows even at the planner floor, placing them at their own sizes and
+        // letting the user sort it out beats pretending they fit.
+        let many = candidates(40);
+        let plan = plan(&many, WORK, &LayoutConfig::default());
+        assert!(
+            plan.cascaded,
+            "40 windows cannot tile a 1920x1040 work area"
+        );
     }
 
     #[test]
