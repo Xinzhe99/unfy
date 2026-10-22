@@ -1133,6 +1133,62 @@ describe("pages render", () => {
     expect(html).toContain("notepad #2");
   });
 
+  test("the skipped list groups by reason and names the applications", () => {
+    // "已排除此应用" without a name leaves the user unable to confirm the rule matched
+    // what they expected, so the list exists to answer exactly that.
+    const html = renderToStaticMarkup(
+      <PlanPreview
+        preview={{
+          ...preview,
+          placements: [],
+          skipped: [
+            { reason: "excluded_app", app_name: "game.exe" },
+            { reason: "excluded_app", app_name: "game.exe" },
+            { reason: "minimized", app_name: "chat.exe" },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("已跳过 3 个窗口");
+    // Two windows of the same application collapse into one entry with a count.
+    expect(html).toContain("已排除此应用 · 2 个窗口");
+    expect(html).toContain("game");
+    expect(html).toContain("已最小化 · 1 个窗口");
+  });
+
+  test("the skipped list puts the largest group first", () => {
+    const html = renderToStaticMarkup(
+      <PlanPreview
+        preview={{
+          ...preview,
+          placements: [],
+          skipped: [
+            { reason: "minimized", app_name: "a.exe" },
+            { reason: "excluded_app", app_name: "b.exe" },
+            { reason: "excluded_app", app_name: "c.exe" },
+          ],
+        }}
+      />,
+    );
+    const excludedAt = html.indexOf("已排除此应用");
+    const minimizedAt = html.indexOf("已最小化");
+    expect(excludedAt).toBeGreaterThan(-1);
+    expect(minimizedAt).toBeGreaterThan(-1);
+    expect(excludedAt).toBeLessThan(minimizedAt);
+  });
+
+  test("the skipped list stops naming after four applications", () => {
+    const many = ["a.exe", "b.exe", "c.exe", "d.exe", "e.exe"].map((name) => ({
+      reason: "invisible",
+      app_name: name,
+    }));
+    const html = renderToStaticMarkup(
+      <PlanPreview preview={{ ...preview, placements: [], skipped: many }} />,
+    );
+    expect(html).toContain("等");
+    expect(html).not.toContain("e.exe");
+  });
+
   /** Text actually printed inside the drawing, excluding `<title>` tooltips. */
   const labels = (html: string) =>
     [...html.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]!);
