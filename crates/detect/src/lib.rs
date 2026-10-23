@@ -354,6 +354,12 @@ const KNOWN_TOOLS: &[(&str, &[u16])] = &[
     ("todesk_service.exe", &[]),
     ("sunloginclient.exe", &[]),
     ("awesun.exe", &[]),
+    // NetEase UU Remote. The controlled end is GameViewerServer; the family
+    // shares one name prefix, so one entry covers host, service and watchdog.
+    // No ports: it relays over 443 and its local listeners (4051-4055,
+    // 9069-9088) are shared with the UU booster family, which would turn
+    // "running the game booster" into "someone is remoting in".
+    ("gameviewer.exe", &[]),
     ("parsecd.exe", &[8000, 8001, 8002]),
     ("sunshine.exe", &[47984, 47989, 47990]),
     ("remoting_host.exe", &[]),
@@ -436,6 +442,19 @@ mod tests {
             tools_connected: connected.iter().map(|s| s.to_string()).collect(),
             manual_marker: false,
         }
+    }
+
+    #[test]
+    fn uu_remote_is_recognised_by_its_process_family() {
+        // The controlled end runs as GameViewerServer.exe; one prefix entry
+        // must cover it and its service siblings.
+        assert_eq!(
+            is_known_tool("GameViewerServer.exe"),
+            Some("gameviewer.exe")
+        );
+        assert_eq!(is_known_tool("GameViewer.exe"), Some("gameviewer.exe"));
+        // The booster family must not match: it is a different product.
+        assert_eq!(is_known_tool("UUBooster.exe"), None);
     }
 
     #[test]

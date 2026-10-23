@@ -898,7 +898,7 @@ impl From<&Settings> for SettingsDto {
             layout_mode: match s.layout_mode {
                 conflux_settings::LayoutModeName::Grid => "grid",
                 conflux_settings::LayoutModeName::PrimarySide => "primary_side",
-                conflux_settings::LayoutModeName::PreserveOrder => "preserve_order",
+                conflux_settings::LayoutModeName::KeepLayout => "default",
             }
             .into(),
             margin: s.margin,
@@ -970,7 +970,9 @@ pub fn save_settings(
         settings.layout_mode = match mode.as_str() {
             "grid" => conflux_settings::LayoutModeName::Grid,
             "primary_side" => conflux_settings::LayoutModeName::PrimarySide,
-            "preserve_order" => conflux_settings::LayoutModeName::PreserveOrder,
+            "default" => conflux_settings::LayoutModeName::KeepLayout,
+            // Accept the old name from a stale frontend or a hand-edited file.
+            "preserve_order" => conflux_settings::LayoutModeName::KeepLayout,
             other => return Err(format!("unknown layout mode: {other}")),
         };
     }
@@ -1091,7 +1093,7 @@ pub fn save_settings(
         let mut config = engine.config().clone();
         config.layout.mode = match dto.layout_mode.as_str() {
             "primary_side" => conflux_layout::LayoutMode::PrimarySide,
-            "preserve_order" => conflux_layout::LayoutMode::PreserveOrder,
+            "default" | "preserve_order" => conflux_layout::LayoutMode::KeepLayout,
             _ => conflux_layout::LayoutMode::Grid,
         };
         config.layout.margin = dto.margin;

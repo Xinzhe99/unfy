@@ -87,9 +87,9 @@ export function DisplaysPage({
             disabled={busy}
             onChange={(layout_mode) => onSave({ layout_mode })}
             options={[
+              { value: "default", label: t("默认") },
               { value: "grid", label: t("网格") },
               { value: "primary_side", label: t("主次") },
-              { value: "preserve_order", label: t("顺序") },
             ]}
           />
         </SettingRow>
@@ -126,10 +126,10 @@ export function DisplaysPage({
 
 function layoutDescription(mode: SettingsDto["layout_mode"]): string {
   switch (mode) {
+    case "default":
+      return t("保持窗口的相对位置和大小，整体搬到目标屏。");
     case "primary_side":
       return t("焦点窗口占主区域，其余在侧栏排列。");
-    case "preserve_order":
-      return t("按原屏幕上的位置顺序依次放入，不受焦点影响。");
     default:
       return t("等分排列，列数按窗口数量自动选择；焦点窗口放第一格。");
   }

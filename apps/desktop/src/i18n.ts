@@ -254,12 +254,12 @@ const EN: Record<string, string> = {
     "Even grid; the column count follows the number of windows, and the focused window takes the first cell.",
   "焦点窗口占主区域，其余在侧栏排列。":
     "The focused window takes the main area; the rest fill a side column.",
-  "按原屏幕上的位置顺序依次放入，不受焦点影响。":
-    "Windows are placed in the order they occupied on their original screens, whatever has focus.",
+  "保持窗口的相对位置和大小，整体搬到目标屏。":
+    "Keeps every window's relative position and size, and moves the whole arrangement onto the target screen.",
   "布局方式": "Arrangement",
   "网格": "Grid",
   "主次": "Main + side",
-  "顺序": "In order",
+  "默认": "Default",
   "边距": "Margin",
   "窗口与屏幕边缘的距离": "Distance between windows and the screen edge",
   "像素": "px",

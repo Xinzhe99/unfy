@@ -614,7 +614,21 @@ impl<B: Backend> Engine<B> {
             })
             .collect();
 
-        let plan = conflux_layout::plan(&candidates, target_display.work_area, &self.config.layout);
+        // The source desktop for KeepLayout: the union rectangle of every
+        // display. A window's position relative to *this* is what "relative
+        // position" means, and it is stable no matter which windows happen to
+        // be eligible this run.
+        let mut source = displays[0].bounds;
+        for d in &displays[1..] {
+            source.left = source.left.min(d.bounds.left);
+            source.top = source.top.min(d.bounds.top);
+            source.right = source.right.max(d.bounds.right);
+            source.bottom = source.bottom.max(d.bounds.bottom);
+        }
+        let mut layout = self.config.layout;
+        layout.source_bounds = Some(source);
+
+        let plan = conflux_layout::plan(&candidates, target_display.work_area, &layout);
 
         Ok(Preview {
             target: target.clone(),

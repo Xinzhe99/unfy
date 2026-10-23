@@ -169,7 +169,10 @@ fn resetting_keeps_the_target_and_clears_everything_else() {
         fresh.restore_delay_secs,
         conflux_settings::Settings::default().restore_delay_secs
     );
-    assert_eq!(fresh.layout_mode, conflux_settings::LayoutModeName::Grid);
+    // Layout mode has a literal here on purpose: "reset restores the default"
+    // must mean the arrangement-preserving mode, and silently drifting to a
+    // grid-on-reset regression is what this line is for.
+    assert_eq!(fresh.layout_mode, conflux_settings::LayoutModeName::KeepLayout);
     assert_eq!(fresh.margin, 12);
     assert!(fresh.onboarding_done, "the guide must not reappear");
 }

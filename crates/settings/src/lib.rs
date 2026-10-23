@@ -169,7 +169,11 @@ pub enum RemoteScreens {
 pub enum LayoutModeName {
     Grid,
     PrimarySide,
-    PreserveOrder,
+    /// Written as `default` (the interface's name for it); reads the old
+    /// `preserve_order` too, whose only behaviour was a grid slot order and
+    /// which never produced the arrangement its name promised.
+    #[serde(rename = "default", alias = "preserve_order")]
+    KeepLayout,
 }
 
 impl From<LayoutModeName> for LayoutMode {
@@ -177,7 +181,7 @@ impl From<LayoutModeName> for LayoutMode {
         match name {
             LayoutModeName::Grid => LayoutMode::Grid,
             LayoutModeName::PrimarySide => LayoutMode::PrimarySide,
-            LayoutModeName::PreserveOrder => LayoutMode::PreserveOrder,
+            LayoutModeName::KeepLayout => LayoutMode::KeepLayout,
         }
     }
 }
@@ -187,7 +191,7 @@ impl From<LayoutMode> for LayoutModeName {
         match mode {
             LayoutMode::Grid => LayoutModeName::Grid,
             LayoutMode::PrimarySide => LayoutModeName::PrimarySide,
-            LayoutMode::PreserveOrder => LayoutModeName::PreserveOrder,
+            LayoutMode::KeepLayout => LayoutModeName::KeepLayout,
         }
     }
 }
@@ -214,7 +218,10 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             target_display: None,
-            layout_mode: LayoutModeName::Grid,
+            // The whole point of the product is "the desktop you had, on the
+            // screen you have": preserving the arrangement is the honest
+            // default, and rearranging into cells is the opt-in.
+            layout_mode: LayoutModeName::KeepLayout,
             margin: 12,
             gap: 8,
             remote_screens: RemoteScreens::Single,
@@ -589,7 +596,9 @@ mod tests {
         .unwrap();
         let settings = Settings::load(&path).unwrap();
         assert_eq!(settings.margin, 20);
-        assert_eq!(settings.layout_mode, LayoutModeName::PreserveOrder);
+        // The old value still parses, and now means the real thing its name
+        // always promised: the arrangement as it was, not a grid slot order.
+        assert_eq!(settings.layout_mode, LayoutModeName::KeepLayout);
         assert_eq!(settings.gap, Settings::default().gap);
     }
 

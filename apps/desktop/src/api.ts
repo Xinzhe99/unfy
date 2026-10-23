@@ -124,7 +124,7 @@ export interface RestoreDto {
 }
 
 export interface SettingsDto {
-  layout_mode: "grid" | "primary_side" | "preserve_order";
+  layout_mode: "default" | "grid" | "primary_side";
   margin: number;
   gap: number;
   autostart: boolean;

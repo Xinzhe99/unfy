@@ -19,8 +19,10 @@ pub enum LayoutMode {
     Grid,
     /// Focused window takes the main area, the rest tile beside it.
     PrimarySide,
-    /// Grid, but slot order follows the windows' original spatial order.
-    PreserveOrder,
+    /// The arrangement the windows already have: the source desktop maps onto
+    /// the target work area as a whole, so relative positions and relative
+    /// sizes survive the move. This is the product's default.
+    KeepLayout,
 }
 
 impl LayoutMode {
@@ -28,7 +30,11 @@ impl LayoutMode {
         match self {
             LayoutMode::Grid => "grid",
             LayoutMode::PrimarySide => "primary_side",
-            LayoutMode::PreserveOrder => "preserve_order",
+            // Serialized as "default" because that is what the interface calls
+            // it; the previous meaning of this slot ("preserve_order") only
+            // kept the slot *order* inside an ordinary grid, which is why it
+            // looked like the setting did nothing.
+            LayoutMode::KeepLayout => "default",
         }
     }
 }
@@ -46,6 +52,11 @@ pub struct LayoutConfig {
     pub max_columns: u8,
     /// Share of the width given to the focused window in `PrimarySide`.
     pub primary_share_percent: u8,
+    /// Bounds of the source virtual desktop, used only by `KeepLayout` to map
+    /// the old arrangement onto the target. `None` (or an empty rectangle)
+    /// falls back to the grid: without a source rectangle there is nothing to
+    /// map relative positions against.
+    pub source_bounds: Option<Rect>,
 }
 
 impl Default for LayoutConfig {
@@ -57,6 +68,7 @@ impl Default for LayoutConfig {
             fallback_min: Size::new(320, 200),
             max_columns: 8,
             primary_share_percent: 60,
+            source_bounds: None,
         }
     }
 }
@@ -113,6 +125,21 @@ impl Plan {
 /// `scale` is accepted for callers that want to reason about apparent size, but
 /// does not change the result: tiling is defined in the target's own pixels.
 pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) -> Plan {
+    if candidates.is_empty() {
+        return Plan {
+            mode: config.mode,
+            placements: Vec::new(),
+            unplaced: Vec::new(),
+            cascaded: false,
+        };
+    }
+
+    // KeepLayout does not use cells at all, so it bypasses the column/capacity
+    // machinery below and returns before the grid-specific early-outs.
+    if config.mode == LayoutMode::KeepLayout {
+        return keep_layout(candidates, target_work, config);
+    }
+
     let mut ordered: Vec<&Candidate> = candidates.iter().collect();
     if config.max_columns == 0 || ordered.is_empty() {
         return Plan {
@@ -145,10 +172,9 @@ pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) 
     //
     // Whether focus comes into it is what separates two of the modes. `Grid` puts
     // the focused window in the first cell - the one the eye goes to - while
-    // `PreserveOrder` promises the arrangement the windows already had and must not
-    // move a window just because it happened to be focused when the gather ran.
-    // `PrimarySide` needs focus for its large pane.
-    let focus_first = !matches!(config.mode, LayoutMode::PreserveOrder);
+    // `PrimarySide` needs focus for its large pane. `KeepLayout` never reaches
+    // this code: it maps positions directly and has no slots to fill.
+    let focus_first = true;
     ordered.sort_by_key(|c| {
         (
             focus_first && !c.focused,
@@ -187,14 +213,82 @@ pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) 
 
     match config.mode {
         LayoutMode::Grid => grid(&ordered, &usable, config, &effective_min, LayoutMode::Grid),
-        LayoutMode::PreserveOrder => grid(
-            &ordered,
-            &usable,
-            config,
-            &effective_min,
-            LayoutMode::PreserveOrder,
-        ),
         LayoutMode::PrimarySide => primary_side(&ordered, &usable, config, &effective_min),
+        LayoutMode::KeepLayout => unreachable!("handled before the grid machinery"),
+    }
+}
+
+/// Map the windows' current arrangement onto the target work area.
+///
+/// The source desktop and the target work area are treated as two rectangles
+/// and each window is placed where its fraction of the source sits in the
+/// target: a window that covered the left half of the virtual desktop covers
+/// the left half of the target afterwards, on every axis independently. That
+/// is the promise of this mode - relative positions and relative sizes are
+/// the same before and after, so a multi-monitor desktop folds onto the one
+/// remote screen the way the user already had it in mind.
+///
+/// Corners cut, on purpose and in this order:
+///
+/// * Sizes never go below the window's minimum (real when known, planner
+///   floor otherwise). Fidelity loses to usability, exactly as in the grid.
+/// * The result is kept inside the target work area. A window parked partly
+///   on the taskbar would otherwise map below the work area's bottom edge.
+/// * Without a source rectangle the mode degrades to the grid rather than
+///   inventing one; the caller normally supplies the virtual desktop bounds.
+fn keep_layout(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) -> Plan {
+    let Some(src) = config.source_bounds.filter(|r| !r.is_empty()) else {
+        let fallback = LayoutConfig {
+            mode: LayoutMode::Grid,
+            ..*config
+        };
+        return plan(candidates, target_work, &fallback);
+    };
+
+    let sw = (src.right - src.left) as i64;
+    let sh = (src.bottom - src.top) as i64;
+    let tw = (target_work.right - target_work.left) as i64;
+    let th = (target_work.bottom - target_work.top) as i64;
+    // The guard above filters empty rectangles, so these cannot divide by zero
+    // unless a caller hands over bounds that overflow i32 span - not a real
+    // desktop.
+    debug_assert!(sw > 0 && sh > 0 && tw > 0 && th > 0);
+
+    let mut placements = Vec::with_capacity(candidates.len());
+    for c in candidates {
+        let r = c.current;
+        // i64 intermediates: 4k-wide coordinates times each other exceed i32.
+        let left = target_work.left as i64 + (r.left - src.left) as i64 * tw / sw;
+        let top = target_work.top as i64 + (r.top - src.top) as i64 * th / sh;
+        let width = (r.right - r.left) as i64 * tw / sw;
+        let height = (r.bottom - r.top) as i64 * th / sh;
+
+        let min = {
+            let m = c.min_size.unwrap_or(config.fallback_min);
+            (m.width.max(1), m.height.max(1))
+        };
+        // Judged on the mapped size, not the original one: a big window that maps
+        // small needs the lift just as much as a small one.
+        let below_min = width < min.0 as i64 || height < min.1 as i64;
+        let width = (width.max(min.0 as i64)).min(tw) as i32;
+        let height = (height.max(min.1 as i64)).min(th) as i32;
+
+        let left = (left.max(target_work.left as i64)).min((target_work.right - width) as i64) as i32;
+        let top = (top.max(target_work.top as i64)).min((target_work.bottom - height) as i64) as i32;
+
+        placements.push(Placement {
+            id: c.id.clone(),
+            rect: Rect::new(left, top, left + width, top + height),
+            clamped_to_min: below_min,
+        });
+    }
+    placements.sort_by_key(|p| p.id.native_id);
+
+    Plan {
+        mode: LayoutMode::KeepLayout,
+        placements,
+        unplaced: Vec::new(),
+        cascaded: false,
     }
 }
 
@@ -628,33 +722,98 @@ mod tests {
     }
 
     #[test]
-    fn preserve_order_ignores_focus() {
-        // Focus is a momentary detail. In this mode a window must keep the slot its
-        // position earned, whatever the user happened to be typing in.
-        let mut input = vec![
-            candidate(1, Rect::new(0, 400, 800, 600)),
-            candidate(2, Rect::new(0, 0, 800, 200)),
-            candidate(3, Rect::new(0, 200, 800, 400)),
+    fn keep_layout_maps_relative_positions_and_sizes() {
+        // Two 1920x1080 side by side, folding onto one 1920x1040 work area. A
+        // window on the left screen's top quarter and one on the right screen's
+        // bottom quarter must land on the target's top-left and bottom-right
+        // quarters respectively, at their fractional sizes.
+        let src = Rect::new(0, 0, 3840, 2160);
+        let input = vec![
+            candidate(1, Rect::new(0, 0, 960, 540)),
+            candidate(2, Rect::new(2880, 1080, 3840, 2160)),
         ];
         let config = LayoutConfig {
-            mode: LayoutMode::PreserveOrder,
+            source_bounds: Some(src),
             ..Default::default()
         };
-        let before: Vec<u64> = plan(&input, WORK, &config)
-            .placements
-            .iter()
-            .map(|p| p.id.native_id)
-            .collect();
+        // The mode default is now KeepLayout; spell it out anyway so the test
+        // survives a future default change.
+        let config = LayoutConfig {
+            mode: LayoutMode::KeepLayout,
+            ..config
+        };
+        let plan = plan(&input, WORK, &config);
+        assert_eq!(plan.mode, LayoutMode::KeepLayout);
+        assert_eq!(plan.placements.len(), 2);
 
-        input[0].focused = true;
-        let after: Vec<u64> = plan(&input, WORK, &config)
-            .placements
-            .iter()
-            .map(|p| p.id.native_id)
-            .collect();
+        let a = plan.placement_for(&candidate(1, WORK).id).unwrap();
+        // x: (0-0)*1920/3840 = 0, w: 960*1920/3840 = 480
+        // y: (0-0)*1040/2160 = 0, h: 540*1040/2160 = 260
+        assert_eq!(a.rect, Rect::new(0, 0, 480, 260));
 
-        assert_eq!(before, after, "focus must not reorder this mode");
-        assert_eq!(after, vec![2, 3, 1]);
+        let b = plan.placement_for(&candidate(2, WORK).id).unwrap();
+        // x: 2880*1920/3840 = 1440; y: 1080*1040/2160 = 520. The window is the
+        // bottom half of the right screen, so its mapped height is half the
+        // target's: 520, reaching the work area's bottom edge.
+        assert_eq!(b.rect, Rect::new(1440, 520, 1920, 1040));
+    }
+
+    #[test]
+    fn keep_layout_is_identity_when_source_equals_target() {
+        // Gathering with the target already filling the desktop must move
+        // nothing: the mapping is the identity.
+        let input = vec![
+            candidate(1, Rect::new(100, 200, 700, 600)),
+            candidate(2, Rect::new(900, 50, 1500, 400)),
+        ];
+        let config = LayoutConfig {
+            mode: LayoutMode::KeepLayout,
+            source_bounds: Some(WORK),
+            ..Default::default()
+        };
+        let plan = plan(&input, WORK, &config);
+        assert_eq!(plan.placements[0].rect, input[0].current);
+        assert_eq!(plan.placements[1].rect, input[1].current);
+    }
+
+    #[test]
+    fn keep_layout_lifts_windows_below_their_minimum() {
+        // A small window maps smaller still when two screens fold onto one.
+        // Usability wins over fidelity: it is raised to its minimum and marked,
+        // the same contract as the grid's clamped_to_min.
+        let src = Rect::new(0, 0, 3840, 2160);
+        let mut input = vec![candidate(1, Rect::new(0, 0, 960, 540))];
+        input[0].min_size = Some(Size::new(700, 500));
+        let config = LayoutConfig {
+            mode: LayoutMode::KeepLayout,
+            source_bounds: Some(src),
+            ..Default::default()
+        };
+        let plan = plan(&input, WORK, &config);
+        let p = &plan.placements[0];
+        assert_eq!(
+            (p.rect.width(), p.rect.height()),
+            (700, 500),
+            "mapped size 480x260 must be raised to the minimum"
+        );
+        assert!(p.clamped_to_min);
+        assert!(p.rect.reachable_in(&WORK, 64, 32), "must stay on screen");
+    }
+
+    #[test]
+    fn keep_layout_without_source_bounds_falls_back_to_the_grid() {
+        // Nothing to map against, so the honest answer is the default
+        // arrangement rather than an invented one.
+        let input = candidates(4);
+        let config = LayoutConfig {
+            mode: LayoutMode::KeepLayout,
+            source_bounds: None,
+            ..Default::default()
+        };
+        let mapped = plan(&input, WORK, &config);
+        let plain = plan(&input, WORK, &LayoutConfig::default());
+        assert_eq!(mapped.mode, LayoutMode::Grid);
+        assert_eq!(mapped.placements, plain.placements);
     }
 
     #[test]
@@ -681,24 +840,6 @@ mod tests {
             vec![1, 2, 3],
             "the focused window goes to the first cell"
         );
-    }
-
-    #[test]
-    fn preserve_order_keeps_spatial_sequence() {
-        // Three windows: top, middle, bottom in the source display.
-        let input = vec![
-            candidate(1, Rect::new(0, 400, 800, 600)),
-            candidate(2, Rect::new(0, 0, 800, 200)),
-            candidate(3, Rect::new(0, 200, 800, 400)),
-        ];
-        let config = LayoutConfig {
-            mode: LayoutMode::PreserveOrder,
-            ..Default::default()
-        };
-        let plan = plan(&input, WORK, &config);
-        // Reading order of slots is row-major, so the top window must come first.
-        let order: Vec<u64> = plan.placements.iter().map(|p| p.id.native_id).collect();
-        assert_eq!(order, vec![2, 3, 1]);
     }
 
     /// The minimum sizes measured on a real Windows 11 desktop, in physical pixels.

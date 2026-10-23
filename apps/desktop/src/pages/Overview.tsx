@@ -644,9 +644,9 @@ function layoutLabel(mode: SettingsDto["layout_mode"] | undefined): string {
   switch (mode) {
     case "primary_side":
       return t("主次");
-    case "preserve_order":
-      return t("顺序");
-    default:
+    case "grid":
       return t("网格");
+    default:
+      return t("默认");
   }
 }
