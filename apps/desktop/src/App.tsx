@@ -679,9 +679,9 @@ export default function App() {
   return (
     <div className="flex h-full">
       <aside className="flex w-48 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-sidebar)]">
-        <div className="flex h-12 items-center px-4">
-          <span className="text-[13px] font-semibold tracking-tight">Unfy</span>
-        </div>
+        {/* No wordmark here: the title bar already says Unfy, and saying it
+            twice stacked vertically read as duplication. */}
+        <div className="h-4 shrink-0" />
 
         <nav
           className="flex-1 px-2"
