@@ -13,7 +13,7 @@
 | 格式 | `cargo fmt --all -- --check` | 通过 |
 | 前端类型 | `tsc --noEmit` | 通过 |
 | 前端构建 | `npm run build` | 通过（265 kB JS / 28 kB CSS） |
-| macOS 编译 | `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` | 通过（仅类型检查，未在 Mac 运行） |
+| macOS 编译 | `cargo check -p unfy-platform-mac --target aarch64-apple-darwin` | 通过（仅类型检查，未在 Mac 运行） |
 
 测试分布：domain 14、platform(fake) 4、journal 12、layout 18（含 4 个列数选择用例）、engine 25（含 3 个退出屏障与 4 个暂停/延迟用例）、settings 14（含引导可恢复性）、win 1、mac 4。
 
@@ -99,12 +99,12 @@ UI 显示"上次整理未完成 · 有 5 个窗口的快照仍待处理"。点�
 
 ```
 tauri build --debug
-Finished 1 bundle at: target\debug\bundle\nsis\Conflux_0.1.0_x64-setup.exe (4.56 MiB)
+Finished 1 bundle at: target\debug\bundle\nsis\Unfy_0.1.0_x64-setup.exe (4.56 MiB)
 ```
 
 | 步骤 | 结果 |
 |---|---|
-| 静默安装 `/S` | 安装到 `%LOCALAPPDATA%\Conflux`，生成 `conflux.exe` + `uninstall.exe` |
+| 静默安装 `/S` | 安装到 `%LOCALAPPDATA%\Unfy`，生成 `unfy.exe` + `uninstall.exe` |
 | 启动安装版 | 窗口正常显示，2 个显示器被识别，目标屏选择持久化到 `settings.json` |
 | 迁移 | 13 个窗口中 8 个被移动，全部落在 DISPLAY2 |
 | 恢复 | 11/13 精确复原（差异项是测试工具 Orca 自己的窗口，非本产品问题） |
@@ -137,9 +137,9 @@ journal 保留在磁盘上，因为仍有窗口未达到安全终态。这是设
 在 UI 里勾选"登录时启动"后：
 
 ```
-INFO reconciling autostart desired=true current=false exe=...\target\debug\conflux.exe
+INFO reconciling autostart desired=true current=false exe=...\target\debug\unfy.exe
 INFO autostart registration updated desired=true
-HKCU\...\Run\Conflux = "F:\...\conflux.exe --tray"
+HKCU\...\Run\Unfy = "F:\...\unfy.exe --tray"
 ```
 
 取消勾选并重启后：
@@ -160,11 +160,11 @@ Run key entry removed
 - 整理后 `has_pending_work()` 为真，恢复成功后解除；
 - 接管的崩溃事务同样阻塞退出，恢复并清理 journal 后解除。
 
-前端也补上了 `conflux://exit-blocked` 与 `conflux://update` 的监听——此前 Rust 会发这两个事件，但界面没有任何反应，用户点退出"没反应"且看不到原因。为验证而临时加的命令与辅助函数在验证后已删除，没有留在产品 API 里。
+前端也补上了 `unfy://exit-blocked` 与 `unfy://update` 的监听——此前 Rust 会发这两个事件，但界面没有任何反应，用户点退出"没反应"且看不到原因。为验证而临时加的命令与辅助函数在验证后已删除，没有留在产品 API 里。
 
 ### 单实例
 
-连续启动两次 `conflux.exe`：
+连续启动两次 `unfy.exe`：
 
 ```
 processes=1
@@ -177,7 +177,7 @@ processes=1
 点击"导出诊断包"：
 
 ```
-诊断包已写入 ...\Conflux\diagnostics\conflux-<uuid>.json（707 字节）
+诊断包已写入 ...\Unfy\diagnostics\unfy-<uuid>.json（707 字节）
 ```
 
 内容核对：只有版本、平台、显示器尺寸/缩放/主屏标记、显示器 ID 的 FNV 摘要、设置项名称与开关状态。**没有窗口标题、文件路径、屏幕画面、原始显示器设备路径**。
@@ -205,7 +205,7 @@ PASS: excluded app did not move
 
 第一次实现把日志交给 `tracing_subscriber::fmt()`，GUI 构建没有控制台，日志全部丢失。改为按日滚动文件（5 个 × 2 MiB）。
 
-**第二个缺陷**：过滤器写成 `conflux=info`，而所有 crate 叫 `conflux_*`，因此引擎日志仍被丢弃——文件存在但只有两行。按 crate 逐条列出后，成功记录到：
+**第二个缺陷**：过滤器写成 `unfy=info`，而所有 crate 叫 `unfy_*`，因此引擎日志仍被丢弃——文件存在但只有两行。按 crate 逐条列出后，成功记录到：
 
 ```
 INFO migration finished transaction=376f4b7d applied=4 refused=3 skipped=4 state=Active
@@ -249,7 +249,7 @@ exact restore: 12/12
 
 ### 设置持久化
 
-`settings.json` 在 `%APPDATA%\Conflux\`，写入后包含目标显示器的 `monitorDevicePath`：
+`settings.json` 在 `%APPDATA%\Unfy\`，写入后包含目标显示器的 `monitorDevicePath`：
 
 ```json
 "target_display": {
@@ -366,12 +366,12 @@ bun test
 修复后连续启动验证：
 
 ```
-INFO reconciling autostart desired=false current=true  exe=…\conflux.exe
+INFO reconciling autostart desired=false current=true  exe=…\unfy.exe
 INFO autostart registration updated desired=false
 INFO remote-session evidence changed summary=no remote-session evidence
 ```
 
-无 panic，且此前 UI 测试遗留的开机自启注册项被正确移除（注册表 Run 键已无 Conflux）。
+无 panic，且此前 UI 测试遗留的开机自启注册项被正确移除（注册表 Run 键已无 Unfy）。
 
 **这一条没有被任何测试发现**，是读日志时看到的。它说明"启动成功"必须包含"日志里没有 panic"，
 而不只是"窗口出现了"。
@@ -406,7 +406,7 @@ INFO remote-session evidence changed summary=no remote-session evidence
 窗口控制权限   可以移动其他应用的窗口。
 显示器         检测到 2 块显示器。
 全局快捷键     已注册，在其他应用中也生效。
-配置目录       可写入 C:\Users\…\Conflux
+配置目录       可写入 C:\Users\…\Unfy
 ```
 
 五项检查：权限、显示器数量（0 是故障，1 是合法配置）、快捷键是否真的注册成功、
@@ -769,7 +769,7 @@ clean: 'title'   clean: '.exe'   clean: 'C:\'   clean: 'DISPLAY#'   clean: '\\?\
 
 `document.visibilityState` 在 Tauri 隐藏窗口时**不会变化**——先按 Web 标准加了
 `visibilitychange` 监听，实测隐藏后 CPU 仍以可见速率增长。改用后端在隐藏时发
-`conflux://window-hidden` 事件，前端停表；窗口重新获得焦点时恢复。
+`unfy://window-hidden` 事件，前端停表；窗口重新获得焦点时恢复。
 
 计数验证（临时探针，验证后移除）：
 
@@ -1053,7 +1053,7 @@ UIA 读不到内容）。改成 `async fn` 后 sleep 落在运行时线程，窗
 同一个 `migrate_with_trigger`，由调用方说明触发来源（`window` / `hotkey`）。
 
 **开机自启**：开启后注册表写入
-`HKCU\...\Run\Conflux = <exe> --tray`（带 `--tray`，登录时不弹窗），关闭后条目被清除。
+`HKCU\...\Run\Unfy = <exe> --tray`（带 `--tray`，登录时不弹窗），关闭后条目被清除。
 
 **诊断导出**：内容符合隐私声明——显示器以哈希 ID 呈现，设置只含 `has_gather_hotkey` 这类布尔值，
 不含窗口标题、路径或快捷键明文。
@@ -1173,7 +1173,7 @@ UIA 读不到内容）。改成 `async fn` 后 sleep 落在运行时线程，窗
 
 ### macOS 后端根本无法编译（本轮）
 
-在 Windows 上 `cargo check -p conflux-platform-mac --target aarch64-apple-darwin` 时发现：
+在 Windows 上 `cargo check -p unfy-platform-mac --target aarch64-apple-darwin` 时发现：
 macOS 后端**编译失败**——`WindowSnapshot` 缺 `focused` / `min_size`，`Capabilities` 缺 `min_size`
 （域类型后来加了这些字段，而该 crate 在 Windows/Linux 上编译为空库，所以本地永远看不到）。
 
@@ -1453,14 +1453,14 @@ min-content 宽度。右侧卡片多一个「使用中」标签，min-content �
 `SkipReason::OwnWindow` 在枚举里存在、有 `code()`、也参与 "这是一次跳过吗" 的判断，但**从来没有
 任何地方产生它**：`classify` 里根本没有这一分支，`EngineConfig` 也不知道自己的进程是谁。
 
-后果在实机上是可见的：`probe --mins` 列出的可整理窗口里有一行 `conflux.exe 511,161 898x711`。
+后果在实机上是可见的：`probe --mins` 列出的可整理窗口里有一行 `unfy.exe 511,161 898x711`。
 一次整理会把工具自己塞进网格、推到另一块屏，而用户正在它上面点按钮。
 
 修法：`EngineConfig` 增加 `own_process_id`，`classify` 最先检查它并返回 `OwnWindow`（先于排除规则，
 也先于 `is_migratable`，否则一个刚好最小化的自身窗口会被报成 `Invisible`，掩盖真实原因）。匹配
-pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然是普通窗口。
+pid 而不是 `"unfy.exe"`，这样第二份安装或并排的调试版仍然是普通窗口。
 
-实机验证：整理 12 个窗口后，`conflux.exe` 仍在 `511,161 898x711`，一字不差；预览里的候选列表
+实机验证：整理 12 个窗口后，`unfy.exe` 仍在 `511,161 898x711`，一字不差；预览里的候选列表
 为 11 个，工具自己不在其中。新增 `the_engine_never_moves_its_own_windows`，并确认把守卫去掉它
 会失败。
 
@@ -1482,7 +1482,7 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 正是应用自己走的那条路（`WinPlatform::new()` 在应用进程内构造）。应用从来不会移动自己的窗口。
 
 我犯的错是**用 `probe`（独立进程）的枚举结果当作应用行为的证据**：probe 的 `own_process` 是 probe
-自己的 pid，所以它列出 `conflux.exe` 是正确的，这不能说明应用会移动自己的窗口。
+自己的 pid，所以它列出 `unfy.exe` 是正确的，这不能说明应用会移动自己的窗口。
 
 已撤回 `own_process_id`、对应测试与文案。标签光晕那部分（同样是那一轮提交的）是有效的，予以保留。
 
@@ -1603,7 +1603,7 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 自己纠正窗口位置」。实测的拒绝原因是最小尺寸大于格子，这句话对终端、IDE 是错的。
 
 同时发现 `i18n.ts` 里有一个**永远匹配不上的重复键**——与正确键只差一个空格
-（`Conflux会` vs `Conflux 会`），对应的英文译文永远不会被使用。一并删除。
+（`Unfy会` vs `Unfy 会`），对应的英文译文永远不会被使用。一并删除。
 
 改为覆盖两种原因，中英同步；实测第 5 步渲染正确。
 
@@ -1702,7 +1702,7 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 | 快捷键组合 | 只导出 `has_gather_hotkey` 布尔值 |
 | 显示器标识 | `id_digest` 哈希，不是设备名 |
 
-比声明还要保守。导出后实测写入 `diagnostics/conflux-<uuid>.json`，提示给出路径与大小（7.3 KB），
+比声明还要保守。导出后实测写入 `diagnostics/unfy-<uuid>.json`，提示给出路径与大小（7.3 KB），
 文件内容与预览一致。
 
 **一处小观察（未改动）**：导出成功的提示里显示完整路径，含用户名。这是窗口内显示而非导出内容，
@@ -2003,7 +2003,7 @@ pid 而不是 `"conflux.exe"`，这样第二份安装或并排的调试版仍然
 
 两处都改为先设 `Error` 再返回。
 
-**这个分支的测试构造不出来，原因值得记录**：`conflux_journal::recover` 把任何解码失败都当作
+**这个分支的测试构造不出来，原因值得记录**：`unfy_journal::recover` 把任何解码失败都当作
 「尾部截断」（`truncated`），因为那是写入被打断的正常形态，随后返回 `Clean` 或 `Unfinished`。
 所以损坏的**内容**永远不会走到 `Err`。`JournalCorrupt` 只在文件打不开时出现——被删除、被锁、
 权限不足，那是 IO 状态而不是字节模式，无法用一段固定内容复现。
@@ -2610,7 +2610,7 @@ keeping the default`，窗口保持默认尺寸——原有行为正确。
 
 改动保留，但性质不是修复：
 
-- `show_settings` 补发 `conflux://window-shown`，前端监听后调 `startPolling`
+- `show_settings` 补发 `unfy://window-shown`，前端监听后调 `startPolling`
 - 理由是 `set_focus()` **可能被系统拒绝**（另一个窗口持有前台时），而依赖一个可能不到达的
   focus 事件，正是"窗口重开却没刷新"会发生的路径
 
@@ -2670,7 +2670,7 @@ keeping the default`，窗口保持默认尺寸——原有行为正确。
 
 ### 一个发了却没人监听的事件（本轮，已删）
 
-对比后端发出的事件与前端监听的事件，发现 `conflux://resumed` 只在后端出现。它在系统从休眠恢复时
+对比后端发出的事件与前端监听的事件，发现 `unfy://resumed` 只在后端出现。它在系统从休眠恢复时
 发出，前端从未监听。
 
 查它的实际作用：重置检测器的连续计数、清空 `last_observation`——**都是后端内部簿记**，前端没有
@@ -2680,7 +2680,7 @@ keeping the default`，窗口保持默认尺寸——原有行为正确。
 guard 活到块末，而 `state` 更早被 drop。改用 `let ... = match ...` 绑定后解决。
 
 新增 `every backend event has a listener and every listener an event`：两侧事件集合必须相同。
-注入一个 `conflux://orphan-event` 后测试精确报出。
+注入一个 `unfy://orphan-event` 后测试精确报出。
 
 ### 命令名的两侧对齐（本轮，已加测试）
 
@@ -2872,7 +2872,7 @@ Windows 自己就是这么做的（`WINDOWPLACEMENT` 分别保存 restore rect �
 `watch_topology` 在显示器拓扑变化时救援窗口，但那是**引擎的** `rescue_offscreen`——它在平台层就
 过滤掉自身进程（`WinWindows::enumerate` 跳过 `own_process`）。所以：
 
-> 显示器被拔掉时，如果 Conflux 的窗口在那块屏上，窗口会留在没有任何显示器覆盖的坐标上。
+> 显示器被拔掉时，如果 Unfy 的窗口在那块屏上，窗口会留在没有任何显示器覆盖的坐标上。
 
 托盘能「显示」它，但 `show()` 不移动它。**这个专门用来救援窗口的工具，会把自己弄丢。**
 
@@ -2957,10 +2957,26 @@ Suppression::AllScreens -> suppressed: "all_screens", Suppression::Cooldown -> "
 
 ---
 
+### 项目改名 Conflux → Unfy（本轮，已修并实测）
+
+原名与 ConsenSys 的知名区块链项目 Conflux 重名。全仓 81 个文件 646 处替换（区分大小写：
+`Conflux`→`Unfy`、`conflux`→`unfy`），覆盖 crate 名、`unfy://` 事件协议、Tauri productName/
+identifier/publisher、注册表 Run 键、日志与诊断文件名、README 与文档、CI workflow。
+
+**用户数据迁移**：改名最怕丢用户数据（设置、排除规则、窗口几何、journal）。`config_dir` 在
+新目录（`%APPDATA%\Unfy`）不存在且旧目录（`%APPDATA%\Conflux`）存在时执行一次性 `rename`；
+跨文件系统时回退为逐文件复制并保留旧目录。前置条件保证幂等：新目录一旦存在，迁移永不覆盖。
+
+**实机验证**：启动 unfy.exe 后 `%APPDATA%\Unfy\` 出现且包含全部数据，旧目录消失，
+`settings.json` 三项抽查（layout_mode=default、目标屏编号 2、引导完成标记）全部保留；
+日志写入新目录，`gameviewer.exe`（UU 远程）检测照常工作。ui-audit 24 组合 clean。
+
+---
+
 ## 复现方式
 
 ```bash
 cargo test --workspace
-cargo run -p conflux-platform-win --bin e2e      # 真实桌面，创建并移动自己的窗口
-cargo run -p conflux-platform-win --bin probe    # 只读
+cargo run -p unfy-platform-win --bin e2e      # 真实桌面，创建并移动自己的窗口
+cargo run -p unfy-platform-win --bin probe    # 只读
 ```

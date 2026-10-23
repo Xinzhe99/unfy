@@ -1,15 +1,15 @@
 [package]
-name = "conflux-engine"
+name = "unfy-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-conflux-domain = { workspace = true }
-conflux-journal = { workspace = true }
-conflux-layout = { workspace = true }
-conflux-platform = { workspace = true }
+unfy-domain = { workspace = true }
+unfy-journal = { workspace = true }
+unfy-layout = { workspace = true }
+unfy-platform = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

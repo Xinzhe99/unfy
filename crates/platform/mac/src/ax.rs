@@ -17,10 +17,10 @@
 
 use std::ffi::c_void;
 
-use conflux_domain::{
+use unfy_domain::{
     DisplayKey, IdentityQuality, Rect, Size, WindowId, WindowMode, WindowSnapshot,
 };
-use conflux_platform::{
+use unfy_platform::{
     Capabilities, ObservedWindow, PlatformError, Result, WindowBackend, WindowPlan,
 };
 

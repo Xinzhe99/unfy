@@ -32,7 +32,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use conflux_domain::{Rect, WindowId, WindowMode};
+use unfy_domain::{Rect, WindowId, WindowMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -41,11 +41,11 @@ use uuid::Uuid;
 pub struct Preimage {
     pub id: WindowId,
     pub display_native_id: String,
-    pub display_quality: conflux_domain::IdentityQuality,
+    pub display_quality: unfy_domain::IdentityQuality,
     /// Work area of the display the window was on, so restore can tell whether
     /// the topology is unchanged or must be rescaled.
     pub display_work_area: Rect,
-    pub display_scale: conflux_domain::Scale,
+    pub display_scale: unfy_domain::Scale,
     pub visible_rect: Rect,
     pub outer_rect: Rect,
     pub mode: WindowMode,
@@ -59,7 +59,7 @@ pub struct Preimage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppliedResult {
     pub id: WindowId,
-    pub outcome: conflux_domain::WindowOutcome,
+    pub outcome: unfy_domain::WindowOutcome,
     pub observed: Option<ObservedRect>,
 }
 
@@ -147,10 +147,10 @@ impl RecoveredTransaction {
         self.results.iter().any(|r| {
             matches!(
                 r.outcome,
-                conflux_domain::WindowOutcome::Applied
-                    | conflux_domain::WindowOutcome::Restored
-                    | conflux_domain::WindowOutcome::FallbackVisible
-                    | conflux_domain::WindowOutcome::KeptUserChange
+                unfy_domain::WindowOutcome::Applied
+                    | unfy_domain::WindowOutcome::Restored
+                    | unfy_domain::WindowOutcome::FallbackVisible
+                    | unfy_domain::WindowOutcome::KeptUserChange
             )
         })
     }

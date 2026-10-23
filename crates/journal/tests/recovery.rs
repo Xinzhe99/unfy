@@ -8,13 +8,13 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 
-use conflux_domain::{IdentityQuality, Rect, WindowId, WindowMode, WindowOutcome};
-use conflux_journal::{
+use unfy_domain::{IdentityQuality, Rect, WindowId, WindowMode, WindowOutcome};
+use unfy_journal::{
     recover, AppliedResult, Journal, ObservedRect, Preimage, Recovered, RecoveredTransaction,
 };
 
 fn temp_journal() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("conflux-journal-test-{}", uuid_like()));
+    let dir = std::env::temp_dir().join(format!("unfy-journal-test-{}", uuid_like()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     dir.join("journal.bin")
 }
@@ -39,7 +39,7 @@ fn preimage(native_id: u64) -> Preimage {
         display_native_id: "display-a".into(),
         display_quality: IdentityQuality::Strong,
         display_work_area: Rect::new(0, 0, 2560, 1400),
-        display_scale: conflux_domain::Scale { x: 1.5, y: 1.5 },
+        display_scale: unfy_domain::Scale { x: 1.5, y: 1.5 },
         visible_rect: Rect::new(10, 20, 810, 620),
         outer_rect: Rect::new(3, 13, 817, 627),
         mode: WindowMode::Normal,

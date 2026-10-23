@@ -4,7 +4,7 @@
 //! covers `kind` and `payload` only, so it stays valid when the length prefix is
 //! intact but the payload is short — the case a torn append actually produces.
 
-use conflux_domain::{Rect, WindowId, WindowMode};
+use unfy_domain::{Rect, WindowId, WindowMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -129,7 +129,7 @@ impl Record {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conflux_domain::IdentityQuality;
+    use unfy_domain::IdentityQuality;
 
     fn sample_preimage() -> Preimage {
         Preimage {
@@ -141,7 +141,7 @@ mod tests {
             display_native_id: "display-a".into(),
             display_quality: IdentityQuality::Strong,
             display_work_area: Rect::new(0, 0, 2560, 1400),
-            display_scale: conflux_domain::Scale { x: 1.5, y: 1.5 },
+            display_scale: unfy_domain::Scale { x: 1.5, y: 1.5 },
             visible_rect: Rect::new(10, 20, 300, 400),
             outer_rect: Rect::new(3, 13, 307, 407),
             mode: WindowMode::Normal,
@@ -174,7 +174,7 @@ mod tests {
                 transaction: tx,
                 result: AppliedResult {
                     id: sample_preimage().id,
-                    outcome: conflux_domain::WindowOutcome::Applied,
+                    outcome: unfy_domain::WindowOutcome::Applied,
                     observed: None,
                 },
             },

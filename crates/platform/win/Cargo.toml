@@ -1,20 +1,20 @@
 [package]
-name = "conflux-platform-win"
+name = "unfy-platform-win"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-conflux-domain = { workspace = true }
-conflux-platform = { workspace = true }
+unfy-domain = { workspace = true }
+unfy-platform = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 base64 = "0.22"
 flate2 = "1"
-conflux-engine = { workspace = true }
-conflux-journal = { workspace = true }
+unfy-engine = { workspace = true }
+unfy-journal = { workspace = true }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Devices_Display",

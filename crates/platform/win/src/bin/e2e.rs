@@ -2,7 +2,7 @@
 //!
 //! The GUI-driven test is useful but noisy: the computer-use harness moves its
 //! own window while clicking buttons, which shows up as a restore mismatch that
-//! has nothing to do with Conflux. This binary removes that noise by owning the
+//! has nothing to do with Unfy. This binary removes that noise by owning the
 //! whole scenario:
 //!
 //! 1. spawn a child process that creates N plain Win32 windows on display 1;
@@ -15,16 +15,16 @@
 //! It asserts rather than printing, so a regression fails the process. It mutates
 //! only the windows it created.
 //!
-//! Run: `cargo run -p conflux-platform-win --bin e2e`
+//! Run: `cargo run -p unfy-platform-win --bin e2e`
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 
-use conflux_domain::{DisplaySnapshot, Rect, WindowId};
-use conflux_engine::{Engine, EngineConfig};
-use conflux_platform::{DisplayProvider, WindowBackend};
-use conflux_platform_win::WinPlatform;
+use unfy_domain::{DisplaySnapshot, Rect, WindowId};
+use unfy_engine::{Engine, EngineConfig};
+use unfy_platform::{DisplayProvider, WindowBackend};
+use unfy_platform_win::WinPlatform;
 
 /// Default number of host windows. Enough to force a multi-row grid.
 const DEFAULT_WINDOWS: usize = 6;
@@ -74,7 +74,7 @@ fn main() {
 
     let mut host = Host::spawn(windows, source).expect("spawn host windows");
 
-    let journal_dir = std::env::temp_dir().join(format!("conflux-e2e-{}", std::process::id()));
+    let journal_dir = std::env::temp_dir().join(format!("unfy-e2e-{}", std::process::id()));
     let config = EngineConfig {
         journal_dir: journal_dir.clone(),
         ..Default::default()
@@ -175,7 +175,7 @@ fn main() {
     // Other applications on this desktop are also part of the migration, and
     // some of them refuse to be moved. That is reported honestly rather than
     // hidden, so the assertion must be scoped to the windows this harness owns;
-    // a foreign window left in `pending` is not a Conflux failure.
+    // a foreign window left in `pending` is not a Unfy failure.
     let ours_pending = restore
         .pending
         .iter()
@@ -247,9 +247,9 @@ fn main() {
         );
         // Prove the retained journal is still recoverable rather than merely
         // present.
-        let recovered = conflux_journal::recover(&leftovers[0]).expect("journal readable");
+        let recovered = unfy_journal::recover(&leftovers[0]).expect("journal readable");
         match recovered {
-            conflux_journal::Recovered::Unfinished(tx) => {
+            unfy_journal::Recovered::Unfinished(tx) => {
                 assert!(
                     !tx.preimages.is_empty(),
                     "retained journal must still hold preimages"
@@ -259,7 +259,7 @@ fn main() {
                     tx.preimages.len()
                 );
             }
-            conflux_journal::Recovered::Clean => {
+            unfy_journal::Recovered::Clean => {
                 panic!("an unresolved transaction was recorded as clean")
             }
         }
@@ -284,11 +284,11 @@ trait MigrationCounts {
     fn rejected_count(&self) -> usize;
 }
 
-impl MigrationCounts for conflux_engine::MigrationReport {
+impl MigrationCounts for unfy_engine::MigrationReport {
     fn rejected_count(&self) -> usize {
         self.outcomes
             .values()
-            .filter(|o| matches!(o, conflux_domain::WindowOutcome::Rejected))
+            .filter(|o| matches!(o, unfy_domain::WindowOutcome::Rejected))
             .count()
     }
 }
@@ -411,7 +411,7 @@ fn host_main() {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wndproc),
             hInstance: instance.into(),
-            lpszClassName: w!("ConfluxE2EHost"),
+            lpszClassName: w!("UnfyE2EHost"),
             ..Default::default()
         };
         RegisterClassW(&class);
@@ -424,8 +424,8 @@ fn host_main() {
             let y = origin_y + (index / 3) * 120;
             let hwnd = CreateWindowExW(
                 Default::default(),
-                w!("ConfluxE2EHost"),
-                w!("Conflux E2E host"),
+                w!("UnfyE2EHost"),
+                w!("Unfy E2E host"),
                 WS_OVERLAPPEDWINDOW,
                 x,
                 y,

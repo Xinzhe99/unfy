@@ -1,4 +1,4 @@
-# Conflux v1 实现计划
+# Unfy v1 实现计划
 
 范围依据：[plan.md](plan.md) 的 D1–D4 决策 —— Windows + macOS、纯手动触发、冲突感知恢复、无商业化。
 本文只写**怎么建**，不重复 PRD 的验收用例（见 [spec/product-spec.md](spec/product-spec.md) §5.4）与数据模型（见 [spec/technical-design.md](spec/technical-design.md) §3）。
@@ -10,7 +10,7 @@
 Cargo workspace + 单 Tauri app。核心 crate 不依赖 Tauri，保证可无头单测。
 
 ```
-Conflux/
+Unfy/
 ├─ Cargo.toml                     # [workspace] members
 ├─ apps/desktop/
 │  ├─ package.json                # React 19 + Vite + Tailwind + shadcn/ui
@@ -129,7 +129,7 @@ stateDiagram-v2
 
 ## 5. Journal 格式
 
-单文件 append-only + checkpoint，路径 `%APPDATA%\Conflux\state\journal\`（macOS：`~/Library/Application Support/Conflux/`）。
+单文件 append-only + checkpoint，路径 `%APPDATA%\Unfy\state\journal\`（macOS：`~/Library/Application Support/Unfy/`）。
 
 ```
 记录 = [len:u32][crc32:u32][type:u8][payload:json]

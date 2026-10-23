@@ -1,17 +1,17 @@
 [package]
-name = "conflux-platform-mac"
+name = "unfy-platform-mac"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "macOS Accessibility backend for Conflux"
+description = "macOS Accessibility backend for Unfy"
 
 # Every dependency is macOS-only. On other hosts this crate compiles to an empty
 # library so the workspace still builds and lints everywhere, while a contributor
 # on Linux or Windows cannot accidentally link AppKit glue into a release.
 [dependencies]
-conflux-domain = { workspace = true }
-conflux-platform = { workspace = true }
+unfy-domain = { workspace = true }
+unfy-platform = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

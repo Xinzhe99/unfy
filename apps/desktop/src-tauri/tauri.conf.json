@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Conflux",
+  "productName": "Unfy",
   "version": "0.1.0",
-  "identifier": "app.conflux.desktop",
+  "identifier": "app.unfy.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5183",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Conflux",
+        "title": "Unfy",
         "width": 896,
         "height": 679,
         "minWidth": 720,
@@ -49,10 +49,10 @@
     "macOS": {
       "minimumSystemVersion": "13.0"
     },
-    "publisher": "Conflux",
+    "publisher": "Unfy",
     "category": "Utility",
     "shortDescription": "Keep remote-session windows on the display the client can see",
-    "longDescription": "Conflux notices when a remote client is connected to this machine, gathers the windows from your other displays onto the one the client can see, and puts them back when the session ends."
+    "longDescription": "Unfy notices when a remote client is connected to this machine, gathers the windows from your other displays onto the one the client can see, and puts them back when the session ends."
   },
   "plugins": {
     "updater": {

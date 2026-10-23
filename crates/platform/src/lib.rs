@@ -1,4 +1,4 @@
-//! Platform abstraction for Conflux.
+//! Platform abstraction for Unfy.
 //!
 //! The engine never calls an OS API directly. Each supported platform provides a
 //! `DisplayProvider` and a `WindowBackend`; the fake implementation lives in this
@@ -13,7 +13,7 @@
 //! 2. `read_back` must never panic on a destroyed window; it returns
 //!    `PlatformError::WindowGone` instead.
 
-use conflux_domain::{
+use unfy_domain::{
     DisplayKey, DisplaySnapshot, Rect, Scale, Size, WindowId, WindowMode, WindowSnapshot,
 };
 
@@ -126,7 +126,7 @@ pub trait Platform {
 }
 
 /// Why a window was filtered out before planning. Mirrors
-/// `conflux_domain::SkipReason` but is produced at the platform layer, where the
+/// `unfy_domain::SkipReason` but is produced at the platform layer, where the
 /// evidence exists (window styles, AX subroles).
 pub fn rect_delta(a: Rect, b: Rect) -> (i32, i32, i32, i32) {
     (

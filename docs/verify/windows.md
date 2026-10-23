@@ -315,7 +315,7 @@ key = monitorDevicePath（主键，形如 \\?\DISPLAY#DELA1B2#5&...&0&UID4352#{e
 
 ```
 [Windows 服务 (LocalSystem, Session 0)]  ← 仅做：开机、watchdog、崩溃恢复
-        │  \\.\pipe\conflux-helper  (ACL: 仅本机、仅交互用户)
+        │  \\.\pipe\unfy-helper  (ACL: 仅本机、仅交互用户)
         │  校验: GetNamedPipeClientProcessId → QueryFullProcessImageNameW
         │        → 路径白名单 + WinVerifyTrust 验签
         ▼

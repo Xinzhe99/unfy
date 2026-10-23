@@ -1,4 +1,4 @@
-# Conflux 路线图、商业化、分发与风险
+# Unfy 路线图、商业化、分发与风险
 
 版本：规格基线 0.1；资料核验日期：2026-10-21。负责人：产品负责人、技术负责人、发布负责人。本文的工期、预算、售价、转化率均为**规划假设**，不是已完成测试、供应商报价或销售承诺；外部能力以所链官方资料为依据。技术契约与指标事件定义见 [technical-design.md](technical-design.md)，功能验收见 [product-spec.md](product-spec.md)，取舍见 [decisions.md](decisions.md)。
 
@@ -112,7 +112,7 @@ M4 另作 70–170 万元预算假设：2 名平台/驱动专家加 0.5 QA，4�
 
 ### 3.3 License 服务与离线语义
 
-License 服务与规则/更新服务分离；MoR 负责交易，Conflux 负责权益。下列字段是**本产品拟定协议**，不是第三方 SDK 参数：签名 entitlement 包含 `license_id`、匿名安装设备公钥指纹、`plan`、`features`、`issued_at`、`expires_at`、`paid_until` 或 `trial_until`、`entitlement_revision`、签名键标识。具体序列化与验证由技术设计冻结。
+License 服务与规则/更新服务分离；MoR 负责交易，Unfy 负责权益。下列字段是**本产品拟定协议**，不是第三方 SDK 参数：签名 entitlement 包含 `license_id`、匿名安装设备公钥指纹、`plan`、`features`、`issued_at`、`expires_at`、`paid_until` 或 `trial_until`、`entitlement_revision`、签名键标识。具体序列化与验证由技术设计冻结。
 
 | 情形 | 规定行为 |
 |---|---|
@@ -135,9 +135,9 @@ License 服务与规则/更新服务分离；MoR 负责交易，Conflux 负责�
 |---|---|
 | MoR 选择 | 首选 Paddle，Lemon Squeezy 作为替代；先验证主体所在地区、收款币种、软件类别、付款方式、结算与拒付政策。开户可用性、结算周期与最终合同 `[待验证]`：由商业负责人以真实主体申请并保留书面确认，未通过不得开放结账 |
 | 已核验费用 | 核验当日 Paddle 标准价为每笔结账 5% + US$0.50；Lemon Squeezy 公示基础 5% + US$0.50，但国际、PayPal、订阅等情形可能加费。报价会变，财务模型采用实际合同，不称“两家费用完全相同”。[Paddle 定价](https://www.paddle.com/pricing)、[Lemon Squeezy 定价](https://www.lemonsqueezy.com/pricing)、[附加费用说明](https://docs.lemonsqueezy.com/help/getting-started/fees) |
-| 税务边界 | 两家将自身定位为 MoR，处理其转售交易的 VAT/销售税；这不替代 Conflux 主体的所得税、记账、雇佣、隐私或制裁义务。销售地区适用条款、发票与自动续费告知 `[待验证]`：财税/法务与 MoR 审核；不得自行把某一地区消费者规则写成全球规则。[Paddle MoR 税务](https://www.paddle.com/help/start/intro-to-paddle/how-paddle-is-able-to-take-on-your-vat-and-tax-responsibilities)、[Lemon Squeezy MoR](https://www.lemonsqueezy.com/reporting/merchant-of-record) |
-| 退款 | 产品政策建议首次购买 14 天内提供退款申请，续费提醒和取消入口在结账与设置可见；适用法定权利和 MoR 合同优先。退款不要求提交屏幕截图/窗口标题/远程密码；可选脱敏诊断帮助改进，但不作为退款前提。实际退款时限/手续费 `[待验证]`：M3 合同与沙盒流程验证。Lemon Squeezy 明确保留为避免拒付而自行退款的权利，不能承诺由 Conflux 独占决定。[退款政策](https://docs.lemonsqueezy.com/help/payments/refunds-chargebacks) |
-| 结账与支持 | 官网托管结账，Conflux 不接触银行卡数据。收据显示付款方、产品和期限；产品技术支持由 Conflux 负责，账单争议提供 MoR 入口；不能将 MoR 买家账单支持宣传为本产品技术 SLA |
+| 税务边界 | 两家将自身定位为 MoR，处理其转售交易的 VAT/销售税；这不替代 Unfy 主体的所得税、记账、雇佣、隐私或制裁义务。销售地区适用条款、发票与自动续费告知 `[待验证]`：财税/法务与 MoR 审核；不得自行把某一地区消费者规则写成全球规则。[Paddle MoR 税务](https://www.paddle.com/help/start/intro-to-paddle/how-paddle-is-able-to-take-on-your-vat-and-tax-responsibilities)、[Lemon Squeezy MoR](https://www.lemonsqueezy.com/reporting/merchant-of-record) |
+| 退款 | 产品政策建议首次购买 14 天内提供退款申请，续费提醒和取消入口在结账与设置可见；适用法定权利和 MoR 合同优先。退款不要求提交屏幕截图/窗口标题/远程密码；可选脱敏诊断帮助改进，但不作为退款前提。实际退款时限/手续费 `[待验证]`：M3 合同与沙盒流程验证。Lemon Squeezy 明确保留为避免拒付而自行退款的权利，不能承诺由 Unfy 独占决定。[退款政策](https://docs.lemonsqueezy.com/help/payments/refunds-chargebacks) |
+| 结账与支持 | 官网托管结账，Unfy 不接触银行卡数据。收据显示付款方、产品和期限；产品技术支持由 Unfy 负责，账单争议提供 MoR 入口；不能将 MoR 买家账单支持宣传为本产品技术 SLA |
 | 单位经济示例 | US$29 年费按 5% + US$0.50 计费，费用 US$1.95，余额 US$27.05；再假设退款预留 US$1.45、支持 10 分钟×US$30/小时=US$5、服务 US$1.20，则贡献约 US$19.40/年。仅示意，未计税、汇兑、额外支付费用、获客与固定研发成本；需要续费与支持数据后重算 |
 
 ### 3.5 转化、支持与隐私
@@ -166,7 +166,7 @@ License 服务与规则/更新服务分离；MoR 负责交易，Conflux 负责�
 | Linux X11 | AppImage、deb、rpm；初期架构与发行版按实机支持矩阵 | AppImage updater 签名；deb/rpm 及仓库元数据使用独立发行签名方案。最低运行库与 WebKitGTK ABI `[待验证]`：在选定最老支持发行版构建并对目标发行版验收 | AppImage：应用 updater；deb/rpm：系统包管理器。应用不覆写受包管理器管理的文件 |
 | Wayland | 可安装同平台包，但 UI 明示“仅检测/通知”与能力边界 | 安装或可显示 UI 不等于能操作其他应用窗口 | 跟随所属包型，不以新权限绕过 compositor 限制 |
 
-Tauri 官方支持 Windows MSI/NSIS，以及 Linux AppImage、macOS app 归档等 updater 产物；并不自动提供 Conflux 的 journal 安全恢复、跨版本回退、灰度或企业策略。[Tauri Windows 安装器](https://v2.tauri.app/distribute/windows-installer/)、[Tauri updater](https://v2.tauri.app/plugin/updater/)。macOS 直接分发的签名、公证与加固要求依据 [Apple 公证说明](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) 和 [Developer ID 分发](https://developer.apple.com/developer-id/)。
+Tauri 官方支持 Windows MSI/NSIS，以及 Linux AppImage、macOS app 归档等 updater 产物；并不自动提供 Unfy 的 journal 安全恢复、跨版本回退、灰度或企业策略。[Tauri Windows 安装器](https://v2.tauri.app/distribute/windows-installer/)、[Tauri updater](https://v2.tauri.app/plugin/updater/)。macOS 直接分发的签名、公证与加固要求依据 [Apple 公证说明](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) 和 [Developer ID 分发](https://developer.apple.com/developer-id/)。
 
 ### 4.2 更新事务与发布操作
 
@@ -203,7 +203,7 @@ Tauri 官方支持 Windows MSI/NSIS，以及 Linux AppImage、macOS app 归档�
 | GitHub Actions 矩阵 | Windows x64/arm64 构建+实机；macOS Intel/Apple Silicon 构建与 Universal 合并；Linux 在明确支持的基础发行版构建并测试 AppImage/deb/rpm | runner 版本/镜像/编译器固定；具体 runner 标签 `[待验证]`：开工时核实 GitHub 可用性，不承诺托管 runner 覆盖全部 GUI/GPU |
 | 实机测试池 | Windows 混合 DPI/提权/远程会话；macOS TCC/Spaces/重装换签名；Linux 多 WM/Xvfb 与真实多屏；驱动、硬件热拔插和远控端切屏人工 smoke | 每次候选版人工签字，包含不可自动化项目与原始指标 |
 | 发布流水线 | 受保护 tag → 构建 → 测试 → 产物清单/SBOM → 受控签名 → 公证/staple → 二次验签 → 暂存 → 发布批准 → 灰度元数据 → 对应渠道 manifest | 发布包不可变；签名私钥不写磁盘日志，采用受限签名服务/HSM 或受控密钥设施；更新键/规则键/平台签名键分离；关键发布双人复核 |
-| Windows 企业 | MSI；管理员在受管环境安装、升级、卸载；策略通过组策略/管理工具下发；Windows 服务/helper 只在 M4 独立包显式安装 | 系统 `msiexec` 的 `/i`、`/qn`、`/norestart` 已有官方文档；Conflux MSI 属性名、退出码映射、产品注册表策略路径均 `[待验证]`：生成 MSI 后在干净 VM / Intune / GPO 测试，不在本规格虚构路径。[msiexec](https://learn.microsoft.com/windows-server/administration/windows-commands/msiexec) |
+| Windows 企业 | MSI；管理员在受管环境安装、升级、卸载；策略通过组策略/管理工具下发；Windows 服务/helper 只在 M4 独立包显式安装 | 系统 `msiexec` 的 `/i`、`/qn`、`/norestart` 已有官方文档；Unfy MSI 属性名、退出码映射、产品注册表策略路径均 `[待验证]`：生成 MSI 后在干净 VM / Intune / GPO 测试，不在本规格虚构路径。[msiexec](https://learn.microsoft.com/windows-server/administration/windows-commands/msiexec) |
 | macOS 企业 | 已签名公证 PKG；MDM 分发托管配置与允许的隐私权限策略；用户 LaunchAgent 与特权 daemon 分离，M3 不装 daemon | PKG 的精确静默参数、配置 profile payload/key、TCC 可管理程度 `[待验证]`：用目标 macOS、真实 MDM 和 Apple 当前文档验证；普通安装器不得承诺代用户批准 Accessibility |
 | Linux 企业 | deb/rpm 与签名仓库、系统包管理器负责更新；普通登录用户实例操作窗口；M4 特权组件独立包 | 精确包管理静默参数、配置落盘路径、服务单元名 `[待验证]`：在支持发行版用原生 man page 与干净机器测试。无需 root 的基础功能不能因为无法安装 helper 而整体失败 |
 | 配置管理 | M4：管理员策略优先于用户设置；导入前校验 schema/签名/版本，先 dry-run；限制功能可否用、更新窗口、规则允许列表、遥测禁用、许可模式 | 生效范围/来源可见；普通用户不可改管理员策略；策略不能指定任意 shell/注册表写入。M3 仅配置导入导出，不冒充已有企业控制台 |

@@ -1,12 +1,12 @@
 [package]
-name = "conflux-journal"
+name = "unfy-journal"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-conflux-domain = { workspace = true }
+unfy-domain = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

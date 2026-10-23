@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use conflux_domain::{
+use unfy_domain::{
     DisplayKey, DisplaySnapshot, IdentityQuality, Rect, Scale, WindowId, WindowMode, WindowSnapshot,
 };
 
@@ -114,7 +114,7 @@ impl FakeBackend {
     }
 
     /// Record the minimum size a window claims for itself.
-    pub fn set_min_size(&mut self, id: u64, size: conflux_domain::Size) {
+    pub fn set_min_size(&mut self, id: u64, size: unfy_domain::Size) {
         if let Some(window) = self.windows.borrow_mut().get_mut(&id) {
             window.snapshot.min_size = Some(size);
         }

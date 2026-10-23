@@ -76,13 +76,13 @@ describe("colour tokens", () => {
     // oklch(L C H): the second component is chroma. Below 0.02 the hue is not
     // perceptible, which is what "monochrome" means here. A blue accent was
     // 0.155 and the dark one 0.14.
-    // Only *literal* definitions count. `--color-accent: var(--conflux-dark-accent)`
+    // Only *literal* definitions count. `--color-accent: var(--unfy-dark-accent)`
     // is the dark-theme alias and carries no chroma of its own.
     const accentLines = css
       .split("\n")
       .filter(
         (line) =>
-          /^\s*--(color|conflux-dark)-accent(-hover)?\s*:/.test(line) &&
+          /^\s*--(color|unfy-dark)-accent(-hover)?\s*:/.test(line) &&
           line.includes("oklch("),
       );
 
@@ -99,7 +99,7 @@ describe("colour tokens", () => {
     const css = await readText("src/styles.css");
     for (const token of ["success", "warning", "danger"]) {
       const occurrences = [
-        ...css.matchAll(new RegExp(`--(?:color|conflux-dark)-${token}\\s*:`, "g")),
+        ...css.matchAll(new RegExp(`--(?:color|unfy-dark)-${token}\\s*:`, "g")),
       ];
       // One light value, one dark value, and two aliases: the explicit dark
       // class and the `prefers-color-scheme` block that serves `theme-system`.

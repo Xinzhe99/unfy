@@ -20,7 +20,7 @@
  *
  * # Running it
  *
- *   cargo build -p conflux-desktop --features tauri/custom-protocol
+ *   cargo build -p unfy-desktop --features tauri/custom-protocol
  *   bun .verify/ui_audit.mjs
  *
  * Exits non-zero on any finding, so CI can gate on it. It starts and stops its own
@@ -32,7 +32,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const PORT = 9333;
 const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
-const EXE = `${ROOT}target/debug/conflux.exe`;
+const EXE = `${ROOT}target/debug/unfy.exe`;
 // Each page by its heading in both languages. The audit used to run only in Chinese,
 // which left the layouts nobody checked: English labels are longer ("Gather to target"
 // against 整理到目标屏) and that is exactly what overflows a narrow window.

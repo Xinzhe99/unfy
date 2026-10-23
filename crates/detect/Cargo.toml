@@ -1,13 +1,13 @@
 [package]
-name = "conflux-detect"
+name = "unfy-detect"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Remote-session detection signals for Conflux"
+description = "Remote-session detection signals for Unfy"
 
 [dependencies]
-conflux-domain = { workspace = true }
+unfy-domain = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

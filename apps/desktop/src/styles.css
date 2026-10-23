@@ -67,78 +67,78 @@
 }
 
 @theme {
-  --conflux-dark-canvas: oklch(0.175 0.006 265);
-  --conflux-dark-surface: oklch(0.213 0.007 265);
-  --conflux-dark-surface-hover: oklch(0.245 0.008 265);
-  --conflux-dark-surface-sunken: oklch(0.16 0.006 265);
-  --conflux-dark-sidebar: oklch(0.198 0.006 265);
-  --conflux-dark-nav-active: oklch(0.268 0.008 265);
-  --conflux-dark-border: oklch(0.298 0.008 265);
-  --conflux-dark-border-strong: oklch(0.38 0.009 265);
-  --conflux-dark-fg: oklch(0.94 0.004 265);
-  --conflux-dark-fg-soft: oklch(0.79 0.006 265);
-  --conflux-dark-muted: oklch(0.63 0.008 265);
+  --unfy-dark-canvas: oklch(0.175 0.006 265);
+  --unfy-dark-surface: oklch(0.213 0.007 265);
+  --unfy-dark-surface-hover: oklch(0.245 0.008 265);
+  --unfy-dark-surface-sunken: oklch(0.16 0.006 265);
+  --unfy-dark-sidebar: oklch(0.198 0.006 265);
+  --unfy-dark-nav-active: oklch(0.268 0.008 265);
+  --unfy-dark-border: oklch(0.298 0.008 265);
+  --unfy-dark-border-strong: oklch(0.38 0.009 265);
+  --unfy-dark-fg: oklch(0.94 0.004 265);
+  --unfy-dark-fg-soft: oklch(0.79 0.006 265);
+  --unfy-dark-muted: oklch(0.63 0.008 265);
   /* A near-white primary button in dark mode reads as "disabled" next to the
      real disabled buttons, which are the same shape at 40 % opacity. A mid grey
      keeps the fill distinct from the surface while staying monochrome - and the
      monochrome accent is a product decision (a blue one was rejected), so the
      grey stands rather than gaining a hue to look more "primary". */
-  --conflux-dark-accent: oklch(0.80 0.004 265);
-  --conflux-dark-accent-hover: oklch(0.87 0.004 265);
-  --conflux-dark-accent-fg: oklch(0.16 0.006 265);
-  --conflux-dark-accent-soft: oklch(0.30 0.006 265);
-  --conflux-dark-success: oklch(0.74 0.15 152);
-  --conflux-dark-warning: oklch(0.76 0.1 70);
-  --conflux-dark-danger: oklch(0.68 0.15 25);
-  --conflux-dark-active: oklch(0.68 0.13 250);
+  --unfy-dark-accent: oklch(0.80 0.004 265);
+  --unfy-dark-accent-hover: oklch(0.87 0.004 265);
+  --unfy-dark-accent-fg: oklch(0.16 0.006 265);
+  --unfy-dark-accent-soft: oklch(0.30 0.006 265);
+  --unfy-dark-success: oklch(0.74 0.15 152);
+  --unfy-dark-warning: oklch(0.76 0.1 70);
+  --unfy-dark-danger: oklch(0.68 0.15 25);
+  --unfy-dark-active: oklch(0.68 0.13 250);
   --shadow-card: 0 1px 2px oklch(0 0 0 / 0.25);
 }
 
 :root.theme-dark {
   color-scheme: dark;
-  --color-canvas: var(--conflux-dark-canvas);
-  --color-surface: var(--conflux-dark-surface);
-  --color-surface-hover: var(--conflux-dark-surface-hover);
-  --color-surface-sunken: var(--conflux-dark-surface-sunken);
-  --color-sidebar: var(--conflux-dark-sidebar);
-  --color-nav-active: var(--conflux-dark-nav-active);
-  --color-border: var(--conflux-dark-border);
-  --color-border-strong: var(--conflux-dark-border-strong);
-  --color-fg: var(--conflux-dark-fg);
-  --color-fg-soft: var(--conflux-dark-fg-soft);
-  --color-muted: var(--conflux-dark-muted);
-  --color-accent: var(--conflux-dark-accent);
-  --color-accent-hover: var(--conflux-dark-accent-hover);
-  --color-accent-fg: var(--conflux-dark-accent-fg);
-  --color-accent-soft: var(--conflux-dark-accent-soft);
-  --color-success: var(--conflux-dark-success);
-  --color-warning: var(--conflux-dark-warning);
-  --color-danger: var(--conflux-dark-danger);
-  --color-active: var(--conflux-dark-active);
+  --color-canvas: var(--unfy-dark-canvas);
+  --color-surface: var(--unfy-dark-surface);
+  --color-surface-hover: var(--unfy-dark-surface-hover);
+  --color-surface-sunken: var(--unfy-dark-surface-sunken);
+  --color-sidebar: var(--unfy-dark-sidebar);
+  --color-nav-active: var(--unfy-dark-nav-active);
+  --color-border: var(--unfy-dark-border);
+  --color-border-strong: var(--unfy-dark-border-strong);
+  --color-fg: var(--unfy-dark-fg);
+  --color-fg-soft: var(--unfy-dark-fg-soft);
+  --color-muted: var(--unfy-dark-muted);
+  --color-accent: var(--unfy-dark-accent);
+  --color-accent-hover: var(--unfy-dark-accent-hover);
+  --color-accent-fg: var(--unfy-dark-accent-fg);
+  --color-accent-soft: var(--unfy-dark-accent-soft);
+  --color-success: var(--unfy-dark-success);
+  --color-warning: var(--unfy-dark-warning);
+  --color-danger: var(--unfy-dark-danger);
+  --color-active: var(--unfy-dark-active);
 }
 
 @media (prefers-color-scheme: dark) {
   :root.theme-system {
     color-scheme: dark;
-    --color-canvas: var(--conflux-dark-canvas);
-    --color-surface: var(--conflux-dark-surface);
-    --color-surface-hover: var(--conflux-dark-surface-hover);
-    --color-surface-sunken: var(--conflux-dark-surface-sunken);
-    --color-sidebar: var(--conflux-dark-sidebar);
-    --color-nav-active: var(--conflux-dark-nav-active);
-    --color-border: var(--conflux-dark-border);
-    --color-border-strong: var(--conflux-dark-border-strong);
-    --color-fg: var(--conflux-dark-fg);
-    --color-fg-soft: var(--conflux-dark-fg-soft);
-    --color-muted: var(--conflux-dark-muted);
-    --color-accent: var(--conflux-dark-accent);
-    --color-accent-hover: var(--conflux-dark-accent-hover);
-    --color-accent-fg: var(--conflux-dark-accent-fg);
-    --color-accent-soft: var(--conflux-dark-accent-soft);
-    --color-success: var(--conflux-dark-success);
-    --color-warning: var(--conflux-dark-warning);
-    --color-danger: var(--conflux-dark-danger);
-    --color-active: var(--conflux-dark-active);
+    --color-canvas: var(--unfy-dark-canvas);
+    --color-surface: var(--unfy-dark-surface);
+    --color-surface-hover: var(--unfy-dark-surface-hover);
+    --color-surface-sunken: var(--unfy-dark-surface-sunken);
+    --color-sidebar: var(--unfy-dark-sidebar);
+    --color-nav-active: var(--unfy-dark-nav-active);
+    --color-border: var(--unfy-dark-border);
+    --color-border-strong: var(--unfy-dark-border-strong);
+    --color-fg: var(--unfy-dark-fg);
+    --color-fg-soft: var(--unfy-dark-fg-soft);
+    --color-muted: var(--unfy-dark-muted);
+    --color-accent: var(--unfy-dark-accent);
+    --color-accent-hover: var(--unfy-dark-accent-hover);
+    --color-accent-fg: var(--unfy-dark-accent-fg);
+    --color-accent-soft: var(--unfy-dark-accent-soft);
+    --color-success: var(--unfy-dark-success);
+    --color-warning: var(--unfy-dark-warning);
+    --color-danger: var(--unfy-dark-danger);
+    --color-active: var(--unfy-dark-active);
   }
 }
 
@@ -194,7 +194,7 @@ body {
   background: transparent;
 }
 
-@keyframes conflux-fade-in {
+@keyframes unfy-fade-in {
   from {
     opacity: 0;
   }
@@ -204,7 +204,7 @@ body {
 }
 
 .animate-in {
-  animation: conflux-fade-in 140ms ease-out both;
+  animation: unfy-fade-in 140ms ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {

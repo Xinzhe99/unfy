@@ -6,7 +6,7 @@
 
 #![cfg(target_os = "macos")]
 
-use conflux_domain::Rect;
+use unfy_domain::Rect;
 
 /// AppKit uses bottom-left origin, AX uses top-left. A screen at AppKit origin
 /// `(0, 0)` with height 1080 maps to top-left `(0, 0)`; a screen stacked above it
@@ -42,7 +42,7 @@ fn offscreen_detection_is_geometry_based() {
 /// separate and position writes are ignored.
 #[test]
 fn fullscreen_windows_are_skipped_by_the_snapshot_predicate() {
-    use conflux_domain::{DisplayKey, IdentityQuality, WindowId, WindowMode, WindowSnapshot};
+    use unfy_domain::{DisplayKey, IdentityQuality, WindowId, WindowMode, WindowSnapshot};
 
     let snapshot = |mode| WindowSnapshot {
         id: WindowId {

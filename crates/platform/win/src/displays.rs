@@ -6,8 +6,8 @@
 //! `MDT_EFFECTIVE_DPI` supplies the user's scale factor; `GetDpiForWindow` cannot
 //! be used for this because it reports 96 for DPI-unaware target processes.
 
-use conflux_domain::{DisplayKey, DisplaySnapshot, IdentityQuality, Rect, Scale, WindowId};
-use conflux_platform::{DisplayProvider, PlatformError, Result};
+use unfy_domain::{DisplayKey, DisplaySnapshot, IdentityQuality, Rect, Scale, WindowId};
+use unfy_platform::{DisplayProvider, PlatformError, Result};
 use windows::core::BOOL;
 use windows::Win32::Devices::Display::{
     DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,

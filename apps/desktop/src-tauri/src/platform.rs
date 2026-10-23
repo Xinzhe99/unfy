@@ -5,13 +5,13 @@
 //! `false` and the UI must show that rather than pretending to work.
 
 #[cfg(target_os = "windows")]
-pub type Backend = conflux_platform_win::WinPlatform;
+pub type Backend = unfy_platform_win::WinPlatform;
 
 #[cfg(target_os = "macos")]
-pub type Backend = conflux_platform_mac::MacPlatform;
+pub type Backend = unfy_platform_mac::MacPlatform;
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub type Backend = conflux_platform::fake::FakeBackend;
+pub type Backend = unfy_platform::fake::FakeBackend;
 
 /// Whether this build can actually move other applications' windows.
 pub fn is_supported() -> bool {
@@ -33,15 +33,15 @@ pub fn name() -> &'static str {
 pub fn make() -> Backend {
     #[cfg(target_os = "windows")]
     {
-        conflux_platform_win::WinPlatform::new()
+        unfy_platform_win::WinPlatform::new()
     }
     #[cfg(target_os = "macos")]
     {
-        conflux_platform_mac::MacPlatform::new()
+        unfy_platform_mac::MacPlatform::new()
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        conflux_platform::fake::FakeBackend::with_two_displays()
+        unfy_platform::fake::FakeBackend::with_two_displays()
     }
 }
 
@@ -53,7 +53,7 @@ pub fn make() -> Backend {
 pub fn has_window_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
-        conflux_platform_mac::has_accessibility_permission()
+        unfy_platform_mac::has_accessibility_permission()
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -67,7 +67,7 @@ pub fn has_window_permission() -> bool {
 pub fn request_window_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
-        conflux_platform_mac::request_accessibility_permission()
+        unfy_platform_mac::request_accessibility_permission()
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -79,7 +79,7 @@ pub fn request_window_permission() -> bool {
 pub fn open_permission_settings() -> bool {
     #[cfg(target_os = "macos")]
     {
-        conflux_platform_mac::open_accessibility_settings()
+        unfy_platform_mac::open_accessibility_settings()
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -102,7 +102,7 @@ pub fn permission_name() -> &'static str {
 pub fn open_directory(path: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
-        conflux_platform_win::open_directory(std::path::Path::new(path))
+        unfy_platform_win::open_directory(std::path::Path::new(path))
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -120,10 +120,10 @@ pub fn open_directory(path: &str) -> bool {
 pub fn flash_display_labels(seconds: u64) -> FlashOutcome {
     #[cfg(target_os = "windows")]
     {
-        match conflux_platform_win::flash_display_labels(seconds) {
-            conflux_platform_win::FlashOutcome::Shown => FlashOutcome::Shown,
-            conflux_platform_win::FlashOutcome::AlreadyShowing => FlashOutcome::AlreadyShowing,
-            conflux_platform_win::FlashOutcome::Unavailable => FlashOutcome::Unavailable,
+        match unfy_platform_win::flash_display_labels(seconds) {
+            unfy_platform_win::FlashOutcome::Shown => FlashOutcome::Shown,
+            unfy_platform_win::FlashOutcome::AlreadyShowing => FlashOutcome::AlreadyShowing,
+            unfy_platform_win::FlashOutcome::Unavailable => FlashOutcome::Unavailable,
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -157,7 +157,7 @@ pub struct Thumbnail {
 pub fn display_thumbnails() -> Vec<Thumbnail> {
     #[cfg(target_os = "windows")]
     {
-        conflux_platform_win::display_thumbnails()
+        unfy_platform_win::display_thumbnails()
             .into_iter()
             .map(|t| Thumbnail {
                 native_id: t.native_id,
@@ -176,7 +176,7 @@ pub fn display_thumbnails() -> Vec<Thumbnail> {
 pub fn running_applications() -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
-        conflux_platform_win::running_applications()
+        unfy_platform_win::running_applications()
     }
     #[cfg(not(target_os = "windows"))]
     {

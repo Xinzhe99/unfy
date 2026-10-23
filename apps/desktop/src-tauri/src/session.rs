@@ -123,7 +123,7 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
                         tracing::warn!(error = %message, "hotkey gather failed");
                     }
                     let _ = app.emit(
-                        "conflux://action",
+                        "unfy://action",
                         serde_json::json!({
                             "action": "gather",
                             "ok": outcome.is_ok(),
@@ -151,7 +151,7 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
                         }
                     }
                     let _ = app.emit(
-                        "conflux://action",
+                        "unfy://action",
                         serde_json::json!({
                             "action": "restore",
                             "ok": outcome.is_ok(),
@@ -273,7 +273,7 @@ pub fn watch_topology<R: Runtime>(app: &AppHandle<R>) {
 
                     use tauri::Emitter;
                     let _ = handle.emit(
-                        "conflux://topology-changed",
+                        "unfy://topology-changed",
                         serde_json::json!({
                             "rescued": count,
                             // A layout that survived a topology change is still
@@ -281,7 +281,7 @@ pub fn watch_topology<R: Runtime>(app: &AppHandle<R>) {
                             // it offer "整理到目标屏" again, which is what the
                             // user wants when the monitor comes back or moves.
                             "needs_regather": captured > 0
-                                && state == conflux_domain::EngineState::Active,
+                                && state == unfy_domain::EngineState::Active,
                             "captured": captured,
                         }),
                     );

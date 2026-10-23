@@ -1,4 +1,4 @@
-//! Windows implementation of the Conflux platform traits.
+//! Windows implementation of the Unfy platform traits.
 //!
 //! The three rules that this module exists to enforce:
 //!
@@ -20,7 +20,7 @@ mod windows_impl;
 pub use displays::{display_at, WinDisplays};
 pub use windows_impl::{capture_placement, nudge_window, RawWindow, WinWindows, WindowStyleFlags};
 
-use conflux_platform::{DisplayProvider, Platform, WindowBackend};
+use unfy_platform::{DisplayProvider, Platform, WindowBackend};
 
 /// The Windows platform pair.
 #[derive(Debug, Default)]
@@ -49,54 +49,54 @@ impl Platform for WinPlatform {
 }
 
 impl DisplayProvider for WinPlatform {
-    fn topology(&self) -> conflux_platform::Result<Vec<conflux_domain::DisplaySnapshot>> {
+    fn topology(&self) -> unfy_platform::Result<Vec<unfy_domain::DisplaySnapshot>> {
         self.displays.topology()
     }
 
     fn scale_of(
         &self,
-        key: &conflux_domain::DisplayKey,
-    ) -> conflux_platform::Result<conflux_domain::Scale> {
+        key: &unfy_domain::DisplayKey,
+    ) -> unfy_platform::Result<unfy_domain::Scale> {
         self.displays.scale_of(key)
     }
 
     fn display_for(
         &self,
-        id: &conflux_domain::WindowId,
-    ) -> conflux_platform::Result<conflux_domain::DisplayKey> {
+        id: &unfy_domain::WindowId,
+    ) -> unfy_platform::Result<unfy_domain::DisplayKey> {
         self.displays.display_for(id)
     }
 }
 
 impl WindowBackend for WinPlatform {
-    fn enumerate(&self) -> conflux_platform::Result<Vec<conflux_domain::WindowSnapshot>> {
+    fn enumerate(&self) -> unfy_platform::Result<Vec<unfy_domain::WindowSnapshot>> {
         self.windows.enumerate()
     }
 
-    fn capabilities(&self, id: &conflux_domain::WindowId) -> conflux_platform::Capabilities {
+    fn capabilities(&self, id: &unfy_domain::WindowId) -> unfy_platform::Capabilities {
         self.windows.capabilities(id)
     }
 
     fn apply(
         &self,
-        id: &conflux_domain::WindowId,
-        plan: &conflux_platform::WindowPlan,
-    ) -> conflux_platform::Result<()> {
+        id: &unfy_domain::WindowId,
+        plan: &unfy_platform::WindowPlan,
+    ) -> unfy_platform::Result<()> {
         self.windows.apply(id, plan)
     }
 
     fn read_back(
         &self,
-        id: &conflux_domain::WindowId,
-    ) -> conflux_platform::Result<conflux_platform::ObservedWindow> {
+        id: &unfy_domain::WindowId,
+    ) -> unfy_platform::Result<unfy_platform::ObservedWindow> {
         self.windows.read_back(id)
     }
 
     fn restore_native(
         &self,
-        id: &conflux_domain::WindowId,
+        id: &unfy_domain::WindowId,
         placement: &[u8],
-    ) -> conflux_platform::Result<()> {
+    ) -> unfy_platform::Result<()> {
         self.windows.restore_native(id, placement)
     }
 }
@@ -126,7 +126,7 @@ pub fn display_thumbnails() -> Vec<DisplayThumbnail> {
 /// Used by the exclusion picker so the user selects from what is actually
 /// running instead of typing a file name they have to guess.
 pub fn running_applications() -> Vec<String> {
-    use conflux_platform::WindowBackend;
+    use unfy_platform::WindowBackend;
 
     let backend = crate::WinWindows::new();
     let mut names: Vec<String> = backend

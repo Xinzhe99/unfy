@@ -13,7 +13,7 @@
 //! sentence in Rust and sending the text, is what produced Chinese text in an
 //! English window.
 
-use conflux_settings::LanguageName;
+use unfy_settings::LanguageName;
 
 /// A language the interface can be rendered in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,7 @@ pub struct TrayText {
     pub quit: &'static str,
     /// Shown when a display-dependent action has no display to work with.
     pub no_displays: &'static str,
-    /// Remote-session evidence, mirroring `Evidence::key` in `conflux-detect`.
+    /// Remote-session evidence, mirroring `Evidence::key` in `unfy-detect`.
     pub evidence_rdp: &'static str,
     pub evidence_virtual_display: &'static str,
     pub evidence_tool_connected: &'static str,
@@ -90,13 +90,13 @@ pub struct TrayText {
 }
 
 pub const ZH: TrayText = TrayText {
-    state_idle: "Conflux · 就绪",
-    state_planning: "Conflux · 正在计划",
-    state_migrating: "Conflux · 正在整理窗口",
-    state_active: "Conflux · 布局已启用",
-    state_restoring: "Conflux · 正在恢复",
-    state_degraded: "Conflux · 部分受限",
-    state_error: "Conflux · 需要处理",
+    state_idle: "Unfy · 就绪",
+    state_planning: "Unfy · 正在计划",
+    state_migrating: "Unfy · 正在整理窗口",
+    state_active: "Unfy · 布局已启用",
+    state_restoring: "Unfy · 正在恢复",
+    state_degraded: "Unfy · 部分受限",
+    state_error: "Unfy · 需要处理",
     paused_suffix: "（已暂停）",
     remote_prefix: "远程会话：",
     gather: "整理到目标屏",
@@ -119,13 +119,13 @@ pub const ZH: TrayText = TrayText {
 };
 
 pub const EN: TrayText = TrayText {
-    state_idle: "Conflux · Ready",
-    state_planning: "Conflux · Planning",
-    state_migrating: "Conflux · Gathering windows",
-    state_active: "Conflux · Layout active",
-    state_restoring: "Conflux · Restoring",
-    state_degraded: "Conflux · Partly limited",
-    state_error: "Conflux · Needs attention",
+    state_idle: "Unfy · Ready",
+    state_planning: "Unfy · Planning",
+    state_migrating: "Unfy · Gathering windows",
+    state_active: "Unfy · Layout active",
+    state_restoring: "Unfy · Restoring",
+    state_degraded: "Unfy · Partly limited",
+    state_error: "Unfy · Needs attention",
     paused_suffix: " (paused)",
     remote_prefix: "Remote session: ",
     gather: "Gather to target",
@@ -181,7 +181,7 @@ pub fn evidence(text: &TrayText, key: &str, param: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    /// Every evidence key from `conflux-detect` must reach this table, in both
+    /// Every evidence key from `unfy-detect` must reach this table, in both
     /// languages. Without this, a new signal would appear as its Chinese key in an
     /// English tray and nobody would notice until a screenshot.
     #[test]

@@ -15,7 +15,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use conflux_detect::{Evidence, Sensitivity, Tracker, Transition};
+use unfy_detect::{Evidence, Sensitivity, Tracker, Transition};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::AppState;
@@ -40,7 +40,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
             if STOP.load(Ordering::Relaxed) {
                 return;
             }
-            std::thread::sleep(conflux_detect::POLL_INTERVAL);
+            std::thread::sleep(unfy_detect::POLL_INTERVAL);
 
             // Spec P0-10-B: after the machine wakes, nothing observed before sleep
             // may be trusted. The wall clock jumped by far more than the poll
@@ -53,7 +53,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
             // would move windows based on a stale observation.
             let elapsed = last.elapsed();
             last = std::time::Instant::now();
-            if elapsed > conflux_detect::POLL_INTERVAL * 3 {
+            if elapsed > unfy_detect::POLL_INTERVAL * 3 {
                 tracing::info!(
                     elapsed_secs = elapsed.as_secs(),
                     "long gap between polls; assuming the machine was suspended"
@@ -138,13 +138,13 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
         let Ok(engine) = state.engine.lock() else {
             return;
         };
-        match conflux_platform::DisplayProvider::topology(engine.backend()) {
+        match unfy_platform::DisplayProvider::topology(engine.backend()) {
             Ok(topology) => topology,
             Err(_) => return,
         }
     };
 
-    let mut observation = conflux_detect::platform::observe(&topology);
+    let mut observation = unfy_detect::platform::observe(&topology);
     // The manual marker lives in memory, not in the OS: the detector's platform
     // probe always reports `false` for it. Merging it here means a user-marked
     // session keeps activating regardless of what the probes see, and ending it is
@@ -157,7 +157,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
     // second would bury every other event within minutes. The interesting moment
     // is when the evidence set changes, which is exactly when a verdict could
     // flip.
-    let summary = conflux_detect::platform::summary(&observation);
+    let summary = unfy_detect::platform::summary(&observation);
     let changed = {
         let mut last = match state.last_observation.lock() {
             Ok(last) => last,
@@ -187,7 +187,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
             // Publish the verdict even when automation is disabled, so the
             // overview can show "检测到远程会话" and let the user act on it.
             let _ = app.emit(
-                "conflux://remote",
+                "unfy://remote",
                 serde_json::json!({
                     "active": true,
                     "evidence": crate::message::evidence_message(&evidence),
@@ -218,7 +218,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                         "remote shows all screens; nothing to gather"
                     );
                     let _ = app.emit(
-                        "conflux://remote",
+                        "unfy://remote",
                         serde_json::json!({
                             "active": true,
                             "evidence": crate::message::evidence_message(&evidence),
@@ -233,7 +233,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                 Some(Suppression::Cooldown) => {
                     tracing::info!(evidence = %evidence, "auto-gather suppressed by cooldown");
                     let _ = app.emit(
-                        "conflux://remote",
+                        "unfy://remote",
                         serde_json::json!({
                             "active": true,
                             "evidence": crate::message::evidence_message(&evidence),
@@ -257,7 +257,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                     crate::tray::record(app, crate::activity::Kind::AutoGather, applied, 0, "auto");
                     tracing::info!(evidence = %evidence, applied, "auto-gather finished");
                     let _ = app.emit(
-                        "conflux://remote",
+                        "unfy://remote",
                         serde_json::json!({
                             "active": true,
                             "evidence": crate::message::evidence_message(&evidence),
@@ -269,7 +269,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                 Err(message) => {
                     tracing::warn!(evidence = %evidence, error = %message, "auto-gather failed");
                     let _ = app.emit(
-                        "conflux://remote",
+                        "unfy://remote",
                         serde_json::json!({
                             "active": true,
                             "evidence": crate::message::evidence_message(&evidence),
@@ -282,7 +282,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
         }
         Transition::Deactivated => {
             let _ = app.emit(
-                "conflux://remote",
+                "unfy://remote",
                 serde_json::json!({
                     "active": false,
                     "acted": false,
@@ -332,7 +332,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                         "auto-restore finished"
                     );
                     let _ = app.emit(
-                        "conflux://remote",
+                        "unfy://remote",
                         serde_json::json!({
                             "active": false,
                             "acted": true,
@@ -344,7 +344,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
                 Err(message) => {
                     tracing::warn!(error = %message, "auto-restore failed");
                     let _ = app.emit(
-                        "conflux://remote",
+                        "unfy://remote",
                         serde_json::json!({
                             "active": false,
                             "acted": false,
@@ -467,7 +467,7 @@ fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
         // the same event for the delayed path there; this one hand-rolled the wait
         // and dropped the notification.
         let _ = app.emit(
-            "conflux://progress",
+            "unfy://progress",
             serde_json::json!({ "phase": "waiting", "seconds": delay }),
         );
         if !crate::schedule::wait_cancellable(
@@ -492,8 +492,8 @@ fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
             .outcomes
             .values()
             .filter(|o| {
-                **o == conflux_domain::WindowOutcome::Restored
-                    || **o == conflux_domain::WindowOutcome::FallbackVisible
+                **o == unfy_domain::WindowOutcome::Restored
+                    || **o == unfy_domain::WindowOutcome::FallbackVisible
             })
             .count(),
         pending: report.pending.len(),
@@ -503,7 +503,7 @@ fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
     // is released so a slow tray refresh cannot hold the engine. Without it the
     // window keeps saying "正在恢复布局…" once the windows are already back.
     let _ = app.emit(
-        "conflux://progress",
+        "unfy://progress",
         serde_json::json!({ "phase": "done" }),
     );
     crate::tray::refresh(app);
@@ -546,7 +546,7 @@ enum Suppression {
 /// different thing to the user - a switch they set, a screen they can already see,
 /// or a wait.
 fn suppression(
-    settings: &conflux_settings::Settings,
+    settings: &unfy_settings::Settings,
     paused: bool,
     last_auto_gather: Option<std::time::Instant>,
     now: std::time::Instant,
@@ -554,7 +554,7 @@ fn suppression(
     if !settings.auto_gather || paused {
         return Some(Suppression::AutomationOff);
     }
-    if settings.remote_screens == conflux_settings::RemoteScreens::All {
+    if settings.remote_screens == unfy_settings::RemoteScreens::All {
         return Some(Suppression::AllScreens);
     }
     if last_auto_gather.is_some_and(|at| now.duration_since(at) < AUTO_GATHER_COOLDOWN) {
@@ -571,7 +571,7 @@ pub fn stop() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conflux_settings::{RemoteScreens, Settings};
+    use unfy_settings::{RemoteScreens, Settings};
     use std::time::{Duration, Instant};
 
     fn settings(auto_gather: bool, remote_screens: RemoteScreens) -> Settings {

@@ -53,7 +53,7 @@ const MAX_EDGE: i32 = 256;
 /// locked session); the UI then falls back to the geometric map rather than
 /// showing broken images.
 pub fn display_thumbnails() -> Vec<DisplayThumbnail> {
-    use conflux_platform::DisplayProvider;
+    use unfy_platform::DisplayProvider;
 
     let displays = WinDisplays::new();
     let Ok(topology) = displays.topology() else {

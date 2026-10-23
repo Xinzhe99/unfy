@@ -21,17 +21,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub use conflux_domain::EngineState;
+pub use unfy_domain::EngineState;
 
-use conflux_domain::{
+use unfy_domain::{
     rescale_between, DisplayKey, DisplaySnapshot, EngineError, IdentityQuality, Rect, SkipReason,
     WindowId, WindowMode, WindowOutcome, WindowSnapshot,
 };
-use conflux_journal::{
+use unfy_journal::{
     AppliedResult, Journal, ObservedRect, Preimage, Recovered, RecoveredTransaction,
 };
-use conflux_layout::{Candidate, LayoutConfig, Plan, Unplaced};
-use conflux_platform::{
+use unfy_layout::{Candidate, LayoutConfig, Plan, Unplaced};
+use unfy_platform::{
     Capabilities, DisplayProvider, ObservedWindow, PlatformError, WindowBackend, WindowPlan,
 };
 
@@ -48,7 +48,7 @@ impl<T> Backend for T where T: DisplayProvider + WindowBackend {}
 pub struct EligibleWindow {
     pub snapshot: WindowSnapshot,
     pub display: DisplaySnapshot,
-    pub min_size: Option<conflux_domain::Size>,
+    pub min_size: Option<unfy_domain::Size>,
     pub focused: bool,
 }
 
@@ -154,7 +154,7 @@ pub struct EngineConfig {
     /// Where journal files live. One file per transaction.
     pub journal_dir: PathBuf,
     /// A window narrower than this is not considered "reachable".
-    pub min_reachable: conflux_domain::Size,
+    pub min_reachable: unfy_domain::Size,
     /// Seconds to wait at the start of `restore()`.
     /// Advisory: the desktop layer waits this long before calling `restore`.
     /// Kept in the config so diagnostics can report it, but the engine never
@@ -218,8 +218,8 @@ impl Default for EngineConfig {
             tolerance_px: 4,
             max_attempts: 2,
             retry_delay_ms: 60,
-            journal_dir: std::env::temp_dir().join("conflux-journal"),
-            min_reachable: conflux_domain::Size::new(64, 32),
+            journal_dir: std::env::temp_dir().join("unfy-journal"),
+            min_reachable: unfy_domain::Size::new(64, 32),
             restore_delay_secs: 0,
             excluded_apps: Vec::new(),
         }
@@ -431,13 +431,13 @@ impl<B: Backend> Engine<B> {
         // healthy tool over a desktop it could not put back. `Error` is what the
         // state means here: no new writes, recovery and rescue still offered.
         //
-        // Unreachable by corrupt *content*: `conflux_journal::recover` treats a
+        // Unreachable by corrupt *content*: `unfy_journal::recover` treats a
         // failed record as a torn tail, which is the normal shape of an interrupted
         // write, and returns `Clean`. This branch fires when the file cannot be read
         // at all - locked, removed, or permission-denied underneath the app - which
         // is why there is no unit test constructing it: the failure is an IO state,
         // not a byte pattern.
-        let recovered = match conflux_journal::recover(path) {
+        let recovered = match unfy_journal::recover(path) {
             Ok(recovered) => recovered,
             Err(e) => {
                 self.state = EngineState::Error;
@@ -628,7 +628,7 @@ impl<B: Backend> Engine<B> {
         let mut layout = self.config.layout;
         layout.source_bounds = Some(source);
 
-        let plan = conflux_layout::plan(&candidates, target_display.work_area, &layout);
+        let plan = unfy_layout::plan(&candidates, target_display.work_area, &layout);
 
         Ok(Preview {
             target: target.clone(),
@@ -646,7 +646,7 @@ impl<B: Backend> Engine<B> {
         &self,
         window: &WindowSnapshot,
         displays: &[DisplaySnapshot],
-    ) -> Result<Option<(DisplaySnapshot, Option<conflux_domain::Size>)>, SkipReason> {
+    ) -> Result<Option<(DisplaySnapshot, Option<unfy_domain::Size>)>, SkipReason> {
         if self.is_excluded(window) {
             return Err(SkipReason::ExcludedApp);
         }

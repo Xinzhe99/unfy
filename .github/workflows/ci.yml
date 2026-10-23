@@ -52,7 +52,7 @@ jobs:
 
       - name: macOS backend type-check
         if: runner.os == 'Windows'
-        run: cargo check -p conflux-platform-mac --target aarch64-apple-darwin
+        run: cargo check -p unfy-platform-mac --target aarch64-apple-darwin
 
   frontend:
     name: Frontend typecheck
@@ -133,7 +133,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: conflux-${{ runner.os }}
+          name: unfy-${{ runner.os }}
           path: |
             target/**/release/bundle/nsis/*.exe
             target/**/release/bundle/msi/*.msi
@@ -176,7 +176,7 @@ jobs:
         run: npm run build
 
       - name: Build the app
-        run: cargo build -p conflux-desktop --features tauri/custom-protocol
+        run: cargo build -p unfy-desktop --features tauri/custom-protocol
 
       - name: Audit contrast, clipping and overflow
         run: bun scripts/ui-audit.mjs
@@ -191,4 +191,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo run -p conflux-platform-win --bin e2e
+      - run: cargo run -p unfy-platform-win --bin e2e

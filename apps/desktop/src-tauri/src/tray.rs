@@ -40,7 +40,7 @@ pub const ID_QUIT: &str = "quit";
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let menu = build_menu(app)?;
 
-    let mut builder = TrayIconBuilder::with_id("conflux")
+    let mut builder = TrayIconBuilder::with_id("unfy")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
@@ -101,7 +101,7 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
 /// window stops answering, because the next status poll waits for a lock that will
 /// never be released.
 pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
-    let Some(tray) = app.tray_by_id("conflux") else {
+    let Some(tray) = app.tray_by_id("unfy") else {
         return;
     };
     if let Ok(menu) = build_menu(app) {
@@ -139,14 +139,14 @@ fn state_icon<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::image::Image<'sta
     //   --color-danger   error or degraded
     let (r, g, b) = match state {
         // Idle and healthy: green, matching the green "就绪" dot in the window.
-        (conflux_domain::EngineState::Idle, false) => (38u8, 123u8, 76u8),
+        (unfy_domain::EngineState::Idle, false) => (38u8, 123u8, 76u8),
         // A live layout, and the working states that lead to one: blue.
-        (conflux_domain::EngineState::Active, false)
-        | (conflux_domain::EngineState::Migrating, _)
-        | (conflux_domain::EngineState::Restoring, _)
-        | (conflux_domain::EngineState::Planning, _) => (56u8, 110u8, 200u8),
+        (unfy_domain::EngineState::Active, false)
+        | (unfy_domain::EngineState::Migrating, _)
+        | (unfy_domain::EngineState::Restoring, _)
+        | (unfy_domain::EngineState::Planning, _) => (56u8, 110u8, 200u8),
         // Needs attention: amber when paused or degraded, red when broken.
-        (conflux_domain::EngineState::Error, _) => (175u8, 52u8, 51u8),
+        (unfy_domain::EngineState::Error, _) => (175u8, 52u8, 51u8),
         // Remaining combinations: degraded, or paused in any state.
         _ => (150u8, 102u8, 38u8),
     };
@@ -212,18 +212,18 @@ fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
 
     let (engine_state, paused) = match engine.lock() {
         Ok(engine) => (engine.state(), engine.is_paused()),
-        Err(_) => return "Conflux".into(),
+        Err(_) => return "Unfy".into(),
     };
 
     let text = locale_text(app);
     let base = match engine_state {
-        conflux_domain::EngineState::Idle => text.state_idle,
-        conflux_domain::EngineState::Planning => text.state_planning,
-        conflux_domain::EngineState::Migrating => text.state_migrating,
-        conflux_domain::EngineState::Active => text.state_active,
-        conflux_domain::EngineState::Restoring => text.state_restoring,
-        conflux_domain::EngineState::Degraded => text.state_degraded,
-        conflux_domain::EngineState::Error => text.state_error,
+        unfy_domain::EngineState::Idle => text.state_idle,
+        unfy_domain::EngineState::Planning => text.state_planning,
+        unfy_domain::EngineState::Migrating => text.state_migrating,
+        unfy_domain::EngineState::Active => text.state_active,
+        unfy_domain::EngineState::Restoring => text.state_restoring,
+        unfy_domain::EngineState::Degraded => text.state_degraded,
+        unfy_domain::EngineState::Error => text.state_error,
     };
 
     let mut tooltip = if paused {
@@ -279,12 +279,12 @@ pub fn toggle_remote<R: Runtime>(app: &AppHandle<R>) {
     crate::monitor::tick(app);
 
     let _ = app.emit(
-        "conflux://remote",
+        "unfy://remote",
         serde_json::json!({
             "active": now_active,
             "evidence": if now_active {
                 serde_json::json!(crate::message::evidence_message(
-                    &conflux_detect::Evidence::ManualMarker
+                    &unfy_detect::Evidence::ManualMarker
                 ))
             } else {
                 serde_json::json!(null)
@@ -307,11 +307,11 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             // Read here so the cycle item can be enabled only when cycling means
             // something. A topology query is a few microseconds and the menu is
             // rebuilt only on state changes.
-            conflux_platform::DisplayProvider::topology(engine.backend())
+            unfy_platform::DisplayProvider::topology(engine.backend())
                 .map(|d| d.len())
                 .unwrap_or(0),
         ),
-        Err(_) => (conflux_domain::EngineState::Error, false, 0, 0),
+        Err(_) => (unfy_domain::EngineState::Error, false, 0, 0),
     };
 
     let has_layout = engine_state.has_pending_work() || pending > 0;
@@ -411,7 +411,7 @@ fn run_and_notify<R: Runtime>(app: &AppHandle<R>, action: &str) {
         tracing::warn!(action, error = %message, "tray action failed");
     }
     let _ = app.emit(
-        "conflux://action",
+        "unfy://action",
         serde_json::json!({
             "action": action,
             "ok": result.is_ok(),
@@ -440,7 +440,7 @@ fn toggle_pause<R: Runtime>(app: &AppHandle<R>) {
     }
 
     let _ = app.emit(
-        "conflux://action",
+        "unfy://action",
         serde_json::json!({ "action": "pause", "ok": true, "paused": now_paused }),
     );
     refresh(app);
@@ -509,7 +509,7 @@ fn run_restore<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 
 /// Restore without the configured delay, for paths where the user is actively
 /// waiting (exit).
-fn restore_now<R: Runtime>(app: &AppHandle<R>) -> Result<conflux_engine::RestoreReport, String> {
+fn restore_now<R: Runtime>(app: &AppHandle<R>) -> Result<unfy_engine::RestoreReport, String> {
     let state = app.state::<AppState>();
     let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
     engine.restore().map_err(|e| e.to_string())
@@ -575,7 +575,7 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
 
     if blocked {
         let _ = app.emit(
-            "conflux://exit-blocked",
+            "unfy://exit-blocked",
             serde_json::json!({ "reason": "restore_incomplete" }),
         );
         show_settings(app);

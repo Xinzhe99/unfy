@@ -13,9 +13,9 @@
 
 use std::io::Write;
 
-use conflux_domain::{rescale_between, WindowMode};
-use conflux_platform::{DisplayProvider, WindowBackend, WindowPlan};
-use conflux_platform_win::{WinDisplays, WinPlatform, WinWindows};
+use unfy_domain::{rescale_between, WindowMode};
+use unfy_platform::{DisplayProvider, WindowBackend, WindowPlan};
+use unfy_platform_win::{WinDisplays, WinPlatform, WinWindows};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -263,15 +263,15 @@ fn run_host() {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wndproc),
             hInstance: instance.into(),
-            lpszClassName: w!("ConfluxProbeHost"),
+            lpszClassName: w!("UnfyProbeHost"),
             ..Default::default()
         };
         RegisterClassW(&class);
 
         let hwnd = CreateWindowExW(
             Default::default(),
-            w!("ConfluxProbeHost"),
-            w!("Conflux probe host"),
+            w!("UnfyProbeHost"),
+            w!("Unfy probe host"),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -305,7 +305,7 @@ fn run_host() {
 /// the minimums, which come from `WM_GETMINMAXINFO` - an answer the application
 /// controls, and one that can come back as the window's current size.
 fn dump_min_sizes() {
-    use conflux_platform::WindowBackend as _;
+    use unfy_platform::WindowBackend as _;
 
     let platform = WinPlatform::new();
     let raw = WinWindows::new().enumerate_raw().expect("enumerate");

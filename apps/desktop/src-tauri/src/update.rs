@@ -142,7 +142,7 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
     let pending = pending_windows(&app);
     if pending > 0 {
         let _ = app.emit(
-            "conflux://update",
+            "unfy://update",
             serde_json::json!({
                 "outcome": "deferred",
                 "version": version,
@@ -156,7 +156,7 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
     }
 
     let _ = app.emit(
-        "conflux://update",
+        "unfy://update",
         serde_json::json!({ "outcome": "downloading", "version": version }),
     );
 
@@ -171,7 +171,7 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
     {
         Ok(()) => {
             let _ = app.emit(
-                "conflux://update",
+                "unfy://update",
                 serde_json::json!({ "outcome": "installed", "version": version }),
             );
             // Give the event a moment to reach the UI before restarting.

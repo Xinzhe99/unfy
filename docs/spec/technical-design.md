@@ -1,10 +1,10 @@
-# Conflux 技术设计
+# Unfy 技术设计
 
 版本：0.1，设计基线日期：2026-10-21。状态：可进入 M0 验证与实现拆分，尚未通过平台实测。需求见 [PRD](product-spec.md)，决策见 [ADR](decisions.md)，发布门禁见 [路线图](roadmap.md)。
 
 ## 1. 契约、事实级别与范围
 
-本文中 `Conflux` 自定义类型、字段、事件、目录、阈值均为**设计契约**，不是声称已经存在的第三方接口。外部 API 已有官方依据的列出来源；未确认的 API、参数、路径、行为标 `[待验证]`，并关联第 15 节验证任务。文档核验不等于兼容性实测；SDK、依赖和远控工具版本在 M0 锁定并保存证据。
+本文中 `Unfy` 自定义类型、字段、事件、目录、阈值均为**设计契约**，不是声称已经存在的第三方接口。外部 API 已有官方依据的列出来源；未确认的 API、参数、路径、行为标 `[待验证]`，并关联第 15 节验证任务。文档核验不等于兼容性实测；SDK、依赖和远控工具版本在 M0 锁定并保存证据。
 
 | 项目 | v1（M3）契约 |
 |---|---|
@@ -24,7 +24,7 @@
 采用既定 Tauri 2 + Rust + React/TypeScript + Tailwind + shadcn/ui。单一应用主进程持有 Rust 核心和 UI 生命周期；系统 WebView 可产生自身子进程，不将“单进程”误读为进程树只有一个进程。关闭设置窗口后释放非必要 WebView，保留托盘和核心。
 
 ```text
-Conflux/                         # 规划目录；此次仅交付 docs/spec 六份文档
+Unfy/                         # 规划目录；此次仅交付 docs/spec 六份文档
   apps/desktop/src/              # React 页面、i18n、无 OS 操作权限
   apps/desktop/src-tauri/        # Tauri 生命周期、受限 command、capabilities
   crates/domain/                # 状态、值对象、错误，禁止 OS 依赖
@@ -192,12 +192,12 @@ Windows session rescue 有明确例外：OS 的当前会话 RDP 协议/活动状
 
 传输 envelope（自定义格式）：`key_id`、`payload_base64`、`signature_base64`。对解码后的**原始 UTF-8 payload 字节**验 Ed25519 签名，再解析下列 schema，不做会改变签名输入的 JSON 重新序列化；生产密钥不与 updater/license 共用。总包 ≤512KiB、规则 ≤128、每条信号 ≤8。验签算法库/版本在 M0 安全依赖审查锁定 `[待验证]（V-RULE）`。
 
-以下为 payload 的完整结构草案，字段是 Conflux 自定义；`format` 必须开启严格验证。JSON Schema 外仍需本节的语义校验。
+以下为 payload 的完整结构草案，字段是 Unfy 自定义；`format` 必须开启严格验证。JSON Schema 外仍需本节的语义校验。
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ConfluxRulePayloadV1",
+  "title": "UnfyRulePayloadV1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "pack_id", "sequence", "issued_at", "expires_at", "min_client", "rules"],
@@ -270,7 +270,7 @@ Windows session rescue 有明确例外：OS 的当前会话 RDP 协议/活动状
 
 ### 5.3 八个真实工具的规则实例（均为待验证种子）
 
-下列数组每一项匹配 schema 的 `$defs/rule`；它不是签名生产包。`adapter`/`locator` 是拟定的 Conflux 适配键，**不是远控厂商 API、日志路径或已知参数**。`null` 表示未确认，`[待验证]` 明确记录在 evidence_ref；所有示例 `dry_run`，禁止不经样本验证直接改为 auto。示例平台仅指第一批验证宿主，不暗示其他平台不支持该工具。
+下列数组每一项匹配 schema 的 `$defs/rule`；它不是签名生产包。`adapter`/`locator` 是拟定的 Unfy 适配键，**不是远控厂商 API、日志路径或已知参数**。`null` 表示未确认，`[待验证]` 明确记录在 evidence_ref；所有示例 `dry_run`，禁止不经样本验证直接改为 auto。示例平台仅指第一批验证宿主，不暗示其他平台不支持该工具。
 
 ```json
 [
@@ -316,7 +316,7 @@ Windows session rescue 有明确例外：OS 的当前会话 RDP 协议/活动状
 | VNC | 低（泛称）；具体发行版另建规则 | 不能通用判定 mirror 或新 session；服务监听不足 |
 | xrdp | 中（可验证性），当前自动关闭 | Linux 登录会话与图形会话映射 `[待验证]（V-LINUX）`；只做当前会话救援 |
 
-捕获屏优先级：本次用户显式选择 > 用户保存的工具+主机规则 > 已验证捕获模式启发 > 主屏。缺失指定显示器不偷偷切屏迁移，先提示并允许手动选择主屏。用户热键循环当前活动屏，托盘显示名称/分辨率/目标序号（序号仅显示用）；屏幕边框预览可关闭。规则“默认目标”不是实时捕获来源；远端切屏对 Conflux 不可见时由热键纠正。虚拟屏存在也必须先在远控软件选择该屏。
+捕获屏优先级：本次用户显式选择 > 用户保存的工具+主机规则 > 已验证捕获模式启发 > 主屏。缺失指定显示器不偷偷切屏迁移，先提示并允许手动选择主屏。用户热键循环当前活动屏，托盘显示名称/分辨率/目标序号（序号仅显示用）；屏幕边框预览可关闭。规则“默认目标”不是实时捕获来源；远端切屏对 Unfy 不可见时由热键纠正。虚拟屏存在也必须先在远控软件选择该屏。
 
 **已核验的端口/路径事实**（见 [verify/linux-detection.md §8](../verify/linux-detection.md)，仅列有官方依据者；其余一律不得写入默认规则）：
 
@@ -342,7 +342,7 @@ Windows session rescue 有明确例外：OS 的当前会话 RDP 协议/活动状
 
 | 对象 | 默认动作 | 例外和理由 |
 |---|---|---|
-| 非当前 session/user/desktop、Conflux 自身 | 跳过 | 用户不能用规则突破 scope |
+| 非当前 session/user/desktop、Unfy 自身 | 跳过 | 用户不能用规则突破 scope |
 | 不可见、零尺寸、cloaked、已销毁 | 跳过 | 最小化窗口单独按正常位置处理，不把其 sentinel 坐标当真实矩形 |
 | 工具窗口、IME 候选、通知、桌面/任务栏/dock | 跳过 | Windows `WS_EX_TOOLWINDOW`、Shell 类名等做多因素排除；`Shell_TrayWnd` 是候选识别线索，版本/其他外壳 `[待验证]（V-WIN）` |
 | owner 弹窗/模态对话框 | 不当独立布局槽 | 已验证 owner 链则相对移动并约束可见；无法读/写子窗则整组跳过，避免对话框与 owner 分离 |
@@ -616,7 +616,7 @@ Windows Named Pipe；macOS 使用系统 IPC（候选 XPC）；Linux 用户 Unix 
 
 ### 11.1 更新事务
 
-Tauri updater 执行签名 artifact 的下载/安装；签名密钥、`pubkey`/`endpoints`、Windows `installMode` 等配置按锁定插件版本验证后使用 `[待验证]（V-UPDATE）`。官方文档已确认签名是更新机制一部分，但**没有替 Conflux 实现恢复屏障、灰度决策、全平台 A/B 回滚**。[Tauri updater](https://v2.tauri.app/plugin/updater/)。
+Tauri updater 执行签名 artifact 的下载/安装；签名密钥、`pubkey`/`endpoints`、Windows `installMode` 等配置按锁定插件版本验证后使用 `[待验证]（V-UPDATE）`。官方文档已确认签名是更新机制一部分，但**没有替 Unfy 实现恢复屏障、灰度决策、全平台 A/B 回滚**。[Tauri updater](https://v2.tauri.app/plugin/updater/)。
 
 ```text
 CHECK -> download into staging -> verify artifact + release policy
@@ -654,7 +654,7 @@ Windows 自启入口、macOS `SMAppService`、Linux XDG 自启由用户显式开
 
 ### 11.3 License 技术边界
 
-价格、权益与合同是 roadmap 的唯一来源。自定义签名 entitlement 字段草案：`schema_version, license_id, plan, device_public_id, seat_limit, issued_at, paid_until, expires_at, trial_until, features, entitlement_revision, key_id, signature`；此为 Conflux 服务协议设计，不是 Paddle/Lemon Squeezy 参数。`entitlement_revision` 由服务端按同一 license 单调递增；客户端保留最高已接受修订号并拒绝较旧凭证，续订/退款以服务端当前权益为准。该机制不能让未联网且未见新修订的客户端立即知道撤销。支付 webhook 的真实事件名、验签 header、API 路径 `[待验证]（V-LICENSE）`。
+价格、权益与合同是 roadmap 的唯一来源。自定义签名 entitlement 字段草案：`schema_version, license_id, plan, device_public_id, seat_limit, issued_at, paid_until, expires_at, trial_until, features, entitlement_revision, key_id, signature`；此为 Unfy 服务协议设计，不是 Paddle/Lemon Squeezy 参数。`entitlement_revision` 由服务端按同一 license 单调递增；客户端保留最高已接受修订号并拒绝较旧凭证，续订/退款以服务端当前权益为准。该机制不能让未联网且未见新修订的客户端立即知道撤销。支付 webhook 的真实事件名、验签 header、API 路径 `[待验证]（V-LICENSE）`。
 
 客户端只持公钥；服务端校验 MoR webhook 后以 event ID 幂等处理，乱序事件需核对当前订阅版本，不能让旧支付成功覆盖后来的退款。激活/释放按设备额度原子更新；设备标识为安装时随机密钥，不收集硬件序列；重装/丢机可在账号中释放，不要求先联系原设备。客户端不处理银行卡数据，不内嵌支付 secret。
 

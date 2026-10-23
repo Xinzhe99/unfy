@@ -9,7 +9,7 @@
 //! not silently look like "a remote session just ended" either. The caller
 //! distinguishes the two by comparing against the previous state.
 
-use conflux_domain::DisplaySnapshot;
+use unfy_domain::DisplaySnapshot;
 
 use crate::{is_known_tool, is_virtual_display, known_ports, Observation};
 

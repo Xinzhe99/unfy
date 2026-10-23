@@ -57,7 +57,7 @@ impl Message {
 ///
 /// The window and the tray both show this sentence, from two different tables, so
 /// the key is what travels.
-pub fn evidence_message(evidence: &conflux_detect::Evidence) -> Message {
+pub fn evidence_message(evidence: &unfy_detect::Evidence) -> Message {
     match evidence.param() {
         Some(name) => Message::one(evidence.key(), "name", name),
         None => Message::new(evidence.key()),
@@ -83,14 +83,14 @@ mod tests {
 
     #[test]
     fn evidence_keeps_its_value_out_of_the_sentence() {
-        let message = evidence_message(&conflux_detect::Evidence::ToolConnected("AnyDesk".into()));
+        let message = evidence_message(&unfy_detect::Evidence::ToolConnected("AnyDesk".into()));
         assert_eq!(message.key, "{name} 已连接");
         assert_eq!(
             message.params.get("name").map(String::as_str),
             Some("AnyDesk")
         );
 
-        let plain = evidence_message(&conflux_detect::Evidence::RdpSession);
+        let plain = evidence_message(&unfy_detect::Evidence::RdpSession);
         assert_eq!(plain.key, "远程桌面会话");
         assert!(plain.params.is_empty());
     }

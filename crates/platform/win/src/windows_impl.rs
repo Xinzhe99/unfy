@@ -11,8 +11,8 @@
 //!   because `SetWindowPos` on a maximized Chromium window is overwritten by its
 //!   `OnWindowPosChanging` handler.
 
-use conflux_domain::{DisplayKey, IdentityQuality, Rect, WindowId, WindowMode, WindowSnapshot};
-use conflux_platform::{
+use unfy_domain::{DisplayKey, IdentityQuality, Rect, WindowId, WindowMode, WindowSnapshot};
+use unfy_platform::{
     Capabilities, ObservedWindow, PlatformError, Result, WindowBackend, WindowPlan,
 };
 use windows::core::{BOOL, PWSTR};
@@ -418,7 +418,7 @@ pub fn nudge_window(id: &WindowId) -> Result<()> {
 /// A zero or absurd answer is reported as `None`: some applications answer with
 /// zeros because they only fill the fields they care about, and treating 0x0 as a
 /// real minimum would collapse every slot to nothing.
-fn track_min_size(hwnd: HWND) -> Option<conflux_domain::Size> {
+fn track_min_size(hwnd: HWND) -> Option<unfy_domain::Size> {
     use windows::Win32::UI::WindowsAndMessaging::{
         SendMessageTimeoutW, MINMAXINFO, SMTO_ABORTIFHUNG, WM_GETMINMAXINFO,
     };
@@ -449,7 +449,7 @@ fn track_min_size(hwnd: HWND) -> Option<conflux_domain::Size> {
     if !(1..=16384).contains(&width) || !(1..=16384).contains(&height) {
         return None;
     }
-    Some(conflux_domain::Size::new(width, height))
+    Some(unfy_domain::Size::new(width, height))
 }
 
 /// File name of the executable running in `pid`.

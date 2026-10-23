@@ -65,7 +65,7 @@ export function Onboarding({
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
           <p>{t("当你在只有一块屏的设备上远程回这台电脑时，其他屏幕上的窗口是看不见的。")}</p>
-          <p>{t("Conflux 把这些窗口收拢到你指定的那块屏；远程结束后，再按之前的快照放回去。")}</p>
+          <p>{t("Unfy 把这些窗口收拢到你指定的那块屏；远程结束后，再按之前的快照放回去。")}</p>
           <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("它不传输画面，也不建立远程连接。远程软件照常使用。")}</p>
         </div>
       ),
@@ -104,7 +104,7 @@ export function Onboarding({
       body: (
         <div className="space-y-3">
           <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-              {t("Conflux 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。")}
+              {t("Unfy 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。")}
             </p>
           <div className="rounded-[var(--radius-control)] border border-[var(--color-border)]">
             <DetectChoice
@@ -145,7 +145,7 @@ export function Onboarding({
       title: t("有些窗口不会被移动"),
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>{t("有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处。这不是失败：Conflux 会把它们的名字列出来，并给一个「排除」按钮。")}</p>
+          <p>{t("有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处。这不是失败：Unfy 会把它们的名字列出来，并给一个「排除」按钮。")}</p>
           <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。")}</p>
           <p className="text-xs text-[var(--color-muted)]">{t("全屏应用、最小化的窗口和系统外壳本来就会跳过。")}</p>
         </div>
@@ -171,7 +171,7 @@ export function Onboarding({
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-5">
-        <span className="text-[13px] font-semibold tracking-tight">Conflux</span>
+        <span className="text-[13px] font-semibold tracking-tight">Unfy</span>
         <button
           type="button"
           onClick={() => {

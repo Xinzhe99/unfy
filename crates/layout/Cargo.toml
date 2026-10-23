@@ -1,10 +1,10 @@
 [package]
-name = "conflux-layout"
+name = "unfy-layout"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-conflux-domain = { workspace = true }
+unfy-domain = { workspace = true }
 serde = { workspace = true }

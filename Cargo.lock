@@ -527,141 +527,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "conflux-desktop"
-version = "0.1.0"
-dependencies = [
- "conflux-detect",
- "conflux-domain",
- "conflux-engine",
- "conflux-journal",
- "conflux-layout",
- "conflux-platform",
- "conflux-platform-mac",
- "conflux-platform-win",
- "conflux-settings",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "conflux-detect"
-version = "0.1.0"
-dependencies = [
- "conflux-domain",
- "tracing",
- "windows",
-]
-
-[[package]]
-name = "conflux-domain"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "conflux-engine"
-version = "0.1.0"
-dependencies = [
- "conflux-domain",
- "conflux-journal",
- "conflux-layout",
- "conflux-platform",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "conflux-journal"
-version = "0.1.0"
-dependencies = [
- "conflux-domain",
- "crc32fast",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "uuid",
-]
-
-[[package]]
-name = "conflux-layout"
-version = "0.1.0"
-dependencies = [
- "conflux-domain",
- "serde",
-]
-
-[[package]]
-name = "conflux-platform"
-version = "0.1.0"
-dependencies = [
- "conflux-domain",
- "serde",
- "thiserror 2.0.21",
- "tracing",
-]
-
-[[package]]
-name = "conflux-platform-mac"
-version = "0.1.0"
-dependencies = [
- "conflux-domain",
- "conflux-platform",
- "core-foundation 0.10.1",
- "core-foundation-sys",
- "core-graphics",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "serde",
- "thiserror 2.0.21",
- "tracing",
-]
-
-[[package]]
-name = "conflux-platform-win"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "conflux-domain",
- "conflux-engine",
- "conflux-journal",
- "conflux-platform",
- "flate2",
- "serde",
- "thiserror 2.0.21",
- "tracing",
- "windows",
-]
-
-[[package]]
-name = "conflux-settings"
-version = "0.1.0"
-dependencies = [
- "conflux-domain",
- "conflux-layout",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "cookie"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4737,6 +4602,141 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "unfy-desktop"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "unfy-detect",
+ "unfy-domain",
+ "unfy-engine",
+ "unfy-journal",
+ "unfy-layout",
+ "unfy-platform",
+ "unfy-platform-mac",
+ "unfy-platform-win",
+ "unfy-settings",
+ "uuid",
+]
+
+[[package]]
+name = "unfy-detect"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "unfy-domain",
+ "windows",
+]
+
+[[package]]
+name = "unfy-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "unfy-engine"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+ "unfy-domain",
+ "unfy-journal",
+ "unfy-layout",
+ "unfy-platform",
+ "uuid",
+]
+
+[[package]]
+name = "unfy-journal"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unfy-domain",
+ "uuid",
+]
+
+[[package]]
+name = "unfy-layout"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "unfy-domain",
+]
+
+[[package]]
+name = "unfy-platform"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
+ "unfy-domain",
+]
+
+[[package]]
+name = "unfy-platform-mac"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "core-graphics",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
+ "unfy-domain",
+ "unfy-platform",
+]
+
+[[package]]
+name = "unfy-platform-win"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
+ "unfy-domain",
+ "unfy-engine",
+ "unfy-journal",
+ "unfy-platform",
+ "windows",
+]
+
+[[package]]
+name = "unfy-settings"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unfy-domain",
+ "unfy-layout",
 ]
 
 [[package]]

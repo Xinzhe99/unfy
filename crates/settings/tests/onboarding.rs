@@ -7,11 +7,11 @@
 
 use std::path::PathBuf;
 
-use conflux_settings::{Settings, TargetDisplay};
+use unfy_settings::{Settings, TargetDisplay};
 
 fn temp_path(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "conflux-onboarding-{tag}-{}-{:?}",
+        "unfy-onboarding-{tag}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
@@ -81,15 +81,15 @@ fn a_chosen_target_does_not_imply_completion() {
 fn window_geometry_round_trips_and_is_range_checked() {
     let path = temp_path("geometry");
 
-    let settings = conflux_settings::Settings::default();
+    let settings = unfy_settings::Settings::default();
     assert_eq!(settings.window_geometry, None);
-    let settings = conflux_settings::Settings {
+    let settings = unfy_settings::Settings {
         window_geometry: Some((200, 120, 1040, 800)),
         ..Default::default()
     };
     settings.save(&path).expect("save");
     assert_eq!(
-        conflux_settings::Settings::load(&path)
+        unfy_settings::Settings::load(&path)
             .unwrap()
             .window_geometry,
         Some((200, 120, 1040, 800))
@@ -101,7 +101,7 @@ fn window_geometry_round_trips_and_is_range_checked() {
         (0, 0, 9000, 800),       // wider than any display
         (999_999, 0, 1040, 800), // unreachable position
     ] {
-        let settings = conflux_settings::Settings {
+        let settings = unfy_settings::Settings {
             window_geometry: Some(bad),
             ..Default::default()
         };
@@ -120,7 +120,7 @@ fn window_geometry_round_trips_and_is_range_checked() {
 #[test]
 fn resetting_keeps_the_target_and_clears_everything_else() {
     let path = temp_path("reset");
-    let mut settings = conflux_settings::Settings {
+    let mut settings = unfy_settings::Settings {
         target_display: Some(TargetDisplay {
             native_id: "DISPLAY#AAA".into(),
             label: "\\\\.\\DISPLAY1".into(),
@@ -133,17 +133,17 @@ fn resetting_keeps_the_target_and_clears_everything_else() {
         auto_restore: true,
         auto_detect: "aggressive".into(),
         restore_delay_secs: 30,
-        theme: conflux_settings::ThemeName::Dark,
+        theme: unfy_settings::ThemeName::Dark,
         onboarding_done: true,
         onboarding_step: 3,
         ..Default::default()
     };
-    settings.layout_mode = conflux_settings::LayoutModeName::PrimarySide;
+    settings.layout_mode = unfy_settings::LayoutModeName::PrimarySide;
     settings.margin = 40;
     settings.save(&path).expect("save");
 
     // What the command does: defaults, target preserved, guide not repeated.
-    let fresh = conflux_settings::Settings {
+    let fresh = unfy_settings::Settings {
         target_display: settings.target_display.clone(),
         onboarding_done: true,
         ..Default::default()
@@ -167,12 +167,12 @@ fn resetting_keeps_the_target_and_clears_everything_else() {
     // "reset restores defaults", not "the default is zero".
     assert_eq!(
         fresh.restore_delay_secs,
-        conflux_settings::Settings::default().restore_delay_secs
+        unfy_settings::Settings::default().restore_delay_secs
     );
     // Layout mode has a literal here on purpose: "reset restores the default"
     // must mean the arrangement-preserving mode, and silently drifting to a
     // grid-on-reset regression is what this line is for.
-    assert_eq!(fresh.layout_mode, conflux_settings::LayoutModeName::KeepLayout);
+    assert_eq!(fresh.layout_mode, unfy_settings::LayoutModeName::KeepLayout);
     assert_eq!(fresh.margin, 12);
     assert!(fresh.onboarding_done, "the guide must not reappear");
 }

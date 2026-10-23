@@ -43,7 +43,7 @@ pub mod platform {
     //! it from a real one; Linux without a portable backend has the same problem.
     //! Returning "no evidence" keeps the detector inert instead of guessing.
 
-    use conflux_domain::DisplaySnapshot;
+    use unfy_domain::DisplaySnapshot;
 
     use crate::Observation;
 

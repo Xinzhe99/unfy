@@ -25,9 +25,9 @@ export type Locale = "zh" | "en";
 /** What the user chose. `system` resolves from the OS at startup. */
 export type LanguageSetting = "system" | "zh" | "en";
 
-const STORAGE_KEY = "conflux.locale";
+const STORAGE_KEY = "unfy.locale";
 /** Persisted across launches, unlike `STORAGE_KEY`; see `readCachedLocale`. */
-const CACHE_KEY = "conflux-locale";
+const CACHE_KEY = "unfy-locale";
 
 /**
  * The language the last run ended in.
@@ -379,8 +379,8 @@ const EN: Record<string, string> = {
   "检查失败": "Check failed",
   "未知": "Unknown",
   "环境状态": "Environment",
-  "Conflux 当前能不能正常工作。遇到问题时先看这里。":
-    "Whether Conflux can currently do its job. Start here when something is wrong.",
+  "Unfy 当前能不能正常工作。遇到问题时先看这里。":
+    "Whether Unfy can currently do its job. Start here when something is wrong.",
   "正在检查…": "Checking…",
   "窗口控制权限": "Window-control permission",
   "可以移动其他应用的窗口。": "Other applications' windows can be moved.",
@@ -431,16 +431,16 @@ const EN: Record<string, string> = {
   "这个工具做什么": "What this tool does",
   "当你在只有一块屏的设备上远程回这台电脑时，其他屏幕上的窗口是看不见的。":
     "When you remote into this machine from a single-screen device, the windows on your other screens are invisible.",
-  "Conflux 把这些窗口收拢到你指定的那块屏；远程结束后，再按之前的快照放回去。":
-    "Conflux gathers them onto the screen you choose, then puts them back from a snapshot when the session ends.",
+  "Unfy 把这些窗口收拢到你指定的那块屏；远程结束后，再按之前的快照放回去。":
+    "Unfy gathers them onto the screen you choose, then puts them back from a snapshot when the session ends.",
   "它不传输画面，也不建立远程连接。远程软件照常使用。":
     "It does not stream video or create a remote connection. Your remote software works as usual.",
   "指定远程端能看到的那块屏": "Choose the screen the remote sees",
   "下面的画面就是每块屏现在的真实内容。如果分不清是哪一块，先在屏幕上显示编号，再对照远程画面。":
     "These are live images of each screen. If you cannot tell them apart, show the numbers on the screens and compare them against the remote view.",
   "让它自动开始和结束": "Let it start and stop by itself",
-  "Conflux 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。":
-    "Conflux recognises some remote sessions: it gathers when one starts and restores when it ends. Detection relies on verifiable signals, so higher levels cover more tools but can misfire.",
+  "Unfy 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。":
+    "Unfy recognises some remote sessions: it gathers when one starts and restores when it ends. Detection relies on verifiable signals, so higher levels cover more tools but can misfire.",
   "手动": "Manual",
   "只用快捷键与托盘，检测保持关闭":
     "Shortcuts and tray only; detection stays off",
@@ -450,8 +450,8 @@ const EN: Record<string, string> = {
   "随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。":
     "Change this any time in Settings → Remote-session detection. Nothing moves automatically before you do.",
   "有些窗口不会被移动": "Some windows will not move",
-  "有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处。这不是失败：Conflux 会把它们的名字列出来，并给一个「排除」按钮。":
-    "Some windows do not take the new position: a few snap back on their own, others are too large for the cell. They stay where they are, and that is not a failure: Conflux lists them and offers an Exclude button.",
+  "有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处。这不是失败：Unfy 会把它们的名字列出来，并给一个「排除」按钮。":
+    "Some windows do not take the new position: a few snap back on their own, others are too large for the cell. They stay where they are, and that is not a failure: Unfy lists them and offers an Exclude button.",
   "排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。":
     "Once excluded, they are neither moved nor counted as unsettled.",
   "全屏应用、最小化的窗口和系统外壳本来就会跳过。":

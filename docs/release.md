@@ -1,4 +1,4 @@
-# Conflux 发布说明
+# Unfy 发布说明
 
 本文说明如何产出可分发安装包、如何配置签名与更新，以及每一项的风险边界。**不要把本文当作已验证的发布流程**：文中的签名、公证、商店审核均未在本机执行过，首次正式发布前必须逐项走通并记录证据。
 
@@ -37,7 +37,7 @@ Windows 每用户安装刻意不要求管理员权限：应用本身不需要提
 
 CI 中通过 `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` 注入。这些变量名对应 Tauri 的 macOS 签名文档，**首次配置时必须核对目标 Tauri 版本的文档**，参数名在不同版本间有过变化。
 
-**TCC 授权的持久性依赖于签名身份**：用户授予的「辅助功能」权限与 bundle id + Team ID 绑定。更换证书或 bundle id 会让所有用户重新授权；用 ad-hoc 签名开发会让每次重建都丢权限（Apple TN3127 的 designated requirement 绑定单次 cdhash）。所以从一开始就用固定的 Developer ID 与固定的 `app.conflux.desktop`。
+**TCC 授权的持久性依赖于签名身份**：用户授予的「辅助功能」权限与 bundle id + Team ID 绑定。更换证书或 bundle id 会让所有用户重新授权；用 ad-hoc 签名开发会让每次重建都丢权限（Apple TN3127 的 designated requirement 绑定单次 cdhash）。所以从一开始就用固定的 Developer ID 与固定的 `app.unfy.desktop`。
 
 ## 3. 自动更新
 
@@ -49,7 +49,7 @@ CI 中通过 `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_SIGNING
 生成密钥：
 
 ```bash
-npx tauri signer generate -w ~/.tauri/conflux.key
+npx tauri signer generate -w ~/.tauri/unfy.key
 ```
 
 私钥永不入库，作为 CI secret `TAURI_SIGNING_PRIVATE_KEY` 使用。**私钥丢失意味着现有用户永远无法再收到更新**，必须离线备份。
@@ -63,12 +63,12 @@ npx tauri signer generate -w ~/.tauri/conflux.key
   "pub_date": "2026-11-01T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "<content of conflux_0.2.0_x64-setup.exe.sig>",
-      "url": "https://example.com/conflux/0.2.0/conflux_0.2.0_x64-setup.exe"
+      "signature": "<content of unfy_0.2.0_x64-setup.exe.sig>",
+      "url": "https://example.com/unfy/0.2.0/unfy_0.2.0_x64-setup.exe"
     },
     "darwin-aarch64": {
       "signature": "<...>",
-      "url": "https://example.com/conflux/0.2.0/conflux_0.2.0_aarch64.app.tar.gz"
+      "url": "https://example.com/unfy/0.2.0/unfy_0.2.0_aarch64.app.tar.gz"
     }
   }
 }
@@ -76,7 +76,7 @@ npx tauri signer generate -w ~/.tauri/conflux.key
 
 ### 恢复屏障
 
-更新安装会重启进程，因此 `update::check_and_install` 在下载完成后、安装之前检查 `captured_window_count()`。只要还有窗口被当前事务持有，更新就会被推迟并发出 `conflux://update` 事件，UI 显示"恢复完成后再安装"。
+更新安装会重启进程，因此 `update::check_and_install` 在下载完成后、安装之前检查 `captured_window_count()`。只要还有窗口被当前事务持有，更新就会被推迟并发出 `unfy://update` 事件，UI 显示"恢复完成后再安装"。
 
 这条规则没有旁路：安全更新也一样等待。理由是一旦重启，用户面对的是一台布局错乱又没有任何解释的机器。
 
@@ -109,5 +109,5 @@ npx tauri signer generate -w ~/.tauri/conflux.key
 - 无虚拟显示器、无强制单屏模式。
 - 无特权 helper，因此提权窗口不会被动到。
 - 无遥测上传（设置项存在，但没有任何上传代码）。
-- 自动检测不覆盖 macOS/Linux：`conflux-detect` 在这两个平台返回空观测，检测器保持惰性。
+- 自动检测不覆盖 macOS/Linux：`unfy-detect` 在这两个平台返回空观测，检测器保持惰性。
 - 无 License/支付。

@@ -1,4 +1,4 @@
-//! Platform-neutral domain types for Conflux.
+//! Platform-neutral domain types for Unfy.
 //!
 //! Nothing here touches an operating system. That keeps layout, journal and the
 //! engine testable on any machine, and it is why `docs/impl-plan.md` puts this

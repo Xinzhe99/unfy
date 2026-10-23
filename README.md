@@ -1,4 +1,4 @@
-# Conflux
+# Unfy
 
 把多显示器主机上的窗口，一键收拢到你指定的那一块屏；结束后按快照复原。
 
@@ -70,8 +70,8 @@ apps/desktop/           # Tauri 2 + React 19 + Tailwind 4
 
 ```bash
 cargo test --workspace
-cargo run -p conflux-platform-win --bin e2e      # 真实桌面端到端，会创建并移动自己的窗口
-cargo run -p conflux-platform-win --bin probe    # 只读：打印显示器与候选窗口
+cargo run -p unfy-platform-win --bin e2e      # 真实桌面端到端，会创建并移动自己的窗口
+cargo run -p unfy-platform-win --bin probe    # 只读：打印显示器与候选窗口
 
 cd apps/desktop
 npm install

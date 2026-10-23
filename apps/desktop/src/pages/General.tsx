@@ -347,7 +347,7 @@ export function GeneralPage({
 
       <Card
         title={t("环境状态")}
-        description={t("Conflux 当前能不能正常工作。遇到问题时先看这里。")}
+        description={t("Unfy 当前能不能正常工作。遇到问题时先看这里。")}
       >
         {health.length === 0 ? (
           <p className="py-1 text-xs text-[var(--color-muted)]">{t("正在检查…")}</p>

@@ -1,4 +1,4 @@
-# macOS 技术事实核查（Conflux）
+# macOS 技术事实核查（Unfy）
 
 核查日期：2026-10-21。证据分三级：
 - **[官方]** developer.apple.com 文档页 / 公开 SDK 头文件（phracker/MacOSX-SDKs 镜像的 Apple 头文件，路径写明）。

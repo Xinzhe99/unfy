@@ -6,12 +6,12 @@
 
 use std::path::PathBuf;
 
-use conflux_domain::{DisplayKey, IdentityQuality, Rect, WindowMode, WindowOutcome};
-use conflux_engine::{Engine, EngineConfig};
-use conflux_platform::fake::{FakeBackend, FakeBehaviour};
+use unfy_domain::{DisplayKey, IdentityQuality, Rect, WindowMode, WindowOutcome};
+use unfy_engine::{Engine, EngineConfig};
+use unfy_platform::fake::{FakeBackend, FakeBehaviour};
 
 fn dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("conflux-exit-{tag}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("unfy-exit-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -99,14 +99,14 @@ fn adopted_transaction_also_blocks_exit() {
     let journal_dir = dir("barrier-adopted");
     let path = journal_dir.join("left-behind.journal");
     {
-        let mut journal = conflux_journal::Journal::begin(&path, "2 displays").unwrap();
+        let mut journal = unfy_journal::Journal::begin(&path, "2 displays").unwrap();
         journal
-            .write_preimage(&conflux_journal::Preimage {
+            .write_preimage(&unfy_journal::Preimage {
                 id: id(3),
                 display_native_id: "fake-display-a".into(),
                 display_quality: IdentityQuality::Strong,
                 display_work_area: Rect::new(0, 0, 2560, 1400),
-                display_scale: conflux_domain::Scale { x: 1.5, y: 1.5 },
+                display_scale: unfy_domain::Scale { x: 1.5, y: 1.5 },
                 visible_rect: Rect::new(100, 100, 900, 700),
                 outer_rect: Rect::new(93, 93, 907, 707),
                 mode: WindowMode::Normal,
@@ -145,8 +145,8 @@ fn adopted_transaction_also_blocks_exit() {
     assert!(!path.exists());
 }
 
-fn id(n: u64) -> conflux_domain::WindowId {
-    conflux_domain::WindowId {
+fn id(n: u64) -> unfy_domain::WindowId {
+    unfy_domain::WindowId {
         native_id: n,
         process_id: 1000 + n as u32,
         process_start: 1,

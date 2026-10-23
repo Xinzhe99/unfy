@@ -64,7 +64,7 @@ pub fn flash(seconds: u64) -> FlashOutcome {
         return FlashOutcome::AlreadyShowing;
     }
 
-    let displays = match conflux_platform::DisplayProvider::topology(&crate::WinDisplays::new()) {
+    let displays = match unfy_platform::DisplayProvider::topology(&crate::WinDisplays::new()) {
         Ok(displays) => displays,
         Err(_) => {
             ACTIVE.store(false, Ordering::SeqCst);
@@ -82,7 +82,7 @@ pub fn flash(seconds: u64) -> FlashOutcome {
     // Number by physical position, left to right then top to bottom. The display
     // picker uses the same rule, and the two must agree: the whole point of the
     // badge is that the digit on the screen matches the digit on the card.
-    let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+    let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
 
     for (index, display) in ordered.iter().enumerate() {
         let bounds = display.bounds;
@@ -104,14 +104,14 @@ pub fn flash(seconds: u64) -> FlashOutcome {
     FlashOutcome::Shown
 }
 
-fn run_badge(bounds: conflux_domain::Rect, number: usize, seconds: u64, _active: Arc<AtomicBool>) {
+fn run_badge(bounds: unfy_domain::Rect, number: usize, seconds: u64, _active: Arc<AtomicBool>) {
     unsafe {
         let instance = match GetModuleHandleW(None) {
             Ok(instance) => instance,
             Err(_) => return,
         };
 
-        let class_name = w!("ConfluxDisplayLabel");
+        let class_name = w!("UnfyDisplayLabel");
         let class = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wndproc),
@@ -129,7 +129,7 @@ fn run_badge(bounds: conflux_domain::Rect, number: usize, seconds: u64, _active:
         let hwnd = match CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             class_name,
-            w!("Conflux"),
+            w!("Unfy"),
             WS_POPUP,
             bounds.left,
             bounds.top,

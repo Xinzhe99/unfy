@@ -196,7 +196,7 @@ const health: HealthItemDto[] = [
     id: "storage",
     label: message("配置目录"),
     status: "ok",
-    detail: message("可写入 {path}", { path: "C:\\Users\\dell\\AppData\\Roaming\\Conflux" }),
+    detail: message("可写入 {path}", { path: "C:\\Users\\dell\\AppData\\Roaming\\Unfy" }),
   },
 ];
 

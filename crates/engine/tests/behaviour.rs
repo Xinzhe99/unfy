@@ -6,17 +6,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use conflux_domain::{
+use unfy_domain::{
     DisplayKey, DisplaySnapshot, EngineState, IdentityQuality, Rect, Scale, WindowId, WindowMode,
     WindowOutcome,
 };
-use conflux_engine::{Engine, EngineConfig, PendingWork};
-use conflux_journal::Recovered;
-use conflux_platform::fake::{FakeBackend, FakeBehaviour};
-use conflux_platform::{DisplayProvider, WindowBackend};
+use unfy_engine::{Engine, EngineConfig, PendingWork};
+use unfy_journal::Recovered;
+use unfy_platform::fake::{FakeBackend, FakeBehaviour};
+use unfy_platform::{DisplayProvider, WindowBackend};
 
 fn journal_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("conflux-engine-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("unfy-engine-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("journal dir");
     dir
 }
@@ -237,7 +237,7 @@ fn user_move_during_session_is_preserved_on_restore() {
         .backend()
         .apply(
             &id(2),
-            &conflux_platform::WindowPlan {
+            &unfy_platform::WindowPlan {
                 visible_rect: moved,
                 mode: WindowMode::Normal,
             },
@@ -365,7 +365,7 @@ fn unknown_target_display_is_an_error_not_a_guess() {
     let err = engine.preview(&bogus).unwrap_err();
     assert!(matches!(
         err,
-        conflux_domain::EngineError::TargetDisplayMissing
+        unfy_domain::EngineError::TargetDisplayMissing
     ));
 }
 
@@ -383,9 +383,9 @@ fn recovery_reports_unfinished_transaction_as_pending_work() {
     let dir = journal_dir("pending");
     let path = dir.join("abandoned.journal");
     {
-        let mut journal = conflux_journal::Journal::begin(&path, "2 displays").unwrap();
+        let mut journal = unfy_journal::Journal::begin(&path, "2 displays").unwrap();
         journal
-            .write_preimage(&conflux_journal::Preimage {
+            .write_preimage(&unfy_journal::Preimage {
                 id: id(1),
                 display_native_id: "fake-display-a".into(),
                 display_quality: IdentityQuality::Strong,
@@ -446,9 +446,9 @@ fn adopted_transaction_can_actually_be_restored() {
 
     let original = Rect::new(100, 100, 900, 700);
     {
-        let mut journal = conflux_journal::Journal::begin(&path, "2 displays").unwrap();
+        let mut journal = unfy_journal::Journal::begin(&path, "2 displays").unwrap();
         journal
-            .write_preimage(&conflux_journal::Preimage {
+            .write_preimage(&unfy_journal::Preimage {
                 id: id(1),
                 display_native_id: "fake-display-a".into(),
                 display_quality: IdentityQuality::Strong,
@@ -500,7 +500,7 @@ fn journal_without_preimages_is_discarded_instead_of_blocking() {
     let dir = journal_dir("empty-tx");
     let path = dir.join("empty.journal");
     {
-        let journal = conflux_journal::Journal::begin(&path, "2 displays").unwrap();
+        let journal = unfy_journal::Journal::begin(&path, "2 displays").unwrap();
         journal.abandon();
     }
 
@@ -544,7 +544,7 @@ fn second_migration_keeps_the_original_preimage() {
     assert!(
         matches!(
             refused,
-            Err(conflux_domain::EngineError::TransactionAlreadyOpen)
+            Err(unfy_domain::EngineError::TransactionAlreadyOpen)
         ),
         "a second gather while Active must be refused, got {refused:?}"
     );
@@ -607,7 +607,7 @@ fn excluded_app_is_never_moved() {
         report
             .skipped
             .iter()
-            .any(|s| s.id.native_id == 2 && s.reason == conflux_domain::SkipReason::ExcludedApp),
+            .any(|s| s.id.native_id == 2 && s.reason == unfy_domain::SkipReason::ExcludedApp),
         "the excluded window must be reported with its reason"
     );
 
@@ -810,9 +810,9 @@ fn superseded_journals_are_removed_on_recovery() {
 
     let make = |name: &str, id_value: u64| {
         let path = dir.join(name);
-        let mut journal = conflux_journal::Journal::begin(&path, "test").unwrap();
+        let mut journal = unfy_journal::Journal::begin(&path, "test").unwrap();
         journal
-            .write_preimage(&conflux_journal::Preimage {
+            .write_preimage(&unfy_journal::Preimage {
                 id: id(id_value),
                 display_native_id: "fake-display-a".into(),
                 display_quality: IdentityQuality::Strong,
@@ -853,7 +853,7 @@ fn adopted_journal_is_deleted_when_it_has_nothing_to_restore() {
     let dir = journal_dir("empty-adopt");
     let path = dir.join("empty.journal");
     {
-        let journal = conflux_journal::Journal::begin(&path, "test").unwrap();
+        let journal = unfy_journal::Journal::begin(&path, "test").unwrap();
         journal.abandon();
     }
 
@@ -1020,8 +1020,8 @@ fn primary_side_puts_the_focused_window_in_the_main_pane() {
     let mut engine = Engine::new(
         backend,
         EngineConfig {
-            layout: conflux_layout::LayoutConfig {
-                mode: conflux_layout::LayoutMode::PrimarySide,
+            layout: unfy_layout::LayoutConfig {
+                mode: unfy_layout::LayoutMode::PrimarySide,
                 ..Default::default()
             },
             ..config("focus")
@@ -1075,7 +1075,7 @@ fn primary_side_puts_the_focused_window_in_the_main_pane() {
 fn a_large_window_minimum_is_respected() {
     let mut backend = scenario();
     // Make one window insist on a size that a narrow slot cannot provide.
-    backend.set_min_size(1, conflux_domain::Size::new(900, 700));
+    backend.set_min_size(1, unfy_domain::Size::new(900, 700));
 
     let mut engine = Engine::new(backend, config("min-size"));
     let preview = engine.preview(&target_key()).expect("preview");
@@ -1111,7 +1111,7 @@ fn a_large_window_minimum_is_respected() {
 fn a_failed_journal_write_enters_the_error_state() {
     // Occupy the journal path with a file so creating the directory fails.
     let blocker =
-        std::env::temp_dir().join(format!("conflux-journal-blocker-{}", std::process::id()));
+        std::env::temp_dir().join(format!("unfy-journal-blocker-{}", std::process::id()));
     std::fs::write(&blocker, b"not a directory").expect("write blocker");
 
     let mut engine = Engine::new(
@@ -1151,7 +1151,7 @@ fn a_failed_journal_write_enters_the_error_state() {
 /// `InvalidTransition`. A single transient topology error would wedge the app.
 #[test]
 fn a_failed_preview_returns_to_idle() {
-    use conflux_domain::DisplayKey;
+    use unfy_domain::DisplayKey;
 
     let mut engine = Engine::new(scenario(), config("preview-fail"));
 

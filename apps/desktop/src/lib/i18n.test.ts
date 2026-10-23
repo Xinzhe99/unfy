@@ -185,7 +185,7 @@ describe("coverage", () => {
   /**
    * Backend events and frontend listeners must name the same set.
    *
-   * An event with no listener is a contract nobody honours - `conflux://resumed` was
+   * An event with no listener is a contract nobody honours - `unfy://resumed` was
    * emitted on every wake from sleep and nothing listened, which reads as a promise the
    * frontend was supposed to keep. A listener with no emitter is worse: the window waits
    * for something that never arrives.
@@ -197,7 +197,7 @@ describe("coverage", () => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile() || !pattern.test(entry.name)) continue;
         const text = readFileSync(`${dir}/${entry.name}`, "utf8");
-        for (const match of text.matchAll(/"(conflux:\/\/[a-z-]+)"/g)) {
+        for (const match of text.matchAll(/"(unfy:\/\/[a-z-]+)"/g)) {
           found.add(match[1]!);
         }
       }

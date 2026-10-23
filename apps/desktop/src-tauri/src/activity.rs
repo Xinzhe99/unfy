@@ -207,7 +207,7 @@ mod tests {
 
     fn temp_path(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "conflux-activity-{tag}-{}-{:?}",
+            "unfy-activity-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -334,7 +334,7 @@ mod clear_tests {
 
     #[test]
     fn clearing_empties_memory_and_disk() {
-        let dir = std::env::temp_dir().join(format!("conflux-activity-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("unfy-activity-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("activity.jsonl");

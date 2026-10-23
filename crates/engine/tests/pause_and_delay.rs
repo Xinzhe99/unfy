@@ -6,13 +6,13 @@
 
 use std::path::PathBuf;
 
-use conflux_domain::{DisplayKey, IdentityQuality, Rect, WindowMode};
-use conflux_engine::{Engine, EngineConfig};
-use conflux_platform::fake::{FakeBackend, FakeBehaviour};
-use conflux_platform::WindowBackend;
+use unfy_domain::{DisplayKey, IdentityQuality, Rect, WindowMode};
+use unfy_engine::{Engine, EngineConfig};
+use unfy_platform::fake::{FakeBackend, FakeBehaviour};
+use unfy_platform::WindowBackend;
 
 fn dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("conflux-pause-{tag}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("unfy-pause-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -56,13 +56,13 @@ fn pause_keeps_the_layout_and_blocks_new_gathers() {
 
     let refused = engine.migrate(&target());
     assert!(
-        matches!(refused, Err(conflux_domain::EngineError::Paused)),
+        matches!(refused, Err(unfy_domain::EngineError::Paused)),
         "a paused engine must refuse new gathers, got {refused:?}"
     );
 
     engine.resume().expect("resume");
     assert!(!engine.is_paused());
-    assert_eq!(engine.state(), conflux_domain::EngineState::Active);
+    assert_eq!(engine.state(), unfy_domain::EngineState::Active);
 
     // The original preimage survived the pause/resume cycle.
     let report = engine.restore().expect("restore");
@@ -159,7 +159,7 @@ fn topology_change_rescues_windows_left_outside_every_display() {
     );
 
     let window = engine.backend().enumerate().unwrap().pop().unwrap();
-    let displays = conflux_platform::DisplayProvider::topology(engine.backend()).unwrap();
+    let displays = unfy_platform::DisplayProvider::topology(engine.backend()).unwrap();
     assert!(
         displays
             .iter()
@@ -205,7 +205,7 @@ fn resuming_a_degraded_layout_stays_degraded() {
     }
     assert_eq!(
         engine.state(),
-        conflux_domain::EngineState::Degraded,
+        unfy_domain::EngineState::Degraded,
         "an adopted unresolved transaction is degraded"
     );
 
@@ -213,7 +213,7 @@ fn resuming_a_degraded_layout_stays_degraded() {
     engine.resume().expect("resume");
     assert_eq!(
         engine.state(),
-        conflux_domain::EngineState::Degraded,
+        unfy_domain::EngineState::Degraded,
         "resuming must not upgrade a partial layout to Active"
     );
 

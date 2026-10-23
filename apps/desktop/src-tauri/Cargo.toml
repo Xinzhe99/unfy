@@ -1,5 +1,5 @@
 [package]
-name = "conflux-desktop"
+name = "unfy-desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,24 +7,24 @@ license.workspace = true
 description = "Gather windows onto one display for remote sessions"
 
 [lib]
-name = "conflux_desktop_lib"
+name = "unfy_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "conflux"
+name = "unfy"
 path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-conflux-detect = { workspace = true }
-conflux-domain = { workspace = true }
-conflux-engine = { workspace = true }
-conflux-journal = { workspace = true }
-conflux-layout = { workspace = true }
-conflux-platform = { workspace = true }
-conflux-settings = { workspace = true }
+unfy-detect = { workspace = true }
+unfy-domain = { workspace = true }
+unfy-engine = { workspace = true }
+unfy-journal = { workspace = true }
+unfy-layout = { workspace = true }
+unfy-platform = { workspace = true }
+unfy-settings = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
@@ -40,7 +40,7 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time"] }
 
 [target.'cfg(windows)'.dependencies]
-conflux-platform-win = { workspace = true }
+unfy-platform-win = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-conflux-platform-mac = { workspace = true }
+unfy-platform-mac = { workspace = true }

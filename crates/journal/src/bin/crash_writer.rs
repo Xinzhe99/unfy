@@ -8,8 +8,8 @@
 
 use std::io::Write;
 
-use conflux_domain::{IdentityQuality, Rect, WindowId, WindowMode};
-use conflux_journal::{Journal, Preimage};
+use unfy_domain::{IdentityQuality, Rect, WindowId, WindowMode};
+use unfy_journal::{Journal, Preimage};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -34,7 +34,7 @@ fn main() {
             display_native_id: "display-a".into(),
             display_quality: IdentityQuality::Strong,
             display_work_area: Rect::new(0, 0, 2560, 1400),
-            display_scale: conflux_domain::Scale { x: 1.5, y: 1.5 },
+            display_scale: unfy_domain::Scale { x: 1.5, y: 1.5 },
             visible_rect: Rect::new(10, 20, 810, 620),
             outer_rect: Rect::new(3, 13, 817, 627),
             mode: WindowMode::Normal,

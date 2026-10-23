@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
-use conflux_domain::{DisplaySnapshot, Rect, WindowId};
-use conflux_engine::{EngineState, MigrationReport, PendingWork, Preview, RestoreReport};
-use conflux_platform::{DisplayProvider, WindowBackend};
-use conflux_settings::{Settings, TargetDisplay};
+use unfy_domain::{DisplaySnapshot, Rect, WindowId};
+use unfy_engine::{EngineState, MigrationReport, PendingWork, Preview, RestoreReport};
+use unfy_platform::{DisplayProvider, WindowBackend};
+use unfy_settings::{Settings, TargetDisplay};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
@@ -250,7 +250,7 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
 
     // Live number when the display is present, saved number when it is not: a
     // disconnected target still has to be named the way the user last saw it.
-    let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+    let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
     let target = settings.target_display.as_ref().map(|t| {
         let live = ordered
             .iter()
@@ -275,13 +275,13 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
         };
         // A journal the engine does not own (another session, or an unreadable one
         // at startup) still counts: the windows may be displaced.
-        let dir = conflux_settings::config_dir().join("journal");
+        let dir = unfy_settings::config_dir().join("journal");
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "journal") {
-                    if let Ok(conflux_journal::Recovered::Unfinished(tx)) =
-                        conflux_journal::recover(&path)
+                    if let Ok(unfy_journal::Recovered::Unfinished(tx)) =
+                        unfy_journal::recover(&path)
                     {
                         if Some(tx.transaction) != owned {
                             count = count.max(tx.preimages.len());
@@ -328,7 +328,7 @@ pub fn list_displays(app: State<'_, AppState>) -> Result<Vec<DisplayDto>, String
     // The bug this fixes: `list_displays` used to return the platform's own
     // enumeration order while the picker sorted by position, so the overview said
     // "显示器 1" for a monitor the picker labelled "显示器 2".
-    let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+    let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
     Ok(ordered
         .iter()
         .enumerate()
@@ -469,7 +469,7 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
     // ignore the click while the first windows are being captured.
     let _ = tauri::Emitter::emit(
         &emitter,
-        "conflux://progress",
+        "unfy://progress",
         serde_json::json!({ "phase": "migrating", "done": 0, "total": 0 }),
     );
 
@@ -480,7 +480,7 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
     let emit: Arc<dyn Fn(usize, usize) + Send + Sync> = Arc::new(move |done, total| {
         let _ = tauri::Emitter::emit(
             &progress_emitter,
-            "conflux://progress",
+            "unfy://progress",
             serde_json::json!({ "phase": "migrating", "done": done, "total": total }),
         );
     });
@@ -505,7 +505,7 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
 
     let _ = tauri::Emitter::emit(
         &emitter,
-        "conflux://progress",
+        "unfy://progress",
         serde_json::json!({ "phase": "done" }),
     );
     note_result(app, result.as_ref().err().cloned().map(Message::new));
@@ -514,7 +514,7 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
 }
 
 fn migrate_blocking(
-    engine: Arc<std::sync::Mutex<conflux_engine::Engine<crate::platform::Backend>>>,
+    engine: Arc<std::sync::Mutex<unfy_engine::Engine<crate::platform::Backend>>>,
     settings: Arc<std::sync::Mutex<Settings>>,
     activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
     emit: Arc<dyn Fn(usize, usize) + Send + Sync>,
@@ -551,8 +551,8 @@ fn migrate_blocking(
     // `already_active` made the label a lie. `retarget` restores first, so the
     // original preimages survive.
     let retarget = engine.retarget(&target).map_err(|e| match e {
-        conflux_domain::EngineError::Paused => "paused".to_string(),
-        conflux_domain::EngineError::RestoreIncomplete { pending } => {
+        unfy_domain::EngineError::Paused => "paused".to_string(),
+        unfy_domain::EngineError::RestoreIncomplete { pending } => {
             format!("restore_incomplete:{pending}")
         }
         other => other.to_string(),
@@ -587,7 +587,7 @@ fn migrate_blocking(
         gone: report
             .outcomes
             .values()
-            .filter(|o| **o == conflux_domain::WindowOutcome::Gone)
+            .filter(|o| **o == unfy_domain::WindowOutcome::Gone)
             .count(),
         skipped: report.skipped.len(),
         unplaced: report.unplaced.len(),
@@ -675,7 +675,7 @@ pub async fn restore_with_trigger<R: tauri::Runtime>(
         tracing::info!(seconds, "restore delayed; a new gather will cancel it");
         let _ = tauri::Emitter::emit(
             handle,
-            "conflux://progress",
+            "unfy://progress",
             serde_json::json!({ "phase": "waiting", "seconds": seconds }),
         );
         let waiting = token.clone();
@@ -710,7 +710,7 @@ pub async fn restore_with_trigger<R: tauri::Runtime>(
     // the row stayed enabled while the windows were already moving back.
     let _ = tauri::Emitter::emit(
         handle,
-        "conflux://progress",
+        "unfy://progress",
         serde_json::json!({ "phase": "done" }),
     );
     note_result(app, result.as_ref().err().cloned().map(Message::new));
@@ -719,7 +719,7 @@ pub async fn restore_with_trigger<R: tauri::Runtime>(
 }
 
 fn restore_blocking(
-    engine: Arc<std::sync::Mutex<conflux_engine::Engine<crate::platform::Backend>>>,
+    engine: Arc<std::sync::Mutex<unfy_engine::Engine<crate::platform::Backend>>>,
     settings: Arc<std::sync::Mutex<Settings>>,
     settings_path: std::path::PathBuf,
     activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
@@ -764,8 +764,8 @@ fn restore_blocking(
         log.record(crate::activity::Entry {
             at: crate::activity::now(),
             kind: crate::activity::Kind::Restore,
-            affected: report.count(conflux_domain::WindowOutcome::Restored)
-                + report.count(conflux_domain::WindowOutcome::FallbackVisible),
+            affected: report.count(unfy_domain::WindowOutcome::Restored)
+                + report.count(unfy_domain::WindowOutcome::FallbackVisible),
             unsettled: report.pending.len(),
             note: None,
             trigger: trigger.into(),
@@ -773,10 +773,10 @@ fn restore_blocking(
     }
 
     Ok(RestoreDto {
-        restored: report.count(conflux_domain::WindowOutcome::Restored),
-        kept_user_change: report.count(conflux_domain::WindowOutcome::KeptUserChange),
-        fallback_visible: report.count(conflux_domain::WindowOutcome::FallbackVisible),
-        rejected: report.count(conflux_domain::WindowOutcome::Rejected),
+        restored: report.count(unfy_domain::WindowOutcome::Restored),
+        kept_user_change: report.count(unfy_domain::WindowOutcome::KeptUserChange),
+        fallback_visible: report.count(unfy_domain::WindowOutcome::FallbackVisible),
+        rejected: report.count(unfy_domain::WindowOutcome::Rejected),
         pending: report.pending.len(),
         state,
         pending_apps,
@@ -840,9 +840,9 @@ fn settings_dto(
             .engine
             .lock()
             .ok()
-            .and_then(|engine| conflux_platform::DisplayProvider::topology(engine.backend()).ok())
+            .and_then(|engine| unfy_platform::DisplayProvider::topology(engine.backend()).ok())
             .map(|displays| {
-                let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+                let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
                 ordered
                     .iter()
                     .position(|d| d.key.native_id == target.native_id)
@@ -896,24 +896,24 @@ impl From<&Settings> for SettingsDto {
     fn from(s: &Settings) -> Self {
         Self {
             layout_mode: match s.layout_mode {
-                conflux_settings::LayoutModeName::Grid => "grid",
-                conflux_settings::LayoutModeName::PrimarySide => "primary_side",
-                conflux_settings::LayoutModeName::KeepLayout => "default",
+                unfy_settings::LayoutModeName::Grid => "grid",
+                unfy_settings::LayoutModeName::PrimarySide => "primary_side",
+                unfy_settings::LayoutModeName::KeepLayout => "default",
             }
             .into(),
             margin: s.margin,
             gap: s.gap,
             autostart: s.autostart,
             language: match s.language {
-                conflux_settings::LanguageName::System => "system",
-                conflux_settings::LanguageName::Zh => "zh",
-                conflux_settings::LanguageName::En => "en",
+                unfy_settings::LanguageName::System => "system",
+                unfy_settings::LanguageName::Zh => "zh",
+                unfy_settings::LanguageName::En => "en",
             }
             .into(),
             theme: match s.theme {
-                conflux_settings::ThemeName::System => "system",
-                conflux_settings::ThemeName::Light => "light",
-                conflux_settings::ThemeName::Dark => "dark",
+                unfy_settings::ThemeName::System => "system",
+                unfy_settings::ThemeName::Light => "light",
+                unfy_settings::ThemeName::Dark => "dark",
             }
             .into(),
             hotkey_gather: s.hotkey_gather.clone(),
@@ -926,8 +926,8 @@ impl From<&Settings> for SettingsDto {
             auto_gather: s.auto_gather,
             auto_restore: s.auto_restore,
             remote_screens: match s.remote_screens {
-                conflux_settings::RemoteScreens::Single => "single".into(),
-                conflux_settings::RemoteScreens::All => "all".into(),
+                unfy_settings::RemoteScreens::Single => "single".into(),
+                unfy_settings::RemoteScreens::All => "all".into(),
             },
             last_refused_apps: s.last_refused_apps.clone(),
             // Filled in by `settings_dto`, which has access to the detector.
@@ -968,11 +968,11 @@ pub fn save_settings(
 
     if let Some(mode) = request.layout_mode {
         settings.layout_mode = match mode.as_str() {
-            "grid" => conflux_settings::LayoutModeName::Grid,
-            "primary_side" => conflux_settings::LayoutModeName::PrimarySide,
-            "default" => conflux_settings::LayoutModeName::KeepLayout,
+            "grid" => unfy_settings::LayoutModeName::Grid,
+            "primary_side" => unfy_settings::LayoutModeName::PrimarySide,
+            "default" => unfy_settings::LayoutModeName::KeepLayout,
             // Accept the old name from a stale frontend or a hand-edited file.
-            "preserve_order" => conflux_settings::LayoutModeName::KeepLayout,
+            "preserve_order" => unfy_settings::LayoutModeName::KeepLayout,
             other => return Err(format!("unknown layout mode: {other}")),
         };
     }
@@ -989,17 +989,17 @@ pub fn save_settings(
     let hotkeys_changed = request.hotkey_gather.is_some() || request.hotkey_restore.is_some();
     if let Some(language) = request.language {
         settings.language = match language.as_str() {
-            "system" => conflux_settings::LanguageName::System,
-            "zh" => conflux_settings::LanguageName::Zh,
-            "en" => conflux_settings::LanguageName::En,
+            "system" => unfy_settings::LanguageName::System,
+            "zh" => unfy_settings::LanguageName::Zh,
+            "en" => unfy_settings::LanguageName::En,
             other => return Err(format!("unknown language: {other}")),
         };
     }
     if let Some(theme) = request.theme {
         settings.theme = match theme.as_str() {
-            "system" => conflux_settings::ThemeName::System,
-            "light" => conflux_settings::ThemeName::Light,
-            "dark" => conflux_settings::ThemeName::Dark,
+            "system" => unfy_settings::ThemeName::System,
+            "light" => unfy_settings::ThemeName::Light,
+            "dark" => unfy_settings::ThemeName::Dark,
             other => return Err(format!("unknown theme: {other}")),
         };
     }
@@ -1049,8 +1049,8 @@ pub fn save_settings(
     }
     if let Some(screens) = request.remote_screens {
         settings.remote_screens = match screens.as_str() {
-            "single" => conflux_settings::RemoteScreens::Single,
-            "all" => conflux_settings::RemoteScreens::All,
+            "single" => unfy_settings::RemoteScreens::Single,
+            "all" => unfy_settings::RemoteScreens::All,
             other => return Err(format!("unknown remote_screens: {other}")),
         };
     }
@@ -1092,9 +1092,9 @@ pub fn save_settings(
     if let Ok(mut engine) = app.engine.lock() {
         let mut config = engine.config().clone();
         config.layout.mode = match dto.layout_mode.as_str() {
-            "primary_side" => conflux_layout::LayoutMode::PrimarySide,
-            "default" | "preserve_order" => conflux_layout::LayoutMode::KeepLayout,
-            _ => conflux_layout::LayoutMode::Grid,
+            "primary_side" => unfy_layout::LayoutMode::PrimarySide,
+            "default" | "preserve_order" => unfy_layout::LayoutMode::KeepLayout,
+            _ => unfy_layout::LayoutMode::Grid,
         };
         config.layout.margin = dto.margin;
         config.layout.gap = dto.gap;
@@ -1153,7 +1153,7 @@ pub fn set_target_display(app: State<'_, AppState>, native_id: String) -> Result
     let displays = engine.backend().topology().map_err(|e| e.to_string())?;
     // Numbered the same way the picker and the on-screen badges are, so the stored
     // number keeps meaning the same thing after the display is unplugged.
-    let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+    let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
     let position = ordered
         .iter()
         .position(|d| d.key.native_id == native_id)
@@ -1203,7 +1203,7 @@ pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> 
     let (owned, adopted_windows) = {
         let engine = app.engine.lock().map_err(|e| e.to_string())?;
         let owned = engine.current_transaction();
-        let windows = if engine.state() == conflux_domain::EngineState::Degraded {
+        let windows = if engine.state() == unfy_domain::EngineState::Degraded {
             engine.captured_window_count()
         } else {
             0
@@ -1211,7 +1211,7 @@ pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> 
         (owned, windows)
     };
 
-    let dir = conflux_settings::config_dir().join("journal");
+    let dir = unfy_settings::config_dir().join("journal");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Ok(PendingWorkDto {
             present: adopted_windows > 0,
@@ -1230,7 +1230,7 @@ pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> 
         if !path.extension().is_some_and(|e| e == "journal") {
             continue;
         }
-        if let Ok(conflux_journal::Recovered::Unfinished(tx)) = conflux_journal::recover(&path) {
+        if let Ok(unfy_journal::Recovered::Unfinished(tx)) = unfy_journal::recover(&path) {
             if Some(tx.transaction) == owned {
                 // The engine already owns this one; counted above.
                 continue;
@@ -1271,7 +1271,7 @@ pub fn dismiss_pending_work(app: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// Clear the dismissal, for example after the user actually restores.
-fn clear_recovery_dismissal(settings: &mut conflux_settings::Settings) {
+fn clear_recovery_dismissal(settings: &mut unfy_settings::Settings) {
     settings.recovery_dismissed_until = 0;
 }
 
@@ -1320,7 +1320,7 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
         .engine
         .lock()
         .ok()
-        .and_then(|engine| conflux_platform::DisplayProvider::topology(engine.backend()).ok())
+        .and_then(|engine| unfy_platform::DisplayProvider::topology(engine.backend()).ok())
         .unwrap_or_default();
     items.push(HealthItemDto {
         id: "displays".into(),
@@ -1371,7 +1371,7 @@ pub fn health_check(app: State<'_, AppState>) -> Vec<HealthItemDto> {
     //    open: running it each time was constant disk churn for a fact that changes
     //    approximately never. A failure is remembered for the same window, so a
     //    recovered disk shows up within ten minutes rather than instantly.
-    let dir = conflux_settings::config_dir();
+    let dir = unfy_settings::config_dir();
     let writable = {
         const TTL: std::time::Duration = std::time::Duration::from_secs(600);
         let cached = app
@@ -1447,9 +1447,9 @@ pub struct HealthItemDto {
 #[tauri::command]
 pub fn export_diagnostics(app: State<'_, AppState>) -> Result<DiagnosticsDto, String> {
     let report = diagnostics_report(&app)?;
-    let dir = conflux_settings::config_dir().join("diagnostics");
+    let dir = unfy_settings::config_dir().join("diagnostics");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("conflux-{}.json", uuid::Uuid::new_v4()));
+    let path = dir.join(format!("unfy-{}.json", uuid::Uuid::new_v4()));
     let text = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
     std::fs::write(&path, &text).map_err(|e| e.to_string())?;
 
@@ -1752,7 +1752,7 @@ pub fn reset_settings(
     // take effect at the next launch.
     if let Ok(mut engine) = app.engine.lock() {
         let mut config = engine.config().clone();
-        config.layout.mode = conflux_layout::LayoutMode::Grid;
+        config.layout.mode = unfy_layout::LayoutMode::Grid;
         config.layout.margin = 12;
         config.layout.gap = 8;
         config.restore_delay_secs = 0;
@@ -1788,7 +1788,7 @@ pub async fn cycle_target<R: tauri::Runtime>(
         if displays.len() < 2 {
             return Err("single_display".to_string());
         }
-        let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+        let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
         let current = settings
             .target_display
             .as_ref()
@@ -1816,7 +1816,7 @@ pub async fn cycle_target<R: tauri::Runtime>(
     let emit: Arc<dyn Fn(usize, usize) + Send + Sync> = Arc::new(move |done, total| {
         let _ = tauri::Emitter::emit(
             &progress_emitter,
-            "conflux://progress",
+            "unfy://progress",
             serde_json::json!({ "phase": "migrating", "done": done, "total": total }),
         );
     });
@@ -1831,7 +1831,7 @@ pub async fn cycle_target<R: tauri::Runtime>(
     // stream should not depend on which call site the user came through.
     let _ = tauri::Emitter::emit(
         &handle,
-        "conflux://progress",
+        "unfy://progress",
         serde_json::json!({ "phase": "done" }),
     );
 
@@ -1839,7 +1839,7 @@ pub async fn cycle_target<R: tauri::Runtime>(
         let engine = app.engine.lock().map_err(|e| e.to_string())?;
         let settings = app.settings.lock().map_err(|e| e.to_string())?;
         let displays = engine.backend().topology().unwrap_or_default();
-        let ordered = conflux_domain::DisplaySnapshot::ordered_by_position(&displays);
+        let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
         let target = settings.target_display.as_ref().map(|t| {
             let live = ordered
                 .iter()
@@ -1866,7 +1866,7 @@ pub fn open_path(app: State<'_, AppState>, path: Option<String>) -> Result<bool,
     // from the webview would turn a convenience into a file-system primitive, so
     // the request names a *location* rather than a path, and an explicit path is
     // still validated against the config root.
-    let config = conflux_settings::config_dir();
+    let config = unfy_settings::config_dir();
     let target = match path.as_deref() {
         // `None` or empty: the config directory, which holds logs and diagnostics.
         None | Some("") => config,

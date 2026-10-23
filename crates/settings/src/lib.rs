@@ -10,8 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
-use conflux_domain::DisplayKey;
-use conflux_layout::LayoutMode;
+use unfy_domain::DisplayKey;
+use unfy_layout::LayoutMode;
 use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_VERSION: u32 = 1;
@@ -418,29 +418,93 @@ fn temp_path(path: &Path) -> PathBuf {
 ///
 /// Uses the platform's own convention rather than a hardcoded Windows path, so
 /// the same code works on macOS once that backend lands.
+///
+/// The product used to be called Conflux and kept its data under that name.
+/// A rename must not strand the user's settings, window geometry, exclusion
+/// rules and journal, so the first run after the rename moves the old
+/// directory into place. Moving (not copying) keeps the journal and the
+/// settings file as the very same files the previous build wrote, and the
+/// leftover-empty-old-directory case degrades to "no settings yet" harmlessly.
 pub fn config_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {
-            return PathBuf::from(appdata).join("Conflux");
+            let appdata = PathBuf::from(appdata);
+            let dir = appdata.join("Unfy");
+            migrate_from(&dir, appdata.join("Conflux"));
+            return dir;
         }
     }
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home)
+            let dir = home
                 .join("Library")
                 .join("Application Support")
-                .join("Conflux");
+                .join("Unfy");
+            migrate_from(
+                &dir,
+                home.join("Library")
+                    .join("Application Support")
+                    .join("Conflux"),
+            );
+            return dir;
         }
     }
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg).join("conflux");
+        let xdg = PathBuf::from(xdg);
+        let dir = xdg.join("unfy");
+        migrate_from(&dir, xdg.join("conflux"));
+        return dir;
     }
     if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".config").join("conflux");
+        let home = PathBuf::from(home);
+        let dir = home.join(".config").join("unfy");
+        migrate_from(&dir, home.join(".config").join("conflux"));
+        return dir;
     }
-    std::env::temp_dir().join("conflux")
+    std::env::temp_dir().join("unfy")
+}
+
+/// Move the previous product-name directory into the new one, once.
+///
+/// Only acts when the new directory does not exist yet and the old one does,
+/// so it can never overwrite anything the new build already wrote, and every
+/// later call is a no-op once the move has happened. A failure to migrate is
+/// ignored: the app then starts with defaults, which is what it would have
+/// done had the old directory never existed.
+fn migrate_from(new_dir: &std::path::Path, old_dir: std::path::PathBuf) {
+    if !old_dir.exists() || new_dir.exists() {
+        return;
+    }
+    match std::fs::rename(&old_dir, new_dir) {
+        Ok(()) => {
+            eprintln!(
+                "migrated configuration directory from {} to {}",
+                old_dir.display(),
+                new_dir.display()
+            );
+        }
+        // Rename across filesystems fails; fall back to a copy. The old
+        // directory is left in place so a half copy never loses data.
+        Err(_) => {
+            if std::fs::create_dir_all(new_dir).is_ok() {
+                if let Ok(entries) = std::fs::read_dir(&old_dir) {
+                    for entry in entries.flatten() {
+                        let target = new_dir.join(entry.file_name());
+                        if entry.path().is_file() {
+                            let _ = std::fs::copy(entry.path(), &target);
+                        }
+                    }
+                }
+                eprintln!(
+                    "copied configuration from {} to {}",
+                    old_dir.display(),
+                    new_dir.display()
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -449,7 +513,7 @@ mod tests {
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "conflux-settings-{tag}-{}-{:?}",
+            "unfy-settings-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -611,7 +675,7 @@ mod tests {
         };
         let key = DisplayKey {
             native_id: "display-a".into(),
-            quality: conflux_domain::IdentityQuality::Strong,
+            quality: unfy_domain::IdentityQuality::Strong,
         };
         assert!(target.matches(&key));
     }
@@ -658,7 +722,7 @@ mod bom_tests {
     #[test]
     fn utf8_bom_is_tolerated() {
         // Windows editors add a BOM; rejecting it made a valid file look corrupt.
-        let dir = std::env::temp_dir().join(format!("conflux-bom-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("unfy-bom-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path: PathBuf = dir.join("settings.json");
 

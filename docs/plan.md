@@ -1,4 +1,4 @@
-# Conflux 产品规划与决策备忘
+# Unfy 产品规划与决策备忘
 
 日期：2026-10-21。本文是给项目负责人的决策材料，不是对外文档。
 输入：[docs/spec](spec/)（`gpt-6-astra` 生成）+ [docs/verify](verify/)（三个独立 agent 的对抗性核查）。
@@ -111,7 +111,7 @@
 ## 4. 技术基线（已核实，可直接开工）
 
 ```
-Conflux/
+Unfy/
   apps/desktop/            # Tauri 2 + React + TS + Tailwind + shadcn/ui
     src-tauri/             # Tauri 生命周期、command 白名单
   crates/

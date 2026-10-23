@@ -9,7 +9,7 @@
 //! known minimum, and when the target work area cannot hold every window at a
 //! usable size it falls back to a cascade instead of producing unusable cells.
 
-use conflux_domain::{Rect, Size, WindowId};
+use unfy_domain::{Rect, Size, WindowId};
 use serde::{Deserialize, Serialize};
 
 /// How windows are arranged on the target display.

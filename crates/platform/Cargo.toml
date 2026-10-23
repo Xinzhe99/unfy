@@ -1,12 +1,12 @@
 [package]
-name = "conflux-platform"
+name = "unfy-platform"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-conflux-domain = { workspace = true }
+unfy-domain = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

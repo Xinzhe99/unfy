@@ -175,7 +175,7 @@ export default function App() {
     root.classList.add(`theme-${theme}`);
     // Cached so `index.html` can apply it before the first paint; see the comment there.
     try {
-      window.localStorage.setItem("conflux-theme", theme);
+      window.localStorage.setItem("unfy-theme", theme);
     } catch {
       // Storage disabled: the inline script keeps the default and this is only a cache.
     }
@@ -296,7 +296,7 @@ export default function App() {
     // commands on every mount.
 
     const unlistenAction = listen<{ action: string; ok: boolean; message?: string }>(
-      "conflux://action",
+      "unfy://action",
       (event) => {
         void refresh();
         if (!event.payload.ok && event.payload.message) {
@@ -312,7 +312,7 @@ export default function App() {
       restored?: number;
       error?: string;
       suppressed?: string;
-    }>("conflux://remote", (event) => {
+    }>("unfy://remote", (event) => {
       void refresh();
       const { active, evidence, acted, applied, restored, error, suppressed } =
         event.payload;
@@ -359,7 +359,7 @@ export default function App() {
         });
       }
     });
-    const unlistenExit = listen("conflux://exit-blocked", () => {
+    const unlistenExit = listen("unfy://exit-blocked", () => {
       // The old message mentioned "keep the current layout" as an option while
       // no such control existed anywhere in the app.
       flash({
@@ -376,7 +376,7 @@ export default function App() {
       done?: number;
       total?: number;
     }>(
-      "conflux://progress",
+      "unfy://progress",
       (event) => {
         const phase = event.payload.phase;
         setBusy(phase !== "done" && phase !== "waiting");
@@ -442,7 +442,7 @@ export default function App() {
       needs_regather?: boolean;
       captured?: number;
     }>(
-      "conflux://topology-changed",
+      "unfy://topology-changed",
       (event) => {
         void refresh();
         // The displays just changed, so every screenshot is wrong until recaptured.
@@ -467,7 +467,7 @@ export default function App() {
       },
     );
     const unlistenUpdate = listen<{ outcome: string; version?: string }>(
-      "conflux://update",
+      "unfy://update",
       (event) => {
         void refresh();
         if (event.payload.outcome === "deferred") {
@@ -516,7 +516,7 @@ export default function App() {
       startPolling();
     };
     window.addEventListener("focus", onWindow);
-    const unlistenHidden = listen("conflux://window-hidden", () => {
+    const unlistenHidden = listen("unfy://window-hidden", () => {
       stopPolling();
     });
     // The explicit pair to the above. `focus` already restarts polling - see `onWindow`
@@ -524,7 +524,7 @@ export default function App() {
     // can be refused when another window holds the foreground, and relying on a focus
     // event that may not arrive is how "the window reopened and never refreshed" would
     // happen. The backend sends it from the one place that shows the window.
-    const unlistenShown = listen("conflux://window-shown", () => {
+    const unlistenShown = listen("unfy://window-shown", () => {
       startPolling();
     });
     // Ask the window, not the page. `document.visibilityState` reports "visible" even
@@ -680,7 +680,7 @@ export default function App() {
     <div className="flex h-full">
       <aside className="flex w-48 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-sidebar)]">
         <div className="flex h-12 items-center px-4">
-          <span className="text-[13px] font-semibold tracking-tight">Conflux</span>
+          <span className="text-[13px] font-semibold tracking-tight">Unfy</span>
         </div>
 
         <nav

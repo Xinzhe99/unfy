@@ -1,4 +1,4 @@
-//! macOS backend for Conflux.
+//! macOS backend for Unfy.
 //!
 //! This crate is compiled on every host but only contains real code under
 //! `cfg(target_os = "macos")`. On other hosts it exports [`is_available`]
@@ -44,8 +44,8 @@ pub use platform::MacPlatform;
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use conflux_domain::{DisplayKey, DisplaySnapshot, WindowId, WindowSnapshot};
-    use conflux_platform::{
+    use unfy_domain::{DisplayKey, DisplaySnapshot, WindowId, WindowSnapshot};
+    use unfy_platform::{
         Capabilities, DisplayProvider, ObservedWindow, Platform, Result, WindowBackend, WindowPlan,
     };
 
@@ -82,7 +82,7 @@ mod platform {
         fn topology(&self) -> Result<Vec<DisplaySnapshot>> {
             self.displays.topology()
         }
-        fn scale_of(&self, key: &DisplayKey) -> Result<conflux_domain::Scale> {
+        fn scale_of(&self, key: &DisplayKey) -> Result<unfy_domain::Scale> {
             self.displays.scale_of(key)
         }
         fn display_for(&self, id: &WindowId) -> Result<DisplayKey> {

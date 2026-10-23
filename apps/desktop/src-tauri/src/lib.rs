@@ -1,7 +1,7 @@
-//! Tauri host for Conflux.
+//! Tauri host for Unfy.
 //!
 //! The app is a thin shell: it owns the tray icon, the settings window and the
-//! global shortcuts, and forwards every action to [`conflux_engine::Engine`].
+//! global shortcuts, and forwards every action to [`unfy_engine::Engine`].
 //! All window decision-making lives in the engine crate so it can be tested
 //! without a desktop.
 
@@ -20,8 +20,8 @@ pub mod update;
 
 use std::sync::Arc;
 
-use conflux_engine::{Engine, EngineConfig};
-use conflux_settings::Settings;
+use unfy_engine::{Engine, EngineConfig};
+use unfy_settings::Settings;
 
 /// Application-wide state shared by commands and the tray.
 pub struct AppState {
@@ -36,7 +36,7 @@ pub struct AppState {
     pub last_update: Arc<std::sync::Mutex<Option<(String, String, String)>>>,
     /// Remote-session detector state. One tracker per process, because the
     /// activation streak must survive across polls.
-    pub detector: Arc<std::sync::Mutex<conflux_detect::Tracker>>,
+    pub detector: Arc<std::sync::Mutex<unfy_detect::Tracker>>,
     /// Last logged evidence summary, so the monitor logs transitions rather than
     /// every poll.
     pub last_observation: Arc<std::sync::Mutex<Option<String>>>,
@@ -123,13 +123,13 @@ impl AppState {
         });
 
         let config = EngineConfig {
-            layout: conflux_layout::LayoutConfig {
+            layout: unfy_layout::LayoutConfig {
                 mode: settings.layout_mode.into(),
                 margin: settings.margin,
                 gap: settings.gap,
                 ..Default::default()
             },
-            journal_dir: conflux_settings::config_dir().join("journal"),
+            journal_dir: unfy_settings::config_dir().join("journal"),
             restore_delay_secs: settings.restore_delay_secs,
             excluded_apps: settings.excluded_apps.clone(),
             ..Default::default()
@@ -162,8 +162,8 @@ impl AppState {
             settings_path,
             hotkey_status: Arc::new(std::sync::Mutex::new(commands::HotkeyStatusDto::default())),
             last_update: Arc::new(std::sync::Mutex::new(None)),
-            detector: Arc::new(std::sync::Mutex::new(conflux_detect::Tracker::new(
-                conflux_detect::Sensitivity::Off,
+            detector: Arc::new(std::sync::Mutex::new(unfy_detect::Tracker::new(
+                unfy_detect::Sensitivity::Off,
             ))),
             last_observation: Arc::new(std::sync::Mutex::new(None)),
             manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -175,7 +175,7 @@ impl AppState {
             last_error: Arc::new(std::sync::Mutex::new(None)),
             deferred_restore: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             activity: Arc::new(std::sync::Mutex::new(activity::Activity::load(
-                conflux_settings::config_dir().join("activity.jsonl"),
+                unfy_settings::config_dir().join("activity.jsonl"),
             ))),
         }
     }
@@ -215,12 +215,12 @@ fn redact_home_in(path: &std::path::Path, home: Option<&str>) -> String {
 }
 
 fn init_logging() {
-    let dir = conflux_settings::config_dir().join("logs");
+    let dir = unfy_settings::config_dir().join("logs");
     let file = std::fs::create_dir_all(&dir).ok().and_then(|()| {
         tracing_appender::rolling::Builder::new()
             .rotation(tracing_appender::rolling::Rotation::DAILY)
             .max_log_files(5)
-            .filename_prefix("conflux")
+            .filename_prefix("unfy")
             .filename_suffix("log")
             .build(&dir)
             .ok()
@@ -272,15 +272,15 @@ fn install_panic_hook() {
 }
 
 fn log_filter() -> tracing_subscriber::EnvFilter {
-    // `conflux=info` only matches a target literally named `conflux`. Every
-    // crate here is named `conflux_*` (engine, journal, platform_win...), so that
+    // `unfy=info` only matches a target literally named `unfy`. Every
+    // crate here is named `unfy_*` (engine, journal, platform_win...), so that
     // filter silenced all of them: the log file existed and stayed two lines
     // long while migrations ran. The directive is per-crate instead.
     tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new(concat!(
-            "conflux_desktop_lib=info,conflux_engine=info,conflux_journal=info,",
-            "conflux_platform=info,conflux_platform_win=info,conflux_platform_mac=info,",
-            "conflux_settings=info,conflux_layout=info,warn"
+            "unfy_desktop_lib=info,unfy_engine=info,unfy_journal=info,",
+            "unfy_platform=info,unfy_platform_win=info,unfy_platform_mac=info,",
+            "unfy_settings=info,unfy_layout=info,warn"
         ))
     })
 }
@@ -397,11 +397,11 @@ pub fn run() {
                 // notify inline.
                 let _ = window.hide();
                 use tauri::Emitter;
-                let _ = window.app_handle().emit("conflux://window-hidden", ());
+                let _ = window.app_handle().emit("unfy://window-hidden", ());
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running Conflux");
+        .expect("error while running Unfy");
 }
 
 /// Hide the window and tell the UI, so it can stop polling.
@@ -462,11 +462,11 @@ fn apply_window_theme(app: &tauri::AppHandle) {
         return;
     };
     let value = match theme {
-        conflux_settings::ThemeName::Light => Some(tauri::Theme::Light),
-        conflux_settings::ThemeName::Dark => Some(tauri::Theme::Dark),
+        unfy_settings::ThemeName::Light => Some(tauri::Theme::Light),
+        unfy_settings::ThemeName::Dark => Some(tauri::Theme::Dark),
         // `null` hands the decision back to the system, which is what "follow the
         // system" means at this level.
-        conflux_settings::ThemeName::System => None,
+        unfy_settings::ThemeName::System => None,
     };
     let _ = window.set_theme(value);
 }
@@ -482,13 +482,13 @@ pub fn show_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
-    let _ = window.app_handle().emit("conflux://window-shown", ());
+    let _ = window.app_handle().emit("unfy://window-shown", ());
 }
 
 pub fn hide_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use tauri::Emitter;
     let _ = window.hide();
-    let _ = window.app_handle().emit("conflux://window-hidden", ());
+    let _ = window.app_handle().emit("unfy://window-hidden", ());
 }
 
 /// Apply the persisted window geometry, if it still lands on a visible display.
@@ -1082,27 +1082,27 @@ mod redaction {
 
     #[test]
     fn the_home_directory_becomes_a_tilde() {
-        let path = std::path::Path::new(r"C:\Users\ana\AppData\Roaming\Conflux\settings.json");
+        let path = std::path::Path::new(r"C:\Users\ana\AppData\Roaming\Unfy\settings.json");
         assert_eq!(
             redact_home_in(path, Some(r"C:\Users\ana")),
-            r"~\AppData\Roaming\Conflux\settings.json",
+            r"~\AppData\Roaming\Unfy\settings.json",
         );
     }
 
     #[test]
     fn a_path_outside_home_is_left_alone() {
         // A path that merely starts with the same letters must not be rewritten.
-        let path = std::path::Path::new(r"D:\builds\conflux.exe");
+        let path = std::path::Path::new(r"D:\builds\unfy.exe");
         assert_eq!(
             redact_home_in(path, Some(r"C:\Users\ana")),
-            r"D:\builds\conflux.exe",
+            r"D:\builds\unfy.exe",
         );
     }
 
     #[test]
     fn a_missing_home_still_returns_the_path() {
-        let path = std::path::Path::new("conflux.exe");
-        assert_eq!(redact_home_in(path, None), "conflux.exe");
-        assert_eq!(redact_home_in(path, Some("")), "conflux.exe");
+        let path = std::path::Path::new("unfy.exe");
+        assert_eq!(redact_home_in(path, None), "unfy.exe");
+        assert_eq!(redact_home_in(path, Some("")), "unfy.exe");
     }
 }
