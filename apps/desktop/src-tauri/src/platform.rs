@@ -10,8 +10,73 @@ pub type Backend = unfy_platform_win::WinPlatform;
 #[cfg(target_os = "macos")]
 pub type Backend = unfy_platform_mac::MacPlatform;
 
+/// Unsupported platforms use an inert backend.
+///
+/// This used to be `FakeBackend::with_two_displays()`, which made the app show two
+/// fictional monitors and report "gathered 0 windows" as success. A build that
+/// cannot move windows must say so; it must not invent a desktop.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub type Backend = unfy_platform::fake::FakeBackend;
+pub type Backend = UnsupportedBackend;
+
+/// A backend that answers every call with `Unsupported`.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[derive(Debug, Default)]
+pub struct UnsupportedBackend;
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+impl unfy_platform::DisplayProvider for UnsupportedBackend {
+    fn topology(&self) -> unfy_platform::Result<Vec<unfy_domain::DisplaySnapshot>> {
+        Err(unfy_platform::PlatformError::Unsupported)
+    }
+
+    fn scale_of(
+        &self,
+        _key: &unfy_domain::DisplayKey,
+    ) -> unfy_platform::Result<unfy_domain::Scale> {
+        Err(unfy_platform::PlatformError::Unsupported)
+    }
+
+    fn display_for(
+        &self,
+        _id: &unfy_domain::WindowId,
+    ) -> unfy_platform::Result<unfy_domain::DisplayKey> {
+        Err(unfy_platform::PlatformError::Unsupported)
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+impl unfy_platform::WindowBackend for UnsupportedBackend {
+    fn enumerate(&self) -> unfy_platform::Result<Vec<unfy_domain::WindowSnapshot>> {
+        Err(unfy_platform::PlatformError::Unsupported)
+    }
+
+    fn capabilities(&self, _id: &unfy_domain::WindowId) -> unfy_platform::Capabilities {
+        unfy_platform::Capabilities::default()
+    }
+
+    fn apply(
+        &self,
+        _id: &unfy_domain::WindowId,
+        _plan: &unfy_platform::WindowPlan,
+    ) -> unfy_platform::Result<()> {
+        Err(unfy_platform::PlatformError::Unsupported)
+    }
+
+    fn read_back(
+        &self,
+        _id: &unfy_domain::WindowId,
+    ) -> unfy_platform::Result<unfy_platform::ObservedWindow> {
+        Err(unfy_platform::PlatformError::Unsupported)
+    }
+
+    fn restore_native(
+        &self,
+        _id: &unfy_domain::WindowId,
+        _placement: &[u8],
+    ) -> unfy_platform::Result<()> {
+        Err(unfy_platform::PlatformError::Unsupported)
+    }
+}
 
 /// Whether this build can actually move other applications' windows.
 pub fn is_supported() -> bool {
@@ -41,7 +106,7 @@ pub fn make() -> Backend {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        unfy_platform::fake::FakeBackend::with_two_displays()
+        UnsupportedBackend
     }
 }
 

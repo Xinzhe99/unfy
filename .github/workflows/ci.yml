@@ -136,6 +136,7 @@ jobs:
       # allowed to produce unsigned installers for smoke testing.
       - name: Require a configured updater for a release tag
         if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
@@ -207,6 +208,7 @@ jobs:
       # bundle (installer produced, updater package missing) also fails instead
       # of being published with a hole in it.
       - name: Verify release artifacts
+        shell: bash
         env:
           RUNNER_OS_NAME: ${{ runner.os }}
           IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}

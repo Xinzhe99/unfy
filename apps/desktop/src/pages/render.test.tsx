@@ -472,7 +472,9 @@ describe("pages render", () => {
         <OverviewPage
           status={{ ...status, state, pending_windows: 3 }}
           settings={settings}
-          preview={null}
+          // An open preview must not displace the restore entry: the plan is
+          // read-only, and a user looking at it still needs the way back.
+          preview={preview}
           displays={displays}
           activity={[]}
           progress={null}
@@ -934,7 +936,7 @@ describe("pages render", () => {
     const html = renderToStaticMarkup(
       <DisplaysPage
         displays={displays}
-        settings={settings}
+        settings={{ ...settings, layout_mode: "default" }}
         target={status.target}
         thumbnails={{
           DISPLAY1: { data_url: "data:image/png;base64,AA==", blank: false },
@@ -996,13 +998,13 @@ describe("pages render", () => {
   });
 
   test("the detection row does not say watching while automation is paused", () => {
-    // The badge above says paused; the row used to keep saying "监视中（均衡）", which
-    // reads as two different answers to the same question. Pausing stops the
+    // The badge above says paused; the row used to keep claiming it was acting,
+    // which reads as two different answers to the same question. Pausing stops the
     // automation, not the detector, so the row has to say both things.
     const html = renderToStaticMarkup(
       <OverviewPage
         status={{ ...status, paused: true }}
-        settings={{ ...settings, auto_detect: "balanced", auto_gather: true }}
+        settings={{ ...settings, auto_detect: "verified", auto_gather: true }}
         preview={preview}
         displays={displays}
         activity={activity}
@@ -1027,7 +1029,9 @@ describe("pages render", () => {
       />,
     );
     expect(html).toContain("已暂停");
-    expect(html).not.toContain("监视中（均衡）");
+    // The row says the detector is paused rather than that it is acting.
+    expect(html).toContain("已暂停，不会自动操作");
+    expect(html).not.toContain("监视中（未启用自动操作）");
   });
 
   test("the overview does not claim ready before the first status arrives", () => {
@@ -1253,8 +1257,10 @@ describe("pages render", () => {
       <PlanPreview preview={{ ...preview, target_present: false }} />,
     );
     // Falling back silently means the user discovers it by finding their windows
-    // on the wrong screen and having to restore.
-    expect(html).toContain("会整理到主显示器");
+    // on the wrong screen and having to restore. The copy no longer promises a
+    // fallback to the primary display either: a gather refuses instead.
+    expect(html).toContain("目标显示器已经不可用");
+    expect(html).not.toContain("会整理到主显示器");
   });
 
   test("plan preview names the applications instead of only numbering them", () => {

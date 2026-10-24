@@ -275,11 +275,11 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
     // recovery banner uses. Computed before the DTO so one query serves both.
     let pending_windows = {
         let owned = engine.current_transaction();
-        let mut count = if engine.state().has_pending_work() {
-            engine.captured_window_count()
-        } else {
-            0
-        };
+        // Count what still owes a restore, not every captured window: a window
+        // that was already put back must not keep the restore entry alive, and a
+        // window that is still displaced must not disappear from it because the
+        // state label happens to be Idle.
+        let mut count = engine.unresolved_window_count();
         // A journal the engine does not own (another session, or an unreadable one
         // at startup) still counts: the windows may be displaced.
         let dir = unfy_settings::config_dir().join("journal");
@@ -291,7 +291,7 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
                         unfy_journal::recover(&path)
                     {
                         if Some(tx.transaction) != owned {
-                            count = count.max(tx.preimages.len());
+                            count = count.max(tx.touched_windows().len());
                         }
                     }
                 }
@@ -1216,12 +1216,10 @@ pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> 
     let (owned, adopted_windows) = {
         let engine = app.engine.lock().map_err(|e| e.to_string())?;
         let owned = engine.current_transaction();
-        let windows = if engine.state() == unfy_domain::EngineState::Degraded {
-            engine.captured_window_count()
-        } else {
-            0
-        };
-        (owned, windows)
+        // Any state can hold unresolved windows - a failed restore leaves
+        // `Degraded`, but a partially resolved transaction can also be `Active`.
+        // Deriving this from the label was what hid the restore entry.
+        (owned, engine.unresolved_window_count())
     };
 
     let dir = unfy_settings::config_dir().join("journal");
@@ -1248,16 +1246,15 @@ pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> 
                 // The engine already owns this one; counted above.
                 continue;
             }
-            if tx.preimages.is_empty() {
-                // Nothing captured, nothing movable: clean it up rather than
-                // alarming the user about work that cannot exist.
+            if !tx.has_open_obligation() {
+                // Every captured window was already resolved: the file is history.
                 std::fs::remove_file(&path).ok();
                 continue;
             }
             let work = PendingWork::from_recovered(&tx);
-            if work.windows > best_windows {
-                best_windows = work.windows;
-            }
+            // Sum rather than take the maximum: two unfinished transactions
+            // describe two different sets of displaced windows.
+            best_windows += work.windows;
             may_have_moved |= work.may_have_moved;
             truncated_bytes = truncated_bytes.max(work.truncated_bytes);
         }

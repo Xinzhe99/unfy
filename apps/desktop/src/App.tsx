@@ -91,9 +91,9 @@ export default function App() {
   // come back", leaving the user to guess which application to close.
   const [pendingApps, setPendingApps] = useState<string[]>([]);
   // Applications that refused the last gather. The settings document no longer
-  // remembers this (`last_refused_apps` was a persisted copy of a one-off report and
-  // went stale the moment a rule changed), so the gather result is the only source:
-  // it is what the user just saw happen.
+  // remembers this (a persisted copy of a one-off report went stale the moment a
+  // rule changed), so the gather result is the only source: it is what the user just
+  // saw happen.
   const [refusedApps, setRefusedApps] = useState<string[]>([]);
   const [hotkeys, setHotkeys] = useState<HotkeyStatusDto | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);

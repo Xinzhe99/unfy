@@ -99,6 +99,9 @@ export function OverviewPage({
   const supported = status?.supported ?? false;
   const state = status?.state ?? "idle";
   const paused = status?.paused ?? false;
+  // Captured windows are the whole transaction; `pending_windows` is what still
+  // owes a restore. They are different numbers and the page must not use one as
+  // the other: a finished restore has captured > 0 and pending 0 for a moment.
   const captured = status?.captured_windows ?? 0;
   // Windows in an unfinished transaction, including one the engine adopted from
   // a previous run. A user looking at "ready" while five windows are displaced
@@ -127,6 +130,9 @@ export function OverviewPage({
   const blocked = state === "error";
   // With one display there is nowhere to gather to. Saying nothing leaves the
   // user pressing a button that reports "moved 0 windows", which reads as broken.
+  // One display is not, by itself, a reason to hide the gather action: windows can
+  // still be outside the work area after a resolution change. The copy explains
+  // what will happen; the button stays available so rescue is reachable.
   const singleDisplay = (status?.display_count ?? 0) < 2;
   // Applications that refused the last gather, minus those already excluded.
   // Showing an application whose rule already exists would offer an action that
