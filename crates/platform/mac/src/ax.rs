@@ -134,7 +134,12 @@ impl AccessibilityBackend {
         }
         unsafe { CFRelease(system) };
 
+        let own_pid = std::process::id() as i32;
         for pid in running_application_pids() {
+            // The app must never gather its own settings window.
+            if pid == own_pid {
+                continue;
+            }
             let app = unsafe { AXUIElementCreateApplication(pid) };
             if app.is_null() {
                 continue;
@@ -149,22 +154,45 @@ impl AccessibilityBackend {
                 }
             };
 
-            let array: CFArray<CFTypeRef> = unsafe { CFArray::wrap_under_get_rule(windows as _) };
+            // `AXUIElementCopyAttributeValue` returns a +1 reference. Wrapping it
+            // under the *get* rule leaked one array per application per poll, which
+            // is a slow memory climb in a process that polls every two seconds.
+            // The window elements inside the array are owned by the array, so each
+            // one is retained before the array is released.
+            let array_ref = windows;
+            let array: CFArray<CFTypeRef> =
+                unsafe { CFArray::wrap_under_create_rule(array_ref as _) };
             for element in array.iter() {
                 let element = *element;
                 if element.is_null() {
                     continue;
                 }
-                let Some(window) = read_window(element, pid) else {
+                let Some(mut window) = read_window(element, pid) else {
                     continue;
                 };
+                // Retain the element for the lifetime of the cache entry; the
+                // array's own reference dies with the array.
+                let retained = unsafe { CFRetain(element) };
+                window.element = retained;
                 snapshots.push(window.snapshot.clone());
                 cache.push(window);
             }
+            drop(array);
             unsafe { CFRelease(app) };
         }
 
-        *self.windows.lock().unwrap() = cache;
+        {
+            let mut guard = self
+                .windows
+                .lock()
+                .map_err(|_| PlatformError::Os("window cache poisoned".into()))?;
+            for old in guard.drain(..) {
+                if !old.element.is_null() {
+                    unsafe { CFRelease(old.element) };
+                }
+            }
+            *guard = cache;
+        }
         Ok(snapshots)
     }
 
@@ -288,20 +316,16 @@ impl WindowBackend for AccessibilityBackend {
                 return Err(PlatformError::Unsupported);
             }
 
-            set_position(
-                window.element,
-                plan.visible_rect.left as f64,
-                plan.visible_rect.top as f64,
-            )?;
+            // macOS clamps a size request to the visible area of the window's
+            // *current* display, so the documented order is size -> position ->
+            // size: grow/shrink first, move, then apply the final size where the
+            // window now lives. The previous order started with a position write
+            // and lost the size whenever the window crossed displays.
             set_size(
                 window.element,
                 plan.visible_rect.width() as f64,
                 plan.visible_rect.height() as f64,
             )?;
-
-            // macOS clamps the first size request to the visible area of the
-            // window's current display, so sizes and positions must be applied
-            // twice in the order: size -> position -> size.
             set_position(
                 window.element,
                 plan.visible_rect.left as f64,
@@ -318,9 +342,13 @@ impl WindowBackend for AccessibilityBackend {
 
     fn read_back(&self, id: &WindowId) -> Result<ObservedWindow> {
         self.with_window(id, |window| {
-            let position =
-                copy_point(window.element, "AXPosition").ok_or(PlatformError::WindowGone)?;
-            let size = copy_size(window.element, "AXSize").ok_or(PlatformError::WindowGone)?;
+            // A failed attribute read is not proof the window is gone. Reporting
+            // `WindowGone` made the engine drop its recovery obligation for a
+            // window that was merely busy or temporarily unreadable.
+            let position = copy_point(window.element, "AXPosition")
+                .ok_or_else(|| attribute_error(window.element, "AXPosition"))?;
+            let size = copy_size(window.element, "AXSize")
+                .ok_or_else(|| attribute_error(window.element, "AXSize"))?;
             let minimized = copy_bool(window.element, "AXMinimized").unwrap_or(false);
             let fullscreen = copy_bool(window.element, "AXFullScreen").unwrap_or(false);
             let mode = if minimized {
@@ -351,9 +379,31 @@ impl WindowBackend for AccessibilityBackend {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(cf: CFTypeRef);
+    fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
+}
+
+/// Map an unreadable attribute to the reason the caller needs.
+///
+/// `AX_ERROR_API_DISABLED` is a revoked permission, not a missing window; the
+/// engine must keep the recovery record and tell the user to re-authorise.
+fn attribute_error(element: CFTypeRef, name: &str) -> PlatformError {
+    let attribute = CFString::new(name);
+    let mut value: CFTypeRef = std::ptr::null();
+    let result = unsafe {
+        AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value)
+    };
+    if !value.is_null() {
+        unsafe { CFRelease(value) };
+    }
+    match result {
+        AX_ERROR_API_DISABLED => PlatformError::PermissionDenied,
+        AX_ERROR_ATTRIBUTE_UNSUPPORTED => PlatformError::Unsupported,
+        _ => PlatformError::Os(format!("AX read {name} failed: {result}")),
+    }
 }
 
 fn copy_attribute(element: CFTypeRef, name: &str) -> Option<CFTypeRef> {
+    set_timeout(element);
     let attribute = CFString::new(name);
     let mut value: CFTypeRef = std::ptr::null();
     let result = unsafe {
@@ -397,8 +447,26 @@ fn copy_size(element: CFTypeRef, name: &str) -> Option<CGSize> {
     (ok != 0).then_some(size)
 }
 
+/// Read an AX boolean.
+///
+/// `AXMinimized` and `AXFullScreen` are `CFBooleanRef`, not `CFNumberRef`. Reading
+/// them as a number happened to work for some applications and returned `None` for
+/// others, which silently turned "minimized" into "normal" and let the engine move
+/// a window the user had put away.
 fn copy_bool(element: CFTypeRef, name: &str) -> Option<bool> {
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::base::CFGetTypeID;
+
     let value = copy_attribute(element, name)?;
+    let is_boolean =
+        unsafe { CFGetTypeID(value) == CFBoolean::type_id() };
+    if is_boolean {
+        let boolean = unsafe { CFBoolean::wrap_under_get_rule(value as _) };
+        let result = boolean.into();
+        unsafe { CFRelease(value) };
+        return Some(result);
+    }
+    // Some applications answer a number; accept it rather than losing the state.
     let number = unsafe { CFNumber::wrap_under_get_rule(value as _) };
     let result = number.to_i64().map(|v| v != 0);
     unsafe { CFRelease(value) };
@@ -414,12 +482,24 @@ fn copy_string(element: CFTypeRef, name: &str) -> Option<String> {
 }
 
 fn is_settable(element: CFTypeRef, name: &str) -> bool {
+    set_timeout(element);
     let attribute = CFString::new(name);
     let mut settable: u8 = 0;
     let result = unsafe {
         AXUIElementIsAttributeSettable(element, attribute.as_concrete_TypeRef(), &mut settable)
     };
     result == AX_SUCCESS && settable != 0
+}
+
+/// Bound one call to a possibly-hung application.
+///
+/// `AXUIElementSetMessagingTimeout` applies to the element it is called on, not to
+/// every element in the process. Setting it only on the application object left
+/// every position/size read on a window element unbounded, so one frozen app could
+/// block the whole gather.
+fn set_timeout(element: CFTypeRef) {
+    const TIMEOUT_SECS: f32 = 0.4;
+    unsafe { AXUIElementSetMessagingTimeout(element, TIMEOUT_SECS) };
 }
 
 fn set_position(element: CFTypeRef, x: f64, y: f64) -> Result<()> {
@@ -442,6 +522,7 @@ fn set_size(element: CFTypeRef, width: f64, height: f64) -> Result<()> {
 }
 
 fn write_attribute(element: CFTypeRef, name: &str, value: CFTypeRef) -> Result<()> {
+    set_timeout(element);
     let attribute = CFString::new(name);
     let result =
         unsafe { AXUIElementSetAttributeValue(element, attribute.as_concrete_TypeRef(), value) };

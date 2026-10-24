@@ -26,9 +26,24 @@ use core_graphics::display::{CGDisplay, CGDisplayBounds, CGDisplayIsMain, CGGetA
 /// uses the primed values and falls back to full bounds when they are missing.
 #[derive(Debug, Default)]
 pub struct QuartzDisplays {
-    cache: std::sync::Mutex<Vec<(u32, DisplaySnapshot)>>,
+    cache: std::sync::Mutex<Option<Cached>>,
     work_areas: std::sync::Mutex<std::collections::HashMap<u32, Rect>>,
 }
+
+/// A cached topology with the moment it was taken.
+///
+/// The previous cache had no expiry at all: `prime_work_areas` was the only thing
+/// that cleared it, nothing called that at runtime, and `invalidate` had no
+/// caller. Hot-plugging a display therefore kept returning the old list forever,
+/// so plans and rescue were computed against a desktop that no longer existed.
+#[derive(Debug)]
+struct Cached {
+    at: std::time::Instant,
+    displays: Vec<(u32, DisplaySnapshot)>,
+}
+
+/// How long a cached topology is trusted.
+const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl QuartzDisplays {
     pub fn new() -> Self {
@@ -37,10 +52,28 @@ impl QuartzDisplays {
 
     pub fn invalidate(&self) {
         if let Ok(mut cache) = self.cache.lock() {
-            cache.clear();
+            *cache = None;
         }
         if let Ok(mut work) = self.work_areas.lock() {
             work.clear();
+        }
+    }
+
+    /// Re-read the work areas when they are missing or stale.
+    ///
+    /// Called from `topology`, so a caller that never remembers to prime still gets
+    /// real work areas once the cache expires. Returns silently when not on the main
+    /// thread; the last primed values stay in use rather than being replaced by
+    /// full display bounds.
+    fn refresh_work_areas_if_stale(&self) {
+        let stale = match self.cache.lock() {
+            Ok(cache) => cache
+                .as_ref()
+                .is_none_or(|cached| cached.at.elapsed() >= CACHE_TTL),
+            Err(_) => true,
+        };
+        if stale {
+            self.prime_work_areas();
         }
     }
 
@@ -56,16 +89,27 @@ impl QuartzDisplays {
         let Some(marker) = MainThreadMarker::new() else {
             return false;
         };
+        // Keep the marker alive: `screens` is only valid while the main thread
+        // marker exists, which is the type-level guarantee AppKit relies on.
         let screens = NSScreen::screens(marker);
-        let main_height = NSScreen::mainScreen(marker)
+        // Flip against the primary display's top edge, not `mainScreen`.
+        //
+        // `+[NSScreen mainScreen]` is the screen with keyboard focus, not the one
+        // whose origin is (0,0). On a mixed-height setup, flipping with the focused
+        // screen's height moved every window by the difference as soon as the user
+        // clicked on the other monitor.
+        let reference_height = screens
+            .iter()
+            .next()
             .map(|s| s.frame())
-            .map(|f| f.size.height)
+            .map(|f| f.size.height + f.origin.y)
             .unwrap_or(0.0);
+        let _marker = marker;
 
         let mut work = std::collections::HashMap::new();
         for screen in screens.iter() {
             let visible = screen.visibleFrame();
-            let top = main_height - (visible.origin.y + visible.size.height);
+            let top = reference_height - (visible.origin.y + visible.size.height);
             // `NSScreen` does not expose the `CGDirectDisplayID` directly. The
             // documented bridge is `NSScreenNumber` in `deviceDescription`;
             // when it is missing the display simply keeps its full bounds.
@@ -87,7 +131,7 @@ impl QuartzDisplays {
             *cache = work;
         }
         if let Ok(mut cache) = self.cache.lock() {
-            cache.clear();
+            *cache = None;
         }
         true
     }
@@ -101,14 +145,20 @@ impl QuartzDisplays {
     }
 
     fn snapshot(&self) -> Result<Vec<(u32, DisplaySnapshot)>> {
+        self.refresh_work_areas_if_stale();
         if let Ok(cache) = self.cache.lock() {
-            if !cache.is_empty() {
-                return Ok(cache.clone());
+            if let Some(cached) = cache.as_ref() {
+                if cached.at.elapsed() < CACHE_TTL {
+                    return Ok(cached.displays.clone());
+                }
             }
         }
         let fresh = enumerate(self)?;
         if let Ok(mut cache) = self.cache.lock() {
-            *cache = fresh.clone();
+            *cache = Some(Cached {
+                at: std::time::Instant::now(),
+                displays: fresh.clone(),
+            });
         }
         Ok(fresh)
     }
@@ -158,18 +208,14 @@ fn enumerate(owner: &QuartzDisplays) -> Result<Vec<(u32, DisplaySnapshot)>> {
             (bounds.origin.y + bounds.size.height).round() as i32,
         );
 
-        let pixel_width = display.pixels_wide() as i32;
-        let scale_x = if rect.width() > 0 {
-            f64::from(pixel_width) / f64::from(rect.width())
-        } else {
-            1.0
-        };
-        // CGDisplayBounds is already in points, so the ratio gives the backing
-        // scale (1.0 or 2.0 on Retina).
-        let scale = Scale {
-            x: if scale_x > 0.0 { scale_x } else { 1.0 },
-            y: if scale_x > 0.0 { scale_x } else { 1.0 },
-        };
+        // Geometry on this platform is in **points**, and AX reads/writes points
+        // too. The engine's coordinate space is therefore points, and the scale it
+        // uses for geometry must be 1.0. Reporting the Retina backing ratio here
+        // made every restore rescale a point rectangle by 2, which is the bug this
+        // comment exists to prevent. The backing ratio is not lost: it is exposed
+        // separately for screenshots and for the "physical size" line in the UI.
+        let _pixel_width = display.pixels_wide();
+        let scale = Scale::IDENTITY;
 
         let native_id = uuid_for_display(*id).unwrap_or_else(|| format!("cg:{id}"));
         let quality = if native_id.starts_with("cg:") {

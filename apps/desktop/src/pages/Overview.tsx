@@ -606,21 +606,15 @@ function relativeTime(at: number): string {
 function detectStatusLabel(settings: SettingsDto | null, paused: boolean): string {
   if (!settings) return "—";
   if (settings.auto_detect === "off") return t("已关闭");
+  // Paused stops the automation, not the detector: the row would otherwise claim
+  // it is acting while the badge above says paused, which reads as two different
+  // answers to the same question.
   if (paused) return t("监视中（已暂停，不会自动操作）");
-  // Paused stops the automation, not the detector: the row would otherwise say
-  // "watching (balanced)" while the badge above says paused, which reads as two
-  // different answers to the same question.
-
-  const level = t(
-    settings.auto_detect === "conservative"
-      ? "保守"
-      : settings.auto_detect === "aggressive"
-        ? "激进"
-        : "均衡",
-  );
+  // There is only one level now: verified connection evidence. Naming it would be
+  // a choice the user no longer has.
   if (!settings.auto_gather && !settings.auto_restore)
-    return t("监视中（{level}，未启用自动操作）", { level });
-  return t("监视中（{level}）", { level });
+    return t("监视中（未启用自动操作）");
+  return t("监视中");
 }
 
 function layoutLabel(mode: SettingsDto["layout_mode"] | undefined): string {

@@ -140,9 +140,7 @@ export function GeneralPage({
             onChange={(auto_detect) => onSave({ auto_detect })}
             options={[
               { value: "off", label: t("关闭") },
-              { value: "conservative", label: t("保守") },
-              { value: "balanced", label: t("均衡") },
-              { value: "aggressive", label: t("激进") },
+              { value: "verified", label: t("可靠连接") },
             ]}
           />
         </SettingRow>
@@ -180,7 +178,7 @@ export function GeneralPage({
         </SettingRow>
 
         <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">
-          {t("没有任何系统接口能查询「谁正在远程这台电脑」。检测依靠可验证的信号：远程桌面会话、虚拟显示器、已知远控工具的运行与连接状态。级别越高覆盖的软件越多，误判也越多。")}
+          {t("没有任何系统接口能查询「谁正在远程这台电脑」。这里只在有可验证的连接证据时才自动动手：远程桌面会话，或远程端实际投送出来的虚拟显示器。远控工具只是在运行，只作为信息显示，不会触发移动。")}
         </p>
       </Card>
 
@@ -476,12 +474,8 @@ export function GeneralPage({
 
 function detectHint(level: SettingsDto["auto_detect"]): string {
   switch (level) {
-    case "conservative":
-      return t("只识别 Windows 远程桌面会话。几乎不会误判。");
-    case "balanced":
-      return t("还识别虚拟显示器（Parsec 等）。推荐。");
-    case "aggressive":
-      return t("还识别已安装的远控工具是否在运行或已连接。可能误判。");
+    case "verified":
+      return t("只识别可验证的连接：远程桌面会话，以及远程端实际投送出来的虚拟显示器。进程只是在运行不算。");
     default:
       return t("关闭自动检测，只用快捷键、托盘和界面按钮。");
   }

@@ -1835,31 +1835,30 @@ pub async fn cycle_target<R: tauri::Runtime>(
 
 /// Reveal a directory in the OS file manager.
 ///
-/// The diagnostics line prints a path, but a path in a toast is not findable; the
-/// user has to retype it. This is the same action the OS context menu would offer.
+/// Where the interface may ask the OS to reveal a folder.
+///
+/// The old command accepted an arbitrary string and only checked that the
+/// canonical path stayed under the config root. That is a filesystem primitive
+/// reachable from the webview for no product reason: there are exactly two
+/// folders the user ever needs, and naming them removes the whole class of
+/// path-traversal and symlink questions.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppFolder {
+    /// The configuration directory: settings, journal, activity, logs.
+    Config,
+    /// The diagnostics directory, where exported reports are written.
+    Diagnostics,
+}
+
 #[tauri::command]
-pub fn open_path(app: State<'_, AppState>, path: Option<String>) -> Result<bool, String> {
-    // Only directories this app owns may be opened. Accepting an arbitrary path
-    // from the webview would turn a convenience into a file-system primitive, so
-    // the request names a *location* rather than a path, and an explicit path is
-    // still validated against the config root.
-    let config = unfy_settings::config_dir();
-    let target = match path.as_deref() {
-        // `None` or empty: the config directory, which holds logs and diagnostics.
-        None | Some("") => config,
-        Some(requested) => {
-            let requested = std::path::Path::new(requested);
-            let normalized = requested
-                .canonicalize()
-                .unwrap_or_else(|_| requested.to_path_buf());
-            let root = config.canonicalize().unwrap_or_else(|_| config.clone());
-            if !normalized.starts_with(&root) {
-                return Err("path_outside_app_dirs".to_string());
-            }
-            normalized
-        }
-    };
+pub fn open_app_folder(app: State<'_, AppState>, folder: AppFolder) -> Result<bool, String> {
     let _ = app;
+    let root = unfy_settings::config_dir();
+    let target = match folder {
+        AppFolder::Config => root,
+        AppFolder::Diagnostics => root.join("diagnostics"),
+    };
     Ok(platform::open_directory(&target.to_string_lossy()))
 }
 

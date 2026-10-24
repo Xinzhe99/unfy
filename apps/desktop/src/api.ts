@@ -106,6 +106,10 @@ export interface MigrationDto {
   gone: number;
   skipped: number;
   unplaced: number;
+  /** Windows already usable on the target; zero platform writes. */
+  unchanged: number;
+  /** Windows whose original position could not be captured; zero platform writes. */
+  not_attempted: number;
   cascaded: boolean;
   state: EngineStateName;
   /** Names of applications that refused to move. */
@@ -118,6 +122,11 @@ export interface RestoreDto {
   fallback_visible: number;
   rejected: number;
   pending: number;
+  /**
+   * Windows that are safely visible but whose original display is gone, so they
+   * still owe their original position. Not the same as restored.
+   */
+  awaiting_original: number;
   state: EngineStateName;
   /** Applications whose windows are still unresolved. */
   pending_apps: string[];
@@ -138,14 +147,12 @@ export interface SettingsDto {
   excluded_apps: string[];
   onboarding_done: boolean;
   onboarding_step: number;
-  /** Evidence level the app may act on automatically. */
-  auto_detect: "off" | "conservative" | "balanced" | "aggressive";
+  /** Evidence level the app may act on automatically: off, or a verified connection. */
+  auto_detect: "off" | "verified";
   auto_gather: boolean;
   auto_restore: boolean;
   /** What the remote client can display: one screen, or all of them. */
   remote_screens: "single" | "all";
-  /** Applications that refused the last gather. */
-  last_refused_apps: string[];
   target: TargetDto | null;
   /** Live detector verdict. Not persisted. */
   remote_active: boolean;
@@ -284,7 +291,8 @@ export const api = {
    * Reveal a directory this app owns. Omit `path` for the config directory;
    * an explicit path is validated against that root on the backend.
    */
-  openPath: (path?: string) => invoke<boolean>("open_path", { path: path ?? null }),
+  openAppFolder: (folder: "config" | "diagnostics") =>
+    invoke<boolean>("open_app_folder", { folder }),
   /**
    * Tell the backend which language the interface is rendering in.
    *

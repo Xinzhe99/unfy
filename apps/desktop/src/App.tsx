@@ -864,7 +864,10 @@ export default function App() {
                         // `unplaced` belongs in the same condition as `rejected`: those
                         // windows were left where they were because they did not fit,
                         // and reporting a plain success told the user the gather had
-                        // covered everything when it had not.
+                        // covered everything when it had not. `unchanged` is the
+                        // opposite case and must not be read as a failure: those
+                        // windows were already on the target and correctly received
+                        // no write at all.
                         tone:
                           result.rejected > 0 || result.unplaced > 0
                             ? "warning"
@@ -874,6 +877,9 @@ export default function App() {
                           // fragments read "Gathered 5 windowsskipped 7." in English
                           // and "已整理 5 个窗口跳过 7 个。" in Chinese.
                           t("已整理 {count} 个窗口", { count: result.applied }) +
+                          (result.unchanged > 0
+                            ? t("，{count} 个已在目标屏", { count: result.unchanged })
+                            : "") +
                           (result.gone > 0
                             ? t("，{count} 个已关闭", { count: result.gone })
                             : "") +
@@ -882,6 +888,9 @@ export default function App() {
                             : "") +
                           (result.unplaced > 0
                             ? t("，{count} 个放不下留在原位", { count: result.unplaced })
+                            : "") +
+                          (result.not_attempted > 0
+                            ? t("，{count} 个未能读取原位置，未移动", { count: result.not_attempted })
                             : "") +
                           refused +
                           t("。"),
@@ -951,7 +960,7 @@ export default function App() {
                 }
                 onOpenConfigDir={() =>
                   void run(
-                    () => api.openPath(),  // the config directory
+                    () => api.openAppFolder("config"),  // the config directory
                     (opened) => ({
                       tone: opened ? "neutral" : "warning",
                       text: opened

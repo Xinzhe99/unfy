@@ -60,6 +60,8 @@ fn fullscreen_windows_are_skipped_by_the_snapshot_predicate() {
         mode,
         native_placement: None,
         topmost: false,
+        min_size: None,
+        focused: false,
     };
 
     assert!(snapshot(WindowMode::Normal).is_migratable());
