@@ -10,9 +10,9 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use unfy_domain::DisplayKey;
 use unfy_layout::LayoutMode;
-use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_VERSION: u32 = 2;
 
@@ -286,8 +286,8 @@ impl Settings {
                 object.remove(removed);
             }
         }
-        let settings: Settings = serde_json::from_value(value)
-            .map_err(|e| SettingsError::Parse(e.to_string()))?;
+        let settings: Settings =
+            serde_json::from_value(value).map_err(|e| SettingsError::Parse(e.to_string()))?;
         if settings.version > SETTINGS_VERSION {
             return Err(SettingsError::VersionTooNew {
                 found: settings.version,

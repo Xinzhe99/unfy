@@ -203,8 +203,14 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let gather = MenuItem::with_id(app, ID_GATHER, gather_label, enabled.gather, None::<&str>)?;
     let restore = MenuItem::with_id(app, ID_RESTORE, text.restore, enabled.restore, None::<&str>)?;
     let rescue = MenuItem::with_id(app, ID_RESCUE, text.rescue, true, None::<&str>)?;
-    let pause =
-        CheckMenuItem::with_id(app, ID_PAUSE, text.pause, enabled.pause, paused, None::<&str>)?;
+    let pause = CheckMenuItem::with_id(
+        app,
+        ID_PAUSE,
+        text.pause,
+        enabled.pause,
+        paused,
+        None::<&str>,
+    )?;
     let identify = MenuItem::with_id(app, ID_IDENTIFY, text.identify, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let settings = MenuItem::with_id(app, ID_SETTINGS, text.settings, true, None::<&str>)?;

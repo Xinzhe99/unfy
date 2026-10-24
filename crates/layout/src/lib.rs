@@ -636,7 +636,12 @@ mod tests {
 
     fn candidates(count: usize) -> Vec<Candidate> {
         (0..count)
-            .map(|i| candidate(i as u64, Rect::new(1920, i as i32 * 40, 2720, i as i32 * 40 + 600)))
+            .map(|i| {
+                candidate(
+                    i as u64,
+                    Rect::new(1920, i as i32 * 40, 2720, i as i32 * 40 + 600),
+                )
+            })
             .collect()
     }
 
@@ -692,7 +697,9 @@ mod tests {
         assert_eq!(placed.rect.width(), 1200);
         assert_eq!(placed.rect.height(), 900);
         assert!(!placed.unchanged);
-        assert!(placed.rect.reachable_in(&WORK, MIN_REACHABLE.width, MIN_REACHABLE.height));
+        assert!(placed
+            .rect
+            .reachable_in(&WORK, MIN_REACHABLE.width, MIN_REACHABLE.height));
     }
 
     #[test]
@@ -702,8 +709,10 @@ mod tests {
         let input = vec![candidate(1, Rect::new(2000, 100, 3200, 1000))];
         let a = plan(&input, WORK, 1.0, &LayoutConfig::default());
 
-        let mut wide = LayoutConfig::default();
-        wide.source_bounds = Some(Rect::new(-1920, 0, 5760, 1080));
+        let wide = LayoutConfig {
+            source_bounds: Some(Rect::new(-1920, 0, 5760, 1080)),
+            ..LayoutConfig::default()
+        };
         let b = plan(&input, WORK, 1.0, &wide);
         assert_eq!(a.placements, b.placements);
     }
@@ -771,7 +780,9 @@ mod tests {
         let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
         assert_eq!(plan.placements.len(), 2);
         assert_eq!(
-            plan.placements[0].rect.intersection_area(&plan.placements[1].rect),
+            plan.placements[0]
+                .rect
+                .intersection_area(&plan.placements[1].rect),
             600 * 400,
             "the two windows are expected to overlap, not to be tiled"
         );

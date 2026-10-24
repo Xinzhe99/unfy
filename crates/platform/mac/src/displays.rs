@@ -12,9 +12,9 @@
 
 #![cfg(target_os = "macos")]
 
+use core_graphics::display::{CGDisplay, CGDisplayBounds, CGDisplayIsMain, CGGetActiveDisplayList};
 use unfy_domain::{DisplayKey, DisplaySnapshot, IdentityQuality, Rect, Scale, WindowId};
 use unfy_platform::{DisplayProvider, PlatformError, Result};
-use core_graphics::display::{CGDisplay, CGDisplayBounds, CGDisplayIsMain, CGGetActiveDisplayList};
 
 /// Quartz-backed display provider.
 ///

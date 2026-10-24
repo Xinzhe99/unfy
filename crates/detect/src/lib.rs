@@ -93,7 +93,7 @@ impl Sensitivity {
 
 /// One poll's raw observations. Pure data: no OS calls here, so the decision
 /// table is testable on any machine.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Observation {
     /// The calling process runs inside a Terminal Services client session.
     pub rdp_active: bool,
@@ -110,20 +110,6 @@ pub struct Observation {
     /// transient permission or IO error look like the end of a session, which
     /// restored every window while the user was still working remotely.
     pub available: bool,
-}
-
-impl Default for Observation {
-    fn default() -> Self {
-        Self {
-            rdp_active: false,
-            virtual_displays: Vec::new(),
-            tools_running: Vec::new(),
-            tools_connected: Vec::new(),
-            // An observation nobody filled in cannot authorise anything, and must
-            // not be read as "the session ended" either.
-            available: false,
-        }
-    }
 }
 
 impl Observation {
@@ -543,7 +529,12 @@ mod tests {
     #[test]
     fn off_never_activates_even_with_every_signal() {
         let mut tracker = Tracker::new(Sensitivity::Off);
-        let transition = tracker.observe(&obs(true, &["Parsec VDD"], &["anydesk.exe"], &["anydesk.exe"]));
+        let transition = tracker.observe(&obs(
+            true,
+            &["Parsec VDD"],
+            &["anydesk.exe"],
+            &["anydesk.exe"],
+        ));
         assert_eq!(transition, Transition::None);
         assert!(!tracker.is_active());
     }
@@ -565,7 +556,12 @@ mod tests {
         let mut tracker = Tracker::new(Sensitivity::Verified);
         for _ in 0..ACTIVATION_STREAK + 2 {
             assert_eq!(
-                tracker.observe(&obs(false, &["Parsec VDD"], &["anydesk.exe"], &["anydesk.exe"])),
+                tracker.observe(&obs(
+                    false,
+                    &["Parsec VDD"],
+                    &["anydesk.exe"],
+                    &["anydesk.exe"]
+                )),
                 Transition::None
             );
         }

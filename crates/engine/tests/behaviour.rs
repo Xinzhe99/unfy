@@ -66,7 +66,7 @@ fn scenario() -> FakeBackend {
 fn preview_never_moves_windows() {
     let backend = scenario();
     let before = backend.enumerate().unwrap();
-    let mut engine = Engine::new(backend, config("preview"));
+    let engine = Engine::new(backend, config("preview"));
 
     let preview = engine.preview(&target_key()).expect("preview");
     assert_eq!(preview.eligible.len(), 3);
@@ -357,7 +357,7 @@ fn keep_current_layout_closes_the_journal_without_moving_windows() {
 #[test]
 fn unknown_target_display_is_an_error_not_a_guess() {
     let backend = scenario();
-    let mut engine = Engine::new(backend, config("badtarget"));
+    let engine = Engine::new(backend, config("badtarget"));
     let bogus = DisplayKey {
         native_id: "display-that-does-not-exist".into(),
         quality: IdentityQuality::Strong,
@@ -851,8 +851,14 @@ fn every_unfinished_journal_is_kept_and_the_newest_is_adopted() {
     let adopted = engine.recover_latest(&dir).expect("recover");
 
     assert!(adopted.is_some(), "an unfinished journal must be adopted");
-    assert!(old_a.exists(), "an older unfinished journal must not be deleted");
-    assert!(old_b.exists(), "an older unfinished journal must not be deleted");
+    assert!(
+        old_a.exists(),
+        "an older unfinished journal must not be deleted"
+    );
+    assert!(
+        old_b.exists(),
+        "an older unfinished journal must not be deleted"
+    );
     assert!(newest.exists(), "the adopted journal must be kept");
     assert_eq!(engine.state(), EngineState::Degraded);
 }
@@ -1026,7 +1032,7 @@ fn focused_window_is_placed_in_the_first_grid_cell() {
     let mut backend = scenario();
     backend.focus(2);
 
-    let mut engine = Engine::new(
+    let engine = Engine::new(
         backend,
         EngineConfig {
             layout: unfy_layout::LayoutConfig {
@@ -1080,7 +1086,7 @@ fn a_large_window_minimum_is_respected() {
     // Make one window insist on a size that a narrow slot cannot provide.
     backend.set_min_size(1, unfy_domain::Size::new(900, 700));
 
-    let mut engine = Engine::new(backend, config("min-size"));
+    let engine = Engine::new(backend, config("min-size"));
     let preview = engine.preview(&target_key()).expect("preview");
 
     let placement = preview
@@ -1113,8 +1119,7 @@ fn a_large_window_minimum_is_respected() {
 #[test]
 fn a_failed_journal_write_enters_the_error_state() {
     // Occupy the journal path with a file so creating the directory fails.
-    let blocker =
-        std::env::temp_dir().join(format!("unfy-journal-blocker-{}", std::process::id()));
+    let blocker = std::env::temp_dir().join(format!("unfy-journal-blocker-{}", std::process::id()));
     std::fs::write(&blocker, b"not a directory").expect("write blocker");
 
     let mut engine = Engine::new(

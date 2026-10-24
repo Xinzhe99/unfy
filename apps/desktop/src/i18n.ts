@@ -165,9 +165,8 @@ const EN: Record<string, string> = {
   "远程检测": "Remote detection",
   "已关闭": "Off",
   "监视中（已暂停，不会自动操作）": "Watching (paused, no automation)",
-  "监视中（{level}）": "Watching ({level})",
-  "监视中（{level}，未启用自动操作）":
-    "Watching ({level}, automation off)",
+  "监视中（未启用自动操作）": "Watching (automation off)",
+  "监视中": "Watching",
   "整理到目标屏": "Gather to target",
   "重新整理到目标屏": "Gather again",
   "预览": "Preview",
@@ -305,19 +304,11 @@ const EN: Record<string, string> = {
     "Since every screen is visible, automatic gathering will not move anything.",
   "默认。远端只有一块屏，整理才有意义。":
     "Default. Gathering only makes sense when the remote client has a single screen.",
-  "检测灵敏度": "Detection sensitivity",
-  "只识别 Windows 远程桌面会话。几乎不会误判。":
-    "Only Windows Remote Desktop sessions. Almost never wrong.",
-  "还识别虚拟显示器（Parsec 等）。推荐。":
-    "Also recognises virtual displays such as Parsec. Recommended.",
-  "还识别已安装的远控工具是否在运行或已连接。可能误判。":
-    "Also acts when a known remote tool is running or connected. Can misfire.",
   "关闭": "Off",
-  "保守": "Cautious",
-  "均衡": "Balanced",
-  "激进": "Eager",
-  "没有任何系统接口能查询「谁正在远程这台电脑」。检测依靠可验证的信号：远程桌面会话、虚拟显示器、已知远控工具的运行与连接状态。级别越高覆盖的软件越多，误判也越多。":
-    "No system API can answer \"who is remoting into this machine\". Detection relies on verifiable signals: Remote Desktop sessions, virtual displays, and whether a known remote tool is running or connected. Higher levels cover more tools and misfire more often.",
+  "只在可验证的远程桌面（RDP）会话开始和结束时自动整理、恢复。远控软件在后台运行、或存在虚拟显示器，都不算连接。":
+    "Gathers and restores only when a verified Remote Desktop (RDP) session starts and ends. A remote tool running in the background, or a virtual display appearing, does not count as a connection.",
+  "没有任何系统接口能查询「谁正在远程这台电脑」。这里只在有可验证的连接证据时才自动动手：远程桌面会话，或远程端实际投送出来的虚拟显示器。远控工具只是在运行，只作为信息显示，不会触发移动。":
+    "No system API can answer \"who is remoting into this machine\". This only acts on verifiable connection evidence: a Remote Desktop session, or a virtual display the remote client actually presents. A remote tool merely running is shown as information and never triggers a move.",
   "检测到远程时自动整理": "Gather when a session starts",
   "关闭时会先把窗口恢复原位，再停止自动整理":
     "Turning this off restores the windows first, then stops automatic gathering",
@@ -435,6 +426,11 @@ const EN: Record<string, string> = {
   "只用快捷键与托盘，检测保持关闭":
     "Shortcuts and tray only; detection stays off",
   "自动（推荐）": "Automatic (recommended)",
+  "Unfy 可以在可验证的远程会话开始时整理、结束时恢复。目前只有远程桌面（RDP）会话能提供这种可验证的生命周期；其他远控软件即使正在运行，也不会自动搬动窗口。":
+    "Unfy can gather when a verifiable remote session starts and restore when it ends. Only a Remote Desktop (RDP) session currently provides that verifiable lifecycle; other remote tools never move windows automatically, even while running.",
+  "远程桌面会话时自动": "Automatically on Remote Desktop sessions",
+  "仅在确认的远程桌面（RDP）会话开始和结束时自动整理、恢复":
+    "Gathers and restores only when a confirmed Remote Desktop (RDP) session starts and ends",
   "识别远程桌面会话与虚拟显示器，开始时整理、结束时恢复":
     "Recognises Remote Desktop sessions and virtual displays; gathers when one starts, restores when it ends",
   "随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。":

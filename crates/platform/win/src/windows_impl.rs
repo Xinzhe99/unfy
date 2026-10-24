@@ -23,9 +23,9 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
     GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, SetWindowPlacement, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE, WINDOWPLACEMENT, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_THICKFRAME,
+    ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE, WINDOWPLACEMENT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_THICKFRAME,
 };
 
 /// Foreground window handle for the enumeration currently in progress.

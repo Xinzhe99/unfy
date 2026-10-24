@@ -4,8 +4,8 @@
 //! covers `kind` and `payload` only, so it stays valid when the length prefix is
 //! intact but the payload is short — the case a torn append actually produces.
 
-use unfy_domain::{Rect, WindowId, WindowMode};
 use serde::{Deserialize, Serialize};
+use unfy_domain::{Rect, WindowId, WindowMode};
 use uuid::Uuid;
 
 use crate::{AppliedResult, JournalError, Preimage, Result, SCHEMA_VERSION};

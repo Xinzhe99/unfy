@@ -53,10 +53,7 @@ impl DisplayProvider for WinPlatform {
         self.displays.topology()
     }
 
-    fn scale_of(
-        &self,
-        key: &unfy_domain::DisplayKey,
-    ) -> unfy_platform::Result<unfy_domain::Scale> {
+    fn scale_of(&self, key: &unfy_domain::DisplayKey) -> unfy_platform::Result<unfy_domain::Scale> {
         self.displays.scale_of(key)
     }
 

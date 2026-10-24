@@ -32,8 +32,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use unfy_domain::{Rect, WindowId, WindowMode};
 use serde::{Deserialize, Serialize};
+use unfy_domain::{Rect, WindowId, WindowMode};
 use uuid::Uuid;
 
 /// One window captured before it was touched.
@@ -197,9 +197,7 @@ impl RecoveredTransaction {
 
     /// Whether the transaction still has work, considering resolutions.
     pub fn has_open_obligation(&self) -> bool {
-        self.preimages
-            .iter()
-            .any(|p| self.is_unresolved(&p.id))
+        self.preimages.iter().any(|p| self.is_unresolved(&p.id))
     }
 }
 
@@ -481,9 +479,8 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
                         // Duplicate preimages are only legal when identical: a
                         // second, different preimage would overwrite the position
                         // the user actually started from.
-                        if let Some(existing) = preimages
-                            .iter()
-                            .find(|p: &&Preimage| p.id == preimage.id)
+                        if let Some(existing) =
+                            preimages.iter().find(|p: &&Preimage| p.id == preimage.id)
                         {
                             if existing != &preimage {
                                 return Err(JournalError::Corrupt {

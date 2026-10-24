@@ -99,28 +99,91 @@ jobs:
   bundle:
     name: Bundle (${{ matrix.os }})
     needs: [check, frontend]
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    # Reachable from a `v*` tag push (see the `push.tags` trigger) or from an
+    # explicit manual dispatch. Anything else, including branch pushes and pull
+    # requests, skips it.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
             args: ""
+            # The installer this platform must produce. Uploading fails the job
+            # when none of these patterns match, so a bundle job that packaged
+            # nothing can no longer report success.
+            installers: |
+              target/**/release/bundle/nsis/*.exe
+              target/**/release/bundle/msi/*.msi
           - os: macos-14
             args: "--target universal-apple-darwin"
+            installers: |
+              target/**/release/bundle/dmg/*.dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
+
+      # A tag build is a release, and a release whose installer cannot be
+      # verified by the updater is not publishable: installed clients would
+      # either ignore the update or accept an unsigned one. Fail before spending
+      # half an hour compiling. A manual dispatch of an unconfigured branch is
+      # allowed to produce unsigned installers for smoke testing.
+      - name: Require a configured updater for a release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          node -e "
+          const fs = require('node:fs');
+          const configPath = 'apps/desktop/src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          const updater = (config.plugins && config.plugins.updater) || {};
+          const bundle = config.bundle || {};
+          const missing = [];
+          if (!updater.pubkey) {
+            missing.push(configPath + ': plugins.updater.pubkey is empty, so no signature could be verified by clients');
+          }
+          if (!Array.isArray(updater.endpoints) || updater.endpoints.length === 0) {
+            missing.push(configPath + ': plugins.updater.endpoints is empty, so no client could find this release');
+          }
+          if (!bundle.createUpdaterArtifacts) {
+            missing.push(configPath + ': bundle.createUpdaterArtifacts is not set, so no .sig or .app.tar.gz is generated');
+          }
+          if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
+            missing.push('repository secret TAURI_SIGNING_PRIVATE_KEY is not set, so no artifact can be signed');
+          }
+          if (missing.length > 0) {
+            console.error('Refusing to build release ' + (process.env.GITHUB_REF_NAME || '') + ': the updater is not configured.');
+            for (const item of missing) console.error('  missing: ' + item);
+            console.error('This release would claim auto-update support it cannot deliver, so it is not built.');
+            process.exit(1);
+          }
+          console.log('Updater configuration is present.');
+          "
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # `beforeBuildCommand` is `npm run build`, which runs `tsc --noEmit &&
+      # bun test && vite build`. Bun is installed here rather than splitting the
+      # build script, so the packaged release is produced by exactly the script
+      # the `frontend` job validates; a separate "bundle-only" script could drift
+      # away from the tested one. The extra test run costs seconds on a job that
+      # compiles a full Tauri bundle.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
       - name: Install
         working-directory: apps/desktop
@@ -139,15 +202,78 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx tauri build ${{ matrix.args }}
 
-      - uses: actions/upload-artifact@v4
+      # The uploads below fail on an empty match, but only for what they are
+      # asked to upload. This states the full set a release owes, so a partial
+      # bundle (installer produced, updater package missing) also fails instead
+      # of being published with a hole in it.
+      - name: Verify release artifacts
+        env:
+          MATRIX_OS: ${{ matrix.os }}
+          IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          node -e "
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const files = [];
+          (function walk(dir) {
+            let entries;
+            try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+            for (const entry of entries) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) walk(full);
+              else if (entry.isFile()) files.push(full.split(path.sep).join('/'));
+            }
+          })('target');
+          const count = (re) => files.filter((f) => re.test(f)).length;
+          const os = process.env.MATRIX_OS;
+          const isRelease = process.env.IS_RELEASE === 'true';
+          const fail = (message) => { console.error(message); process.exit(1); };
+
+          const installers = os === 'macos-14'
+            ? count(/\/release\/bundle\/dmg\/[^/]+\.dmg$/)
+            : count(/\/release\/bundle\/(nsis\/[^/]+\.exe|msi\/[^/]+\.msi)$/);
+          if (installers === 0) {
+            fail('No installer was produced for ' + os + ', so this bundle job has nothing to publish.');
+          }
+          console.log('Installers: ' + installers);
+
+          if (!isRelease) {
+            console.log('Not a release tag; updater artifacts are optional for this build.');
+            process.exit(0);
+          }
+
+          const signatures = count(/\/release\/bundle\/.*\.sig$/);
+          if (signatures === 0) {
+            fail('Release ' + (process.env.GITHUB_REF_NAME || '') + ' produced no updater signature (.sig). '
+              + 'Configure plugins.updater.pubkey and endpoints plus bundle.createUpdaterArtifacts, and set TAURI_SIGNING_PRIVATE_KEY.');
+          }
+          console.log('Updater signatures: ' + signatures);
+
+          if (os === 'macos-14' && count(/\/release\/bundle\/macos\/[^/]+\.tar\.gz$/) === 0) {
+            fail('No macOS updater bundle (.app.tar.gz) was produced, so the darwin update key would point at nothing.');
+          }
+          "
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
         with:
           name: unfy-${{ runner.os }}
+          path: ${{ matrix.installers }}
+          # A release with no installer is a failed release, not a warning.
+          if-no-files-found: error
+
+      # Updater artifacts exist only when the updater is configured. On a tag
+      # they are mandatory, so an empty match fails the job; on a manual dispatch
+      # of an unconfigured build there is nothing to upload and nothing claimed,
+      # so an empty match is expected.
+      - name: Upload updater signatures and bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: unfy-${{ runner.os }}-updater
           path: |
-            target/**/release/bundle/nsis/*.exe
-            target/**/release/bundle/msi/*.msi
-            target/**/release/bundle/dmg/*.dmg
+            target/**/release/bundle/**/*.sig
             target/**/release/bundle/macos/*.tar.gz
-          if-no-files-found: warn
+          if-no-files-found: ${{ startsWith(github.ref, 'refs/tags/v') && 'error' || 'ignore' }}
 
   ui-audit:
     name: UI audit (real window)
@@ -192,10 +318,30 @@ jobs:
   e2e-windows:
     name: End-to-end (real desktop)
     needs: [check]
-    runs-on: windows-latest
-    # Needs an interactive desktop with two displays, which hosted runners do
-    # not provide. Enable on a self-hosted runner with two monitors.
-    if: false
+    # Off by default. The suite drives real windows on a real desktop, so the
+    # hosted `windows-latest` runner cannot run it: it has one virtual display and
+    # no interactive session to move windows on. Enable it with the manual
+    # `run_e2e` dispatch input once a runner with these properties is registered
+    # under the `unfy-e2e` label:
+    #
+    #   * Windows 10/11 x64, registered as a self-hosted runner with labels
+    #     `self-hosted`, `windows`, `x64`, `unfy-e2e`;
+    #   * the runner service running in an *interactive* desktop session, not as a
+    #     Session 0 service and not headless — `MoveWindow`/`ShowWindow` need a
+    #     window station the desktop actually displays;
+    #   * at least two physical or virtual displays attached and arranged as
+    #     separate screens (one extended desktop, not a mirrored or single screen),
+    #     because the suite moves windows between displays and back;
+    #   * that session unlocked and not disconnected, since a locked or RDP
+    #     disconnected session stops compositing and window geometry stops
+    #     reflecting what a user sees;
+    #   * the Rust toolchain plus MSVC build tools installed locally, as usual for
+    #     a self-hosted runner.
+    #
+    # Without those, the job must stay disabled: a green run there would be a
+    # statement about a desktop no user has.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
+    runs-on: [self-hosted, windows, x64, unfy-e2e]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

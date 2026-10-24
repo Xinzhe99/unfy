@@ -78,7 +78,10 @@ fn pause_without_a_transaction_still_pauses_automation() {
     // gathering on the next automatic trigger.
     let mut engine = Engine::new(backend(), config("pause-idle"));
     engine.pause().expect("pause on idle");
-    assert!(engine.is_paused(), "pause must survive without a transaction");
+    assert!(
+        engine.is_paused(),
+        "pause must survive without a transaction"
+    );
     // And it must actually block a gather, which is the effect the user asked for.
     assert!(matches!(
         engine.migrate(&target()),

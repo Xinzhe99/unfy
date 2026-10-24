@@ -6,14 +6,14 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+use tauri::{Manager, State};
 use unfy_domain::{DisplaySnapshot, Rect, WindowId};
 use unfy_engine::{
     EngineConfig, EngineState, MigrationReport, PendingWork, Preview, RestoreReport,
 };
 use unfy_platform::{DisplayProvider, WindowBackend};
 use unfy_settings::{Settings, TargetDisplay};
-use serde::{Deserialize, Serialize};
-use tauri::{Manager, State};
 
 use crate::message::Message;
 use crate::{platform, AppState};
@@ -1108,7 +1108,18 @@ pub fn save_settings(
     // OS side effects happen after the document is committed. A registration
     // failure is reported, not turned into "settings not saved".
     if autostart_changed.is_some() {
-        crate::session::set_autostart(&handle, dto.autostart);
+        if let Err(e) = crate::session::set_autostart(&handle, dto.autostart) {
+            // The preference is saved but the OS did not accept it. Say so, and
+            // keep the saved value so the next launch can retry.
+            note_result(
+                &app,
+                Some(Message::one(
+                    "开机自启未能设置：{error}",
+                    "error",
+                    e.to_string(),
+                )),
+            );
+        }
     }
     if hotkeys_changed {
         crate::session::install(&handle);
@@ -1739,7 +1750,9 @@ pub fn reset_settings(
     }
     crate::monitor::apply_sensitivity(&handle);
     crate::session::install(&handle);
-    crate::session::set_autostart(&handle, false);
+    if let Err(e) = crate::session::set_autostart(&handle, false) {
+        tracing::warn!(error = %e, "reset could not disable autostart");
+    }
     sync_tray(&handle);
 
     settings_dto(&app, &handle)

@@ -15,8 +15,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use unfy_detect::{Evidence, Sensitivity, Tracker, Transition};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
+use unfy_detect::{Evidence, Sensitivity, Tracker, Transition};
 
 use crate::AppState;
 
@@ -177,23 +177,20 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
     // Publish what is visible, including evidence that does not authorise an
     // automatic action. Without this the overview could only say "nothing
     // detected" while a remote tool was plainly running.
-    match tracker_verdict(&state, &observation) {
-        Some(verdict) => {
-            let _ = app.emit(
-                "unfy://remote",
-                serde_json::json!({
-                    "active": matches!(verdict, unfy_detect::Verdict::Connected(_)),
-                    "candidate": matches!(verdict, unfy_detect::Verdict::Candidate(_)),
-                    "evidence": match &verdict {
-                        unfy_detect::Verdict::Connected(e) | unfy_detect::Verdict::Candidate(e) => {
-                            Some(crate::message::evidence_message(e))
-                        }
-                        _ => None,
-                    },
-                }),
-            );
-        }
-        None => {}
+    if let Some(verdict) = tracker_verdict(&state, &observation) {
+        let _ = app.emit(
+            "unfy://remote",
+            serde_json::json!({
+                "active": matches!(verdict, unfy_detect::Verdict::Connected(_)),
+                "candidate": matches!(verdict, unfy_detect::Verdict::Candidate(_)),
+                "evidence": match &verdict {
+                    unfy_detect::Verdict::Connected(e) | unfy_detect::Verdict::Candidate(e) => {
+                        Some(crate::message::evidence_message(e))
+                    }
+                    _ => None,
+                },
+            }),
+        );
     }
 
     match transition {
@@ -520,10 +517,7 @@ fn restore<R: Runtime>(app: &AppHandle<R>) -> Result<RestoreSummary, String> {
     // Close the progress cycle this function opened with "waiting", after the lock
     // is released so a slow tray refresh cannot hold the engine. Without it the
     // window keeps saying "正在恢复布局…" once the windows are already back.
-    let _ = app.emit(
-        "unfy://progress",
-        serde_json::json!({ "phase": "done" }),
-    );
+    let _ = app.emit("unfy://progress", serde_json::json!({ "phase": "done" }));
     crate::tray::refresh(app);
     Ok(summary)
 }
@@ -586,8 +580,8 @@ pub fn stop() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unfy_settings::{RemoteScreens, Settings};
     use std::time::{Duration, Instant};
+    use unfy_settings::{RemoteScreens, Settings};
 
     fn settings(auto_gather: bool, remote_screens: RemoteScreens) -> Settings {
         Settings {

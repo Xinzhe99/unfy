@@ -416,7 +416,13 @@ pub fn rescue_own_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let Some((x, y)) = rescue_target(rect, &monitors) else {
         return;
     };
-    tracing::warn!(from_x = rect.0, from_y = rect.1, x, y, "settings window was off-screen");
+    tracing::warn!(
+        from_x = rect.0,
+        from_y = rect.1,
+        x,
+        y,
+        "settings window was off-screen"
+    );
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
@@ -529,7 +535,10 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
     let config = app.config();
     let window_cfg = config.app.windows.first();
     let minimum = (
-        window_cfg.and_then(|w| w.min_width).map(|v| v as i32).unwrap_or(0),
+        window_cfg
+            .and_then(|w| w.min_width)
+            .map(|v| v as i32)
+            .unwrap_or(0),
         window_cfg
             .and_then(|w| w.min_height)
             .map(|v| v as i32)
@@ -567,9 +576,9 @@ fn is_reachable(rect: (i32, i32, i32, i32), monitors: &[MonitorRect]) -> bool {
     // Height is not part of the test: the question is whether a grabbable strip is on
     // screen, and 40 px of title bar is enough regardless of how tall the window is.
     let (x, y, w, _height) = rect;
-    monitors.iter().any(|(mx, my, mw, mh)| {
-        x + w.min(200) > *mx && x < mx + mw && y + 40 > *my && y < my + mh
-    })
+    monitors
+        .iter()
+        .any(|(mx, my, mw, mh)| x + w.min(200) > *mx && x < mx + mw && y + 40 > *my && y < my + mh)
 }
 
 /// Where to move a stranded window, or `None` when it is already reachable.
@@ -821,7 +830,11 @@ mod lock_order {
             v.dedup();
             v
         };
-        assert!(takers.len() > 4, "the scan found only {} locking functions", takers.len());
+        assert!(
+            takers.len() > 4,
+            "the scan found only {} locking functions",
+            takers.len()
+        );
 
         let mut offenders = Vec::new();
         for (name, text) in &all {
@@ -874,7 +887,9 @@ mod lock_order {
                     if matches!(before, Some('.') | Some('_') | Some(':') | Some('>')) {
                         continue;
                     }
-                    offenders.push(format!("{name}:{function} holds {held:?} then calls {taker}"));
+                    offenders.push(format!(
+                        "{name}:{function} holds {held:?} then calls {taker}"
+                    ));
                 }
             }
         }
@@ -986,7 +1001,10 @@ mod geometry {
         // The second monitor was unplugged while the window sat on it.
         let stranded = (-1500, 100, 912, 718);
         assert!(!is_reachable(stranded, &[(0, 0, 1920, 1080)]));
-        assert_eq!(rescue_target(stranded, &[(0, 0, 1920, 1080)]), Some((0, 100)));
+        assert_eq!(
+            rescue_target(stranded, &[(0, 0, 1920, 1080)]),
+            Some((0, 100))
+        );
     }
 
     #[test]

@@ -17,9 +17,7 @@
 
 use std::ffi::c_void;
 
-use unfy_domain::{
-    DisplayKey, IdentityQuality, Rect, Size, WindowId, WindowMode, WindowSnapshot,
-};
+use unfy_domain::{DisplayKey, IdentityQuality, Rect, Size, WindowId, WindowMode, WindowSnapshot};
 use unfy_platform::{
     Capabilities, ObservedWindow, PlatformError, Result, WindowBackend, WindowPlan,
 };
@@ -454,12 +452,11 @@ fn copy_size(element: CFTypeRef, name: &str) -> Option<CGSize> {
 /// others, which silently turned "minimized" into "normal" and let the engine move
 /// a window the user had put away.
 fn copy_bool(element: CFTypeRef, name: &str) -> Option<bool> {
-    use core_foundation::boolean::CFBoolean;
     use core_foundation::base::CFGetTypeID;
+    use core_foundation::boolean::CFBoolean;
 
     let value = copy_attribute(element, name)?;
-    let is_boolean =
-        unsafe { CFGetTypeID(value) == CFBoolean::type_id() };
+    let is_boolean = unsafe { CFGetTypeID(value) == CFBoolean::type_id() };
     if is_boolean {
         let boolean = unsafe { CFBoolean::wrap_under_get_rule(value as _) };
         let result = boolean.into();

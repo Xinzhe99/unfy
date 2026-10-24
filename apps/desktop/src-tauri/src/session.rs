@@ -172,9 +172,11 @@ impl<R: Runtime> ActionEmitter for AppHandle<R> {
 /// holds the settings lock must drop it first: `std::sync::Mutex` is not
 /// reentrant, so reading settings from here would deadlock the command thread.
 ///
-/// Failures are logged, never fatal: a locked-down machine may forbid the
-/// registry write, and the app must still run.
-pub fn set_autostart<R: Runtime>(app: &AppHandle<R>, desired: bool) {
+/// Failures are reported, never fatal: a locked-down machine may forbid the
+/// registry write, and the app must still run. The caller decides how to tell the
+/// user; the previous version only logged, so the switch showed "on" while the
+/// registration had never happened.
+pub fn set_autostart<R: Runtime>(app: &AppHandle<R>, desired: bool) -> Result<(), String> {
     let manager = app.autolaunch();
     // Log the resolved executable too. The plugin registers `current_exe`, and a
     // debug build run from `target\debug` registers that path, not the installed
@@ -183,11 +185,17 @@ pub fn set_autostart<R: Runtime>(app: &AppHandle<R>, desired: bool) {
     let exe = std::env::current_exe()
         .map(|p| crate::redact_home(&p))
         .unwrap_or_else(|_| "<unknown>".into());
-    let current = manager.is_enabled().unwrap_or(false);
+    let current = match manager.is_enabled() {
+        Ok(value) => value,
+        Err(e) => {
+            tracing::warn!(desired, error = %e, "could not read the autostart registration");
+            return Err(format!("could not read the autostart registration: {e}"));
+        }
+    };
     tracing::info!(desired, current, %exe, "reconciling autostart");
 
     if current == desired {
-        return;
+        return Ok(());
     }
 
     let result = if desired {
@@ -195,9 +203,24 @@ pub fn set_autostart<R: Runtime>(app: &AppHandle<R>, desired: bool) {
     } else {
         manager.disable()
     };
-    match &result {
-        Ok(()) => tracing::info!(desired, "autostart registration updated"),
-        Err(e) => tracing::warn!(desired, error = %e, "could not change autostart registration"),
+    match result {
+        Ok(()) => {
+            // Read back: a successful call is not proof the OS kept the entry.
+            match manager.is_enabled() {
+                Ok(actual) if actual == desired => {
+                    tracing::info!(desired, "autostart registration updated");
+                    Ok(())
+                }
+                Ok(actual) => Err(format!(
+                    "the autostart registration still reports {actual} after asking for {desired}"
+                )),
+                Err(e) => Err(format!("could not verify the autostart registration: {e}")),
+            }
+        }
+        Err(e) => {
+            tracing::warn!(desired, error = %e, "could not change autostart registration");
+            Err(format!("could not change the autostart registration: {e}"))
+        }
     }
 }
 
@@ -213,7 +236,9 @@ pub fn apply_saved_autostart<R: Runtime>(app: &AppHandle<R>) {
             Err(_) => return,
         }
     };
-    set_autostart(app, desired);
+    if let Err(e) = set_autostart(app, desired) {
+        tracing::warn!(desired, error = %e, "saved autostart preference could not be applied");
+    }
 }
 
 /// Watch for display topology changes and rescue unreachable windows.

@@ -476,7 +476,10 @@ impl<B: Backend> Engine<B> {
             }
             match unfy_journal::recover(&path) {
                 Ok(Recovered::Clean) => {
-                    if std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
+                    if std::fs::metadata(&path)
+                        .map(|m| m.len() > 0)
+                        .unwrap_or(false)
+                    {
                         if let Err(e) = std::fs::remove_file(&path) {
                             tracing::warn!(
                                 path = %path.display(),
@@ -874,7 +877,8 @@ impl<B: Backend> Engine<B> {
             if !wrote_all || !durable {
                 self.state = EngineState::Error;
                 return Err(EngineError::JournalWrite(
-                    "could not persist the move intent; no further windows were touched".to_string(),
+                    "could not persist the move intent; no further windows were touched"
+                        .to_string(),
                 ));
             }
 
@@ -1192,13 +1196,10 @@ impl<B: Backend> Engine<B> {
         };
         let transaction_id = transaction.id;
 
-        let displays = self
-            .backend
-            .topology()
-            .map_err(|e| {
-                self.state = EngineState::Degraded;
-                EngineError::Platform(e.to_string())
-            })?;
+        let displays = self.backend.topology().map_err(|e| {
+            self.state = EngineState::Degraded;
+            EngineError::Platform(e.to_string())
+        })?;
 
         let preimages: Vec<Preimage> = self
             .preimages
@@ -1230,7 +1231,9 @@ impl<B: Backend> Engine<B> {
                     return Err(EngineError::JournalWrite(e.to_string()));
                 }
                 if let Some(observed) = observed {
-                    transaction.last_applied.insert(preimage.id.clone(), observed);
+                    transaction
+                        .last_applied
+                        .insert(preimage.id.clone(), observed);
                 }
             }
             outcomes.insert(preimage.id.clone(), outcome);
