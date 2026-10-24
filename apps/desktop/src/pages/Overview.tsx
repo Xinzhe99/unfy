@@ -48,6 +48,7 @@ export function OverviewPage({
   onKeepLayout,
   onDismissError,
   pendingApps,
+  refusedApps,
 }: {
   status: StatusDto | null;
   settings: SettingsDto | null;
@@ -62,6 +63,13 @@ export function OverviewPage({
   onRestore: () => void;
   /** Applications whose windows the last restore could not put back. */
   pendingApps: string[];
+  /**
+   * Applications that refused the last gather, from its own report.
+   *
+   * Not read from settings: a persisted copy went stale as soon as a rule changed,
+   * and the only list worth showing is the one from the run the user just watched.
+   */
+  refusedApps: string[];
   onPause: (paused: boolean) => void;
   onRescue: () => void;
   onIdentify: () => void;
@@ -124,7 +132,7 @@ export function OverviewPage({
   // Showing an application whose rule already exists would offer an action that
   // does nothing.
   const targetIsGone = targetState(target, displays).gone;
-  const lastRefused = (settings?.last_refused_apps ?? []).filter(
+  const lastRefused = refusedApps.filter(
     (app) => !settings?.excluded_apps.some((rule) => rule.toLowerCase() === app.toLowerCase()),
   );
 
@@ -195,7 +203,7 @@ export function OverviewPage({
         {targetIsGone && target ? (
           <div className="mt-2.5 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
             <p className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
-              {t("保存的目标显示器（{display}）已断开，整理时会改用主显示器。", {
+              {t("保存的目标显示器（{display}）已断开。请重新选择，Unfy 不会改用到主显示器。", {
                 display: target.number
                   ? t("显示器 {number}", { number: target.number })
                   : t("已保存的显示器"),

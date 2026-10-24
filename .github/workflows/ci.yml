@@ -3,8 +3,16 @@ name: CI
 on:
   push:
     branches: [main, master]
+    # Tags are the release path. `bundle` only runs for a `v*` tag or a manual
+    # dispatch, so this pattern is what makes that job reachable at all.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: "Run the real-desktop end-to-end job (needs a self-hosted Windows runner with two displays)"
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always

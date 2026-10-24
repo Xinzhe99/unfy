@@ -90,6 +90,11 @@ export default function App() {
   // already computes this; without it the overview could only say "a window did not
   // come back", leaving the user to guess which application to close.
   const [pendingApps, setPendingApps] = useState<string[]>([]);
+  // Applications that refused the last gather. The settings document no longer
+  // remembers this (`last_refused_apps` was a persisted copy of a one-off report and
+  // went stale the moment a rule changed), so the gather result is the only source:
+  // it is what the user just saw happen.
+  const [refusedApps, setRefusedApps] = useState<string[]>([]);
   const [hotkeys, setHotkeys] = useState<HotkeyStatusDto | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, DisplayThumbnailDto>>({});
@@ -601,8 +606,16 @@ export default function App() {
       (report) => {
         setPendingApps(report.pending_apps);
         return {
+        // `awaiting_original` counts as unresolved: those windows are visible but
+        // their original screen is gone, so they still owe their original position.
+        // Reporting a clean success would tell the user everything came back when
+        // part of it is still owed.
         tone:
-          report.pending > 0 || report.rejected > 0 ? "warning" : "success",
+          report.pending > 0 ||
+          report.rejected > 0 ||
+          report.awaiting_original > 0
+            ? "warning"
+            : "success",
         text:
           [
             t("已恢复 {count} 个窗口", { count: report.restored }),
@@ -617,6 +630,12 @@ export default function App() {
             // refused by the rest reported a clean success.
             report.rejected > 0
               ? t("{count} 个没有接受恢复位置", { count: report.rejected })
+              : null,
+            // Distinct from `restored`: visible, but still owed the original place.
+            report.awaiting_original > 0
+              ? t("{count} 个原屏仍未恢复，暂放在可见区域", {
+                  count: report.awaiting_original,
+                })
               : null,
             report.pending > 0 ? t("仍有 {count} 个待处理", { count: report.pending }) : null,
           ]
@@ -828,6 +847,7 @@ export default function App() {
                 preview={preview}
                 displays={displays}
                 pendingApps={pendingApps}
+                refusedApps={refusedApps}
                 activity={activity}
                 progress={progress}
                 busy={busy}
@@ -849,6 +869,7 @@ export default function App() {
                     async () => {
                       const result = await api.migrate();
                       setPreview(null);
+                      setRefusedApps(result.refused_apps);
                       return result;
                     },
                     (result) => {

@@ -104,7 +104,7 @@ export function Onboarding({
       body: (
         <div className="space-y-3">
           <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-              {t("Unfy 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。")}
+              {t("Unfy 可以在可验证的远程会话开始时整理、结束时恢复。目前只有远程桌面（RDP）会话能提供这种可验证的生命周期；其他远控软件即使正在运行，也不会自动搬动窗口。")}
             </p>
           <div className="rounded-[var(--radius-control)] border border-[var(--color-border)]">
             <DetectChoice
@@ -115,11 +115,11 @@ export function Onboarding({
               onSelect={() => onSetDetect("off", false)}
             />
             <DetectChoice
-              title={t("自动（推荐）")}
-              description={t("识别远程桌面会话与虚拟显示器，开始时整理、结束时恢复")}
-              selected={settings.auto_detect !== "off" && settings.auto_gather}
+              title={t("远程桌面会话时自动")}
+              description={t("仅在确认的远程桌面（RDP）会话开始和结束时自动整理、恢复")}
+              selected={settings.auto_detect === "verified" && settings.auto_gather}
               disabled={busy}
-              onSelect={() => onSetDetect("balanced", true)}
+              onSelect={() => onSetDetect("verified", true)}
             />
           </div>
           <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">{t("随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。")}</p>

@@ -86,11 +86,10 @@ const settings: SettingsDto = {
   excluded_apps: [],
   onboarding_done: true,
   onboarding_step: 3,
-  auto_detect: "balanced",
+  auto_detect: "verified",
   auto_gather: false,
   auto_restore: false,
   remote_screens: "single",
-  last_refused_apps: [],
   target: { native_id: "DISPLAY1", label: "DISPLAY1", present: true, number: 1 },
   remote_active: false,
   remote_evidence: null,
@@ -228,6 +227,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     expect(html.length).toBeGreaterThan(200);
@@ -272,6 +272,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     expect(html).toContain("brand_new_kind");
@@ -308,6 +309,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     // A degraded state must offer restore, not a gather that can only fail.
@@ -341,6 +343,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     expect(html).toContain("只检测到一块显示器");
@@ -371,6 +374,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     // "working" alone is indistinguishable from "stuck" when one application
@@ -384,7 +388,6 @@ describe("pages render", () => {
         status={status}
         settings={{
           ...settings,
-          last_refused_apps: ["msedge.exe", "notepad.exe"],
           excluded_apps: ["notepad.exe"],
         }}
         preview={null}
@@ -407,6 +410,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={["msedge.exe", "notepad.exe"]}
       />,
     );
     // The refusing app is offered; the already-excluded one is not, because a
@@ -449,6 +453,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     // "ready" while five windows are displaced is the failure this row prevents.
@@ -487,6 +492,7 @@ describe("pages render", () => {
           onKeepLayout={noop}
           onDismissError={noop}
           pendingApps={[]}
+          refusedApps={[]}
         />,
       );
       expect([state, html.includes("恢复本次布局") || html.includes("尝试恢复")]).toEqual([
@@ -524,6 +530,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     // Without a shortcut and without detection, the feature is only reachable from
@@ -559,6 +566,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     expect(html).toContain("自动更新");
@@ -590,6 +598,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     // The raw code is an implementation detail; the sentence is the product.
@@ -621,6 +630,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     expect(journalFailure).toContain("无法写入恢复记录");
@@ -658,6 +668,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     const idleBlock = html.slice(html.indexOf("就绪") - 400, html.indexOf("就绪"));
@@ -706,6 +717,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     // The target is `displays[0]`: numbered 1 and primary.
@@ -741,6 +753,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     expect(html).not.toContain("标记为远程会话");
@@ -778,6 +791,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={["clash-verge.exe"]}
+        refusedApps={[]}
       />,
     );
     expect(html).toContain("clash-verge.exe");
@@ -813,6 +827,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     // The engine refuses new gathers in this state. Offering the button anyway
@@ -847,6 +862,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     // Without this the exit barrier refuses to quit, forever, and the old copy
@@ -866,7 +882,6 @@ describe("pages render", () => {
         status={status}
         settings={{
           ...settings,
-          last_refused_apps: ["a.exe", "b.exe", "c.exe"],
           excluded_apps: [],
         }}
         preview={null}
@@ -889,6 +904,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={["a.exe", "b.exe", "c.exe"]}
       />,
     );
     expect(html).not.toContain("全部排除");
@@ -1007,6 +1023,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     expect(html).toContain("已暂停");
@@ -1041,6 +1058,7 @@ describe("pages render", () => {
         onKeepLayout={noop}
         onDismissError={noop}
         pendingApps={[]}
+        refusedApps={[]}
       />,
     );
     expect(html).toContain("正在载入…");
@@ -1076,6 +1094,7 @@ describe("pages render", () => {
           onKeepLayout={noop}
           onDismissError={noop}
           pendingApps={[]}
+          refusedApps={[]}
         />,
       );
 
@@ -1464,6 +1483,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={[]}
           />,
         ),
     ],
@@ -1599,6 +1619,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={[]}
           />,
         ),
     ],
@@ -1629,6 +1650,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={[]}
           />,
         ),
     ],
@@ -1659,6 +1681,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={[]}
           />,
         ),
     ],
@@ -1689,6 +1712,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={[]}
           />,
         ),
     ],
@@ -1719,6 +1743,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={[]}
           />,
         ),
     ],
@@ -1727,8 +1752,8 @@ describe("English mode", () => {
       () =>
         renderToStaticMarkup(
           <OverviewPage
-            status={{ ...status, last_refused_apps: ["msedge.exe", "notepad.exe"], excluded_apps: ["notepad.exe"] }}
-            settings={settings}
+            status={status}
+            settings={{ ...settings, excluded_apps: ["notepad.exe"] }}
             preview={null}
             displays={displays}
             activity={[]}
@@ -1749,6 +1774,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={["msedge.exe", "notepad.exe"]}
           />,
         ),
     ],
@@ -1783,6 +1809,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={[]}
           />,
         ),
     ],
@@ -1813,6 +1840,7 @@ describe("English mode", () => {
             onKeepLayout={noop}
             onDismissError={noop}
             pendingApps={[]}
+            refusedApps={[]}
           />,
         ),
     ],
@@ -1981,6 +2009,8 @@ describe("English mode", () => {
       for (const sentinel of [
         "already_active",
         "paused",
+        "no_target",
+        "target_missing",
         "no_displays",
         "no_displays_found",
         "restore_cancelled",

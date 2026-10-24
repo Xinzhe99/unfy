@@ -68,7 +68,7 @@ export function DisplaysPage({
         <p className="mt-2.5 text-[11px] leading-relaxed text-[var(--color-muted)]">{t("卡片上的数字与「在屏幕上显示编号」时出现的一致，用远程画面里的数字对照即可。")}</p>
         {targetGone ? (
           <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-warning)]">
-            {t("保存的目标显示器已断开，整理时会改用主显示器。在下面重新选择一块屏即可恢复。")}
+            {t("保存的目标显示器已断开。在下面重新选择一块屏；确认之前 Unfy 不会搬动窗口。")}
           </p>
         ) : null}
         {targetWeak ? (

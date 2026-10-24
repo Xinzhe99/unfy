@@ -130,17 +130,17 @@ export function GeneralPage({
         <div className="border-t border-[var(--color-border)]" />
 
         <SettingRow
-          label={t("检测灵敏度")}
+          label={t("远程会话检测")}
           hint={detectHint(settings.auto_detect)}
         >
           <Segmented
-            label={t("检测灵敏度")}
+            label={t("远程会话检测")}
             value={settings.auto_detect}
             disabled={busy}
             onChange={(auto_detect) => onSave({ auto_detect })}
             options={[
               { value: "off", label: t("关闭") },
-              { value: "verified", label: t("可靠连接") },
+              { value: "verified", label: t("远程桌面会话") },
             ]}
           />
         </SettingRow>
@@ -475,7 +475,7 @@ export function GeneralPage({
 function detectHint(level: SettingsDto["auto_detect"]): string {
   switch (level) {
     case "verified":
-      return t("只识别可验证的连接：远程桌面会话，以及远程端实际投送出来的虚拟显示器。进程只是在运行不算。");
+      return t("只在可验证的远程桌面（RDP）会话开始和结束时自动整理、恢复。远控软件在后台运行、或存在虚拟显示器，都不算连接。");
     default:
       return t("关闭自动检测，只用快捷键、托盘和界面按钮。");
   }

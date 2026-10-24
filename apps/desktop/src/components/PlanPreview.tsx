@@ -205,7 +205,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
 
       {preview.target_present ? null : (
         <p className="rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-          {t("你选择的显示器当前不可用，这次会整理到主显示器。")}
+          {t("这份预览的目标显示器已经不可用，请重新选择后再整理。")}
         </p>
       )}
 

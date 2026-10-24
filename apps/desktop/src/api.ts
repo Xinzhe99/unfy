@@ -375,6 +375,10 @@ export function humanError(raw: string): string {
       return t("还有未完成的整理，请先恢复");
     case "paused":
       return t("自动整理已暂停");
+    case "no_target":
+      return t("还没有选择目标显示器。请先在「显示器」页选择远程画面中能看到的那块屏。");
+    case "target_missing":
+      return t("保存的目标显示器当前不在桌面上。请重新选择，或先接回那块屏。");
     case "no_displays":
       return t("没有可用的显示器");
     case "restore_cancelled":

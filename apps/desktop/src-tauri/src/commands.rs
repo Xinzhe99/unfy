@@ -348,14 +348,11 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
     let engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
-    let target = engine
-        .resolve_target(
-            settings
-                .target_display
-                .as_ref()
-                .map(|t| t.native_id.as_str()),
-        )
-        .ok_or_else(|| "no_displays".to_string())?;
+    // No target, or the saved target is gone: refuse rather than silently
+    // gathering onto the primary display. The remote client may be showing a
+    // different screen, so "helpfully" choosing one moves every window somewhere
+    // the user cannot see.
+    let target = resolve_confirmed_target(&engine, &settings)?;
 
     let preview: Preview = engine.preview(&target).map_err(|e| e.to_string())?;
 
@@ -382,23 +379,15 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
         .map(|w| (w.id.process_id, w.app_name))
         .collect();
 
-    // `resolve_target` falls back to the primary display when the configured one
-    // is missing, which is the right behaviour but must be visible: gathering to
-    // the wrong screen and then having to restore is worse than being told first.
-    let configured_present = settings
-        .target_display
-        .as_ref()
-        .map(|t| {
-            engine
-                .backend()
-                .topology()
-                .map(|d| d.iter().any(|x| t.matches(&x.key)))
-                .unwrap_or(false)
-        })
-        .unwrap_or(true);
+    // The preview was computed for a target that the command just resolved, so it
+    // is present by construction. `false` is reserved for a future preview that can
+    // describe a plan for a display that is no longer attached; claiming `false`
+    // here made the window warn "this will use the primary display" even though
+    // nothing falls back any more.
+    let target_present = true;
 
     Ok(PreviewDto {
-        target_present: configured_present,
+        target_present,
         placements: preview
             .plan
             .placements
@@ -527,14 +516,11 @@ fn migrate_blocking(
         }
     }
 
-    let target = engine
-        .resolve_target(
-            settings
-                .target_display
-                .as_ref()
-                .map(|t| t.native_id.as_str()),
-        )
-        .ok_or_else(|| "no_displays".to_string())?;
+    // No target, or the saved target is gone: refuse rather than silently
+    // gathering onto the primary display. The remote client may be showing a
+    // different screen, so "helpfully" choosing one moves every window somewhere
+    // the user cannot see.
+    let target = resolve_confirmed_target(&engine, &settings)?;
 
     // A gather while windows are still captured is refused by the engine; give
     // the user the action that actually helps instead of a raw error string.
@@ -939,6 +925,19 @@ impl From<&Settings> for SettingsDto {
             }),
         }
     }
+}
+
+/// Resolve the display the user confirmed, or explain what is missing.
+fn resolve_confirmed_target(
+    engine: &unfy_engine::Engine<crate::platform::Backend>,
+    settings: &Settings,
+) -> Result<unfy_domain::DisplayKey, String> {
+    let Some(saved) = settings.target_display.as_ref() else {
+        return Err("no_target".to_string());
+    };
+    engine
+        .resolve_target(Some(saved.native_id.as_str()))
+        .ok_or_else(|| "target_missing".to_string())
 }
 
 /// Convert the persisted settings into the engine configuration.

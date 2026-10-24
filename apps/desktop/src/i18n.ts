@@ -190,8 +190,8 @@ const EN: Record<string, string> = {
     "Something could not be handled automatically. Restore and rescue still work; if it keeps failing, export a diagnostics bundle.",
   "现在只能从本窗口或托盘触发整理。设置一个快捷键、或打开远程检测，之后就不必先切回这个窗口。":
     "Gathering is only reachable from this window or the tray. Set a shortcut, or turn on remote detection, to avoid switching back here first.",
-  "保存的目标显示器（{display}）已断开，整理时会改用主显示器。":
-    "The saved target display ({display}) is disconnected; gathering will use the primary display.",
+  "保存的目标显示器（{display}）已断开。请重新选择，Unfy 不会改用到主显示器。":
+    "The saved target display ({display}) is disconnected. Choose again; Unfy will not switch to the primary display on its own.",
   "重新选择目标显示器": "Choose the target again",
   "布局预览": "Layout preview",
   "预览不会移动任何窗口。窗口有变化时会自动更新。":
@@ -202,8 +202,8 @@ const EN: Record<string, string> = {
   "空间不足，窗口将叠放": "Not enough room; windows will overlap",
   "{count} 个窗口放不下，保持原位": "{count} windows do not fit and stay put",
   "已跳过 {count} 个窗口": "Skipped {count} windows",
-  "你选择的显示器当前不可用，这次会整理到主显示器。":
-    "The display you chose is unavailable; this gather will use the primary display.",
+  "这份预览的目标显示器已经不可用，请重新选择后再整理。":
+    "This preview's target display is no longer available. Choose again before gathering.",
   "最近活动": "Recent activity",
   "最近 {count} 次": "Last {count}",
   "还没有执行过操作。整理或恢复之后，这里会记录每次的结果。":
@@ -241,8 +241,8 @@ const EN: Record<string, string> = {
   "使用中": "In use",
   "卡片上的数字与「在屏幕上显示编号」时出现的一致，用远程画面里的数字对照即可。":
     "The numbers on these cards match the ones shown on the screens, so you can compare them against the remote view.",
-  "保存的目标显示器已断开，整理时会改用主显示器。在下面重新选择一块屏即可恢复。":
-    "The saved target display is disconnected; gathering will fall back to the primary. Pick a screen below to fix it.",
+  "保存的目标显示器已断开。在下面重新选择一块屏；确认之前 Unfy 不会搬动窗口。":
+    "The saved target display is disconnected. Pick a screen below; Unfy will not move windows until a target is confirmed.",
   "这块显示器的身份只能靠分辨率识别，恢复时会放回可见区域，而不是精确的原位置。":
     "This display is identified only by resolution, so a restore will place windows somewhere visible rather than exactly where they were.",
   "排列方式": "Arrangement",
