@@ -6,13 +6,13 @@
 
 ## 状态
 
-**v1 功能完整，Windows 已实测，macOS 已实现但未在真机验证。**
+**当前处于可用性修订阶段。** Windows 已有原生后端和历史实测，但当前仍有默认整理、窗口兼容、恢复记录与自动化状态方面的阻断问题；macOS 已有代码但未通过原生验收，Linux 窗口后端未实现。
 
-产品决策见 [docs/plan.md](docs/plan.md)，实现计划见 [docs/impl-plan.md](docs/impl-plan.md)，发布与签名见 [docs/release.md](docs/release.md)。
+当前修订规格与实施顺序见 [可用性审查](docs/spec/usability-review/README.md)，具体证据见 [问题索引](docs/spec/usability-review/audit.md)。本轮完成审查和规格，尚未修复应用代码。早期产品决策见 [docs/plan.md](docs/plan.md)，原始实现计划见 [docs/impl-plan.md](docs/impl-plan.md)，发布与签名见 [docs/release.md](docs/release.md)。
 
-## 已验证的行为
+## 历史验证记录
 
-以下都是在真实 Windows 桌面上跑出来的结果，不是文档推断：
+以下记录来自此前 Windows 验证，仅证明记录当时的场景。本轮未重新运行这些测试；它们不能覆盖当前审查发现的默认布局、真实应用兼容和恢复缺陷。
 
 | 项 | 结果 |
 |---|---|
@@ -40,14 +40,13 @@
 | 自动更新检查 | 本地清单 + 一次性 minisign 密钥：清单被读取、签名被校验、失败原因显示在界面 |
 | 排除的应用 | 从正在运行的应用中勾选，实测 `msedge.exe` 在整理后位置未变 |
 
-Rust 测试 **134** 个，前端测试 **46** 个（`bun test`，含渲染、色板、对比度、可访问性、显示器排布），
-`cargo clippy --workspace --all-targets -- -D warnings` 干净。
+此前记录为 Rust 测试 **134** 个、前端测试 **46** 个（`bun test`，含渲染、色板、对比度、可访问性、显示器排布），当时 `cargo clippy --workspace --all-targets -- -D warnings` 通过。当前修订需按新的行为验收重新验证，不能以历史测试数量判定完成。
 
 完整记录（含未验证项与复现命令）见 [docs/verification.md](docs/verification.md)。
 
 ## 未验证的部分
 
-- **macOS**：AX 后端、TCC 授权流程、`CGDisplayCreateUUIDFromDisplayID` 全部只做了类型检查（交叉编译到 `aarch64-apple-darwin`）与纯逻辑单测，**没有在真机上运行过**。首次在 Mac 上运行需要真机验收。
+- **macOS**：AX 后端、TCC 授权流程和显示器身份已有代码；此前只有部分库的交叉类型检查与纯逻辑单测，**没有真机运行证据**。本轮还发现条件编译、AX 对象生命周期及坐标/工作区问题，详见 [平台修订规格](docs/spec/usability-review/05-platform-settings-release.md)。
 - **签名、公证、自动更新的实际安装**：本机无证书、更新端点为未配置的空数组。签名流程写在 [docs/release.md](docs/release.md)，但未执行。
 - **其他应用的回弹率**：实测桌面窗口迁移时约有 1/3 拒绝移动（Chrome/Electron 系）。拒绝会如实报告并显示进程号，但未做大规模统计。
 - **托盘菜单点击**：托盘图标无法被 UI 自动化识别，菜单项走的是与热键相同的引擎路径（已测），但点击本身只做了代码审查。
@@ -70,7 +69,7 @@ apps/desktop/           # Tauri 2 + React 19 + Tailwind 4
 
 ```bash
 cargo test --workspace
-cargo run -p unfy-platform-win --bin e2e      # 真实桌面端到端，会创建并移动自己的窗口
+cargo run -p unfy-platform-win --bin e2e      # 当前也会移动同桌面其他应用；先按可用性审查 06 完成测试隔离
 cargo run -p unfy-platform-win --bin probe    # 只读：打印显示器与候选窗口
 
 cd apps/desktop
@@ -106,11 +105,11 @@ cd apps/desktop && npm run tauri build
 
 ## 明确不做
 
-虚拟显示器（需驱动签名，且与核心价值无关）、Linux/Wayland、特权 helper、付费授权。
+当前阶段不做虚拟显示器、特权 helper 或付费授权；Linux X11 按已确认决策后移，Wayland 不承诺通用跨应用窗口移动。
 
 ## 已知限制
 
 - macOS 无法移动原生全屏窗口（独立 Space），也无法操作其他 Space 上的窗口。
 - Windows 无法操作以管理员权限运行的窗口。
 - 无法得知远程端在看哪块屏，目标屏需要用户指定。
-- 自动检测只在有可验证证据时触发：RDP 会话（可靠）、虚拟显示器（Parsec 等），以及可选的已知远控工具运行/连接状态。TeamViewer/AnyDesk 这类工具不置位任何系统标志，因此进程级信号需要连续两次确认，且自动搬窗口默认关闭。
+- 当前检测包含 RDP、虚拟显示器及远控进程/连接信号，但这些信息不足以统一证明入站控制生命周期；重复采样也不能把弱信号变可靠。自动动作的修订准入与各工具支持条件见 [检测规格](docs/spec/usability-review/03-detection-and-target.md)。

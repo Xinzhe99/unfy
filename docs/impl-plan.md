@@ -3,6 +3,8 @@
 范围依据：[plan.md](plan.md) 的 D1–D4 决策 —— Windows + macOS、纯手动触发、冲突感知恢复、无商业化。
 本文只写**怎么建**，不重复 PRD 的验收用例（见 [spec/product-spec.md](spec/product-spec.md) §5.4）与数据模型（见 [spec/technical-design.md](spec/technical-design.md) §3）。
 
+本文保留最初建工程的计划。现有代码的修复顺序见 [可用性审查交接](spec/usability-review/06-implementation-and-validation.md)，不要照旧结构重新搭建或覆盖当前实现。
+
 ---
 
 ## 1. 工作区结构
