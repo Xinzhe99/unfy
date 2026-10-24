@@ -14,7 +14,7 @@ use unfy_domain::DisplayKey;
 use unfy_layout::LayoutMode;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 1;
+pub const SETTINGS_VERSION: u32 = 2;
 
 /// The user's saved target display.
 ///
@@ -121,12 +121,6 @@ pub struct Settings {
     /// Separate from `auto_gather`: some users want the cleanup but prefer to
     /// start the layout themselves, and some want the opposite.
     pub auto_restore: bool,
-    /// Applications that refused the most recent gather.
-    ///
-    /// Persisted so the overview can offer "exclude this app" after a restart.
-    /// Purely informational: nothing in the engine reads it, and it is replaced
-    /// on every gather. Executable base names only.
-    pub last_refused_apps: Vec<String>,
     /// Last window geometry, as (x, y, width, height) in logical pixels.
     ///
     /// Stored here rather than in a separate file so there is one place that can
@@ -146,12 +140,6 @@ pub struct Settings {
     /// filled the screen but was not maximised - the title bar offered "maximise" and
     /// dragging it behaved as if it had never been maximised.
     pub window_maximized: bool,
-    /// Explicit consent for anonymous usage counters. Default off.
-    ///
-    /// No uploader exists in this build: the flag records the user's choice so a
-    /// future implementation cannot start collecting without consent, and so the
-    /// UI can show the true state.
-    pub telemetry: bool,
 }
 
 /// What the remote client can display.
@@ -164,24 +152,27 @@ pub enum RemoteScreens {
     All,
 }
 
+/// The persisted name of the layout mode.
+///
+/// `MoveInto` is serialized as `default` because that is what the interface has
+/// always called it. The removed `primary_side` and `preserve_order` spellings
+/// are still *accepted* by the deserializer so an existing settings file loads,
+/// but they are migrated to `default` by [`Settings::migrate`]: the mode they
+/// described no longer exists, and silently keeping the name would let the UI
+/// offer a choice the engine cannot honour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutModeName {
+    #[serde(rename = "default", alias = "preserve_order", alias = "primary_side")]
+    MoveInto,
     Grid,
-    PrimarySide,
-    /// Written as `default` (the interface's name for it); reads the old
-    /// `preserve_order` too, whose only behaviour was a grid slot order and
-    /// which never produced the arrangement its name promised.
-    #[serde(rename = "default", alias = "preserve_order")]
-    KeepLayout,
 }
 
 impl From<LayoutModeName> for LayoutMode {
     fn from(name: LayoutModeName) -> Self {
         match name {
+            LayoutModeName::MoveInto => LayoutMode::MoveInto,
             LayoutModeName::Grid => LayoutMode::Grid,
-            LayoutModeName::PrimarySide => LayoutMode::PrimarySide,
-            LayoutModeName::KeepLayout => LayoutMode::KeepLayout,
         }
     }
 }
@@ -189,9 +180,8 @@ impl From<LayoutModeName> for LayoutMode {
 impl From<LayoutMode> for LayoutModeName {
     fn from(mode: LayoutMode) -> Self {
         match mode {
+            LayoutMode::MoveInto => LayoutModeName::MoveInto,
             LayoutMode::Grid => LayoutModeName::Grid,
-            LayoutMode::PrimarySide => LayoutModeName::PrimarySide,
-            LayoutMode::KeepLayout => LayoutModeName::KeepLayout,
         }
     }
 }
@@ -218,10 +208,9 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             target_display: None,
-            // The whole point of the product is "the desktop you had, on the
-            // screen you have": preserving the arrangement is the honest
-            // default, and rearranging into cells is the opt-in.
-            layout_mode: LayoutModeName::KeepLayout,
+            // Move the windows over, keep their size and state. The grid is the
+            // explicit opt-in for users who want an arranged desktop.
+            layout_mode: LayoutModeName::MoveInto,
             margin: 12,
             gap: 8,
             remote_screens: RemoteScreens::Single,
@@ -236,18 +225,16 @@ impl Default for Settings {
             onboarding_done: false,
             onboarding_step: 0,
             excluded_apps: Vec::new(),
-            auto_detect: "balanced".to_string(),
+            auto_detect: "off".to_string(),
             // Both off by default. Automation that moves windows without being
             // asked is the one thing users will not forgive, and a user who never
             // enabled gathering has nothing to restore. The settings page explains
             // the trade-off in one line; the manual controls work regardless.
             auto_gather: false,
             auto_restore: false,
-            last_refused_apps: Vec::new(),
             window_geometry: None,
             window_maximized: false,
             auto_update: true,
-            telemetry: false,
         }
     }
 }
@@ -288,16 +275,60 @@ impl Settings {
         // the BOM as "expected value at line 1 column 1", which used to make a
         // hand-edited settings file look corrupt and silently reset everything.
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-        let settings: Settings =
+        // Fields that were removed from the document are stripped before the
+        // strict deserialization. Without this, an ordinary upgrade would look
+        // like a corrupt file, be copied aside as `settings.json.invalid`, and
+        // silently reset the user's target, exclusions and shortcuts.
+        let mut value: serde_json::Value =
             serde_json::from_str(text).map_err(|e| SettingsError::Parse(e.to_string()))?;
+        if let Some(object) = value.as_object_mut() {
+            for removed in ["telemetry", "last_refused_apps"] {
+                object.remove(removed);
+            }
+        }
+        let settings: Settings = serde_json::from_value(value)
+            .map_err(|e| SettingsError::Parse(e.to_string()))?;
         if settings.version > SETTINGS_VERSION {
             return Err(SettingsError::VersionTooNew {
                 found: settings.version,
                 supported: SETTINGS_VERSION,
             });
         }
+        let settings = settings.migrate();
         settings.validate()?;
         Ok(settings)
+    }
+
+    /// Bring a file written by an older build up to the current contract.
+    ///
+    /// This is deliberately not a `serde` alias trick beyond the layout enum: the
+    /// removed values mean something different now, and the user has to end up
+    /// with a document whose meaning is the new one. Running it more than once is
+    /// a no-op.
+    pub fn migrate(mut self) -> Self {
+        // v1 → v2:
+        // * `primary_side` / `preserve_order` layout names collapse to the
+        //   move-in default. The old modes either rearranged the target or mapped
+        //   the whole desktop; neither is the product's default any more.
+        // * The four-level detection ladder collapses to off/verified. Anything
+        //   that was not already "off" keeps the user's intent that automation may
+        //   act, but only on evidence that can actually prove a session.
+        // * `last_refused_apps` and `telemetry` are gone; they are dropped by the
+        //   deserializer's `deny_unknown_fields` compatibility shim below.
+        if self.version < 2 {
+            self.version = 2;
+            self.layout_mode = match self.layout_mode {
+                LayoutModeName::Grid => LayoutModeName::Grid,
+                LayoutModeName::MoveInto => LayoutModeName::MoveInto,
+            };
+            self.auto_detect = match self.auto_detect.as_str() {
+                "off" => "off".to_string(),
+                // The old levels all meant "act automatically on some evidence".
+                // Preserve the wish, not the unreliable evidence.
+                _ => "verified".to_string(),
+            };
+        }
+        self
     }
 
     /// Write atomically: temp file in the same directory, then rename.
@@ -329,9 +360,9 @@ impl Settings {
                 self.gap
             )));
         }
-        if self.restore_delay_secs > 300 {
+        if self.restore_delay_secs > 120 {
             return Err(SettingsError::Validation(format!(
-                "restore delay {} exceeds 300 s",
+                "restore delay {} exceeds 120 s",
                 self.restore_delay_secs
             )));
         }
@@ -352,13 +383,11 @@ impl Settings {
                 "gather and restore hotkeys must differ".into(),
             ));
         }
-        // Detection levels are a closed set: a typo would silently disable the
-        // feature, and an unknown value from a newer build must not be treated as
-        // an automatic-activation request.
-        if !matches!(
-            self.auto_detect.as_str(),
-            "off" | "conservative" | "balanced" | "aggressive"
-        ) {
+        // Detection is either off or restricted to a verified connection
+        // lifecycle. The old four-level ladder admitted process presence and
+        // virtual-display presence as permission to move windows, which is not
+        // evidence that anyone is controlling this machine.
+        if !matches!(self.auto_detect.as_str(), "off" | "verified") {
             return Err(SettingsError::Validation(format!(
                 "unknown auto_detect level: {}",
                 self.auto_detect
@@ -438,6 +467,7 @@ pub fn config_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = std::env::var("HOME") {
+            let home = PathBuf::from(home);
             let dir = home
                 .join("Library")
                 .join("Application Support")
@@ -466,45 +496,80 @@ pub fn config_dir() -> PathBuf {
     std::env::temp_dir().join("unfy")
 }
 
-/// Move the previous product-name directory into the new one, once.
+/// Move the previous product-name directory into the new one.
 ///
-/// Only acts when the new directory does not exist yet and the old one does,
-/// so it can never overwrite anything the new build already wrote, and every
-/// later call is a no-op once the move has happened. A failure to migrate is
-/// ignored: the app then starts with defaults, which is what it would have
-/// done had the old directory never existed.
+/// The journal lives in a *subdirectory*, and the recovery record inside it is the
+/// only description of windows that may still be displaced. The previous version
+/// copied only the top-level files, so a fallback migration (across filesystems,
+/// where `rename` fails) silently dropped `journal/` - and it then skipped every
+/// later attempt because the destination existed. This version:
+///
+/// * copies the whole tree, recursively;
+/// * writes into a temporary sibling and only renames it into place once every
+///   entry has been copied, so an interrupted copy never looks complete;
+/// * leaves the old directory untouched on any failure, so the next launch can try
+///   again;
+/// * refuses to overwrite an existing destination, which is what protects data the
+///   new build already wrote.
 fn migrate_from(new_dir: &std::path::Path, old_dir: std::path::PathBuf) {
-    if !old_dir.exists() || new_dir.exists() {
+    if !old_dir.is_dir() || new_dir.exists() {
         return;
     }
-    match std::fs::rename(&old_dir, new_dir) {
-        Ok(()) => {
-            eprintln!(
-                "migrated configuration directory from {} to {}",
-                old_dir.display(),
-                new_dir.display()
-            );
-        }
-        // Rename across filesystems fails; fall back to a copy. The old
-        // directory is left in place so a half copy never loses data.
-        Err(_) => {
-            if std::fs::create_dir_all(new_dir).is_ok() {
-                if let Ok(entries) = std::fs::read_dir(&old_dir) {
-                    for entry in entries.flatten() {
-                        let target = new_dir.join(entry.file_name());
-                        if entry.path().is_file() {
-                            let _ = std::fs::copy(entry.path(), &target);
-                        }
-                    }
-                }
-                eprintln!(
-                    "copied configuration from {} to {}",
-                    old_dir.display(),
-                    new_dir.display()
-                );
-            }
-        }
+    if std::fs::rename(&old_dir, new_dir).is_ok() {
+        eprintln!(
+            "migrated configuration directory from {} to {}",
+            old_dir.display(),
+            new_dir.display()
+        );
+        return;
     }
+
+    // Rename across filesystems fails. Copy into a temporary directory and commit
+    // it atomically; the old directory stays as the fallback until that succeeds.
+    let staging = new_dir.with_extension("migrating");
+    if staging.exists() && std::fs::remove_dir_all(&staging).is_err() {
+        eprintln!(
+            "could not clear the previous partial migration at {}",
+            staging.display()
+        );
+        return;
+    }
+    if let Err(e) = copy_tree(&old_dir, &staging) {
+        eprintln!(
+            "could not copy configuration from {}: {e}; keeping the original",
+            old_dir.display()
+        );
+        let _ = std::fs::remove_dir_all(&staging);
+        return;
+    }
+    if let Err(e) = std::fs::rename(&staging, new_dir) {
+        eprintln!("could not commit the migrated configuration: {e}");
+        let _ = std::fs::remove_dir_all(&staging);
+        return;
+    }
+    eprintln!(
+        "copied configuration from {} to {}",
+        old_dir.display(),
+        new_dir.display()
+    );
+}
+
+/// Recursively copy a directory tree.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+        // Symlinks and platform-specific entries are skipped deliberately: the
+        // config directory contains only files and the journal subdirectory.
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -538,7 +603,7 @@ mod tests {
                 native_id: "DISPLAY#DEL41FF".into(),
                 label: "Dell U2720Q".into(),
             }),
-            layout_mode: LayoutModeName::PrimarySide,
+            layout_mode: LayoutModeName::Grid,
             hotkey_gather: Some("CmdOrCtrl+Alt+G".into()),
             ..Default::default()
         };
@@ -659,10 +724,11 @@ mod tests {
         )
         .unwrap();
         let settings = Settings::load(&path).unwrap();
-        assert_eq!(settings.margin, 20);
-        // The old value still parses, and now means the real thing its name
-        // always promised: the arrangement as it was, not a grid slot order.
-        assert_eq!(settings.layout_mode, LayoutModeName::KeepLayout);
+        assert_eq!(settings.margin, 20, "valid fields must survive the upgrade");
+        // The old name is accepted so the file loads, and migrated to the mode
+        // that now carries the default behaviour.
+        assert_eq!(settings.layout_mode, LayoutModeName::MoveInto);
+        assert_eq!(settings.version, SETTINGS_VERSION);
         assert_eq!(settings.gap, Settings::default().gap);
     }
 

@@ -4,6 +4,12 @@
 //! rescue and pause without ever opening the settings window. The state label
 //! always comes from the engine, never from a cached guess.
 //!
+//! The icon itself is never recoloured. It is the application icon installed at
+//! startup and it stays that way for the whole process lifetime, in every state
+//! and theme. State is expressed only through the tooltip text and the menu
+//! labels/enabled flags, so the mark in the notification area always looks like
+//! the app rather than like a status light.
+//!
 //! # Why the menu is rebuilt
 //!
 //! Menu items are enabled/disabled and their labels change with engine state
@@ -24,15 +30,6 @@ pub const ID_RESTORE: &str = "restore";
 pub const ID_RESCUE: &str = "rescue";
 pub const ID_PAUSE: &str = "pause";
 pub const ID_IDENTIFY: &str = "identify";
-/// Cycle the target display and re-gather onto it (spec P0-04-B).
-pub const ID_CYCLE: &str = "cycle";
-/// Manual remote-mode toggle.
-///
-/// Detection cannot cover every remote tool, and the verification work found
-/// that "just ask the user" is the only universally reliable signal. This item is
-/// that escape hatch: one click marks the machine as remoted in, and one click
-/// ends it and restores.
-pub const ID_REMOTE: &str = "remote";
 pub const ID_SETTINGS: &str = "settings";
 pub const ID_QUIT: &str = "quit";
 
@@ -80,18 +77,19 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
         ID_IDENTIFY => {
             let _ = crate::commands::identify_displays(Some(4));
         }
-        ID_CYCLE => cycle_target(app),
-        ID_REMOTE => toggle_remote(app),
         ID_SETTINGS => show_settings(app),
         ID_QUIT => quit(app),
         _ => {}
     }
 }
 
-/// Rebuild the tray icon, menu and tooltip.
+/// Rebuild the tray menu and tooltip.
 ///
 /// Called after every action, because the enabled set and the labels depend on
 /// whether windows are currently gathered.
+///
+/// The icon is deliberately not touched: it is the application icon installed at
+/// startup and the state is carried by the tooltip and the menu alone.
 ///
 /// # Callers must hold no state guard
 ///
@@ -108,78 +106,6 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
         let _ = tray.set_menu(Some(menu));
     }
     let _ = tray.set_tooltip(Some(tooltip(app)));
-    if let Some(icon) = state_icon(app) {
-        let _ = tray.set_icon(Some(icon));
-    }
-}
-
-/// Recolour the tray icon so the state is readable without hovering.
-///
-/// The tooltip already carries the state, but a tray icon is a dot at the edge of
-/// the screen: the user has to hover to read anything. A tinted icon answers
-/// "is there a layout active right now?" at a glance, which is the question this
-/// app is used for dozens of times a day.
-///
-/// Tinting is done on the embedded icon bytes at runtime rather than shipping
-/// pre-rendered variants, so the palette stays in one place.
-fn state_icon<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::image::Image<'static>> {
-    let state = {
-        let state = app.state::<AppState>();
-        let engine = state.engine.lock().ok()?;
-        (engine.state(), engine.is_paused())
-    };
-
-    // Same palette as the window's status dots, so the tray and the overview never
-    // disagree about what a colour means. The values mirror the `oklch` tokens in
-    // `styles.css` (the tray works on raw pixels and cannot read CSS):
-    //
-    //   --color-success  idle, nothing pending
-    //   --color-active   a layout is in effect, or a gather is running
-    //   --color-warning  paused
-    //   --color-danger   error or degraded
-    let (r, g, b) = match state {
-        // Idle and healthy: green, matching the green "就绪" dot in the window.
-        (unfy_domain::EngineState::Idle, false) => (38u8, 123u8, 76u8),
-        // A live layout, and the working states that lead to one: blue.
-        (unfy_domain::EngineState::Active, false)
-        | (unfy_domain::EngineState::Migrating, _)
-        | (unfy_domain::EngineState::Restoring, _)
-        | (unfy_domain::EngineState::Planning, _) => (56u8, 110u8, 200u8),
-        // Needs attention: amber when paused or degraded, red when broken.
-        (unfy_domain::EngineState::Error, _) => (175u8, 52u8, 51u8),
-        // Remaining combinations: degraded, or paused in any state.
-        _ => (150u8, 102u8, 38u8),
-    };
-
-    let source = app.default_window_icon()?;
-    let (width, height) = (source.width(), source.height());
-    let rgba = source.rgba();
-    let mut tinted = Vec::with_capacity(rgba.len());
-
-    for pixel in rgba.chunks_exact(4) {
-        let alpha = pixel[3];
-        if alpha == 0 {
-            // Transparent padding stays transparent, or the icon becomes a square.
-            tinted.extend_from_slice(&[0, 0, 0, 0]);
-            continue;
-        }
-        // Keep the artwork's luminance and apply the state colour, so the mark
-        // stays recognisable while the hue changes.
-        //
-        // The weights are applied in u32: 255 * (299 + 587 + 114) is 255,000,
-        // which overflows u16 and panicked the tray refresh on the very first
-        // pixel. `u8::from`-style conversions would not have caught it.
-        let luma =
-            (u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114)
-                / 1000;
-        let mix = |channel: u8| -> u8 {
-            let scaled = u32::from(channel) * luma / 255;
-            u8::try_from((scaled + u32::from(channel)) / 2).unwrap_or(channel)
-        };
-        tinted.extend_from_slice(&[mix(r), mix(g), mix(b), alpha]);
-    }
-
-    tauri::image::Image::new_owned(tinted, width, height).into()
 }
 
 /// The tray sentences for the language the interface is using.
@@ -247,56 +173,6 @@ fn tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
     tooltip
 }
 
-/// Cycle the target display from the tray.
-fn cycle_target<R: Runtime>(app: &AppHandle<R>) {
-    let handle = app.clone();
-    let state = app.state::<AppState>();
-    let result = tauri::async_runtime::block_on(crate::commands::cycle_target(handle, state));
-    if let Err(message) = &result {
-        tracing::warn!(error = %message, "cycle target failed");
-    }
-    refresh(app);
-}
-
-/// Mark the machine as remoted in, or end that and restore.
-///
-/// Public so the command layer can offer the same action from the window: the
-/// tray alone means a user who has hidden the tray icon has no way to declare a
-/// session.
-pub fn toggle_remote<R: Runtime>(app: &AppHandle<R>) {
-    // One implementation, shared with the window button. The command also runs a
-    // poll immediately, so the transition and any automation happen now instead of
-    // up to two seconds later.
-    let state = app.state::<AppState>();
-    let now_active = !state
-        .detector
-        .lock()
-        .map(|tracker| tracker.is_active())
-        .unwrap_or(false);
-    state
-        .manual_remote
-        .store(now_active, std::sync::atomic::Ordering::SeqCst);
-    crate::monitor::tick(app);
-
-    let _ = app.emit(
-        "unfy://remote",
-        serde_json::json!({
-            "active": now_active,
-            "evidence": if now_active {
-                serde_json::json!(crate::message::evidence_message(
-                    &unfy_detect::Evidence::ManualMarker
-                ))
-            } else {
-                serde_json::json!(null)
-            },
-            // The marker only changes the verdict; whether windows move is decided
-            // by the automation settings, exactly as for detected evidence.
-            "acted": false,
-        }),
-    );
-    refresh(app);
-}
-
 fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let state = app.state::<AppState>();
     let (engine_state, paused, pending, display_count) = match state.engine.lock() {
@@ -315,11 +191,6 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     };
 
     let has_layout = engine_state.has_pending_work() || pending > 0;
-    let remote_active = state
-        .detector
-        .lock()
-        .map(|tracker| tracker.is_active())
-        .unwrap_or(false);
 
     let text = locale_text(app);
     let gather_label = if has_layout {
@@ -335,18 +206,6 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let pause =
         CheckMenuItem::with_id(app, ID_PAUSE, text.pause, enabled.pause, paused, None::<&str>)?;
     let identify = MenuItem::with_id(app, ID_IDENTIFY, text.identify, true, None::<&str>)?;
-    let cycle = MenuItem::with_id(app, ID_CYCLE, text.cycle, enabled.cycle, None::<&str>)?;
-    let remote = MenuItem::with_id(
-        app,
-        ID_REMOTE,
-        if remote_active {
-            text.remote_end
-        } else {
-            text.remote_mark
-        },
-        true,
-        None::<&str>,
-    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let settings = MenuItem::with_id(app, ID_SETTINGS, text.settings, true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
@@ -360,8 +219,6 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &rescue,
             &pause,
             &identify,
-            &cycle,
-            &remote,
             &separator,
             &settings,
             &separator2,
@@ -381,17 +238,17 @@ pub struct MenuEnabled {
     pub gather: bool,
     pub restore: bool,
     pub pause: bool,
-    pub cycle: bool,
 }
 
 pub fn menu_enabled(paused: bool, has_layout: bool, display_count: usize) -> MenuEnabled {
+    // `display_count` is kept in the signature because the display-dependent
+    // gather label needs it; the explicit cycle item is gone, and cycling lives in
+    // the target submenu where the user can see which display they are choosing.
+    let _ = display_count;
     MenuEnabled {
         gather: !paused,
         restore: has_layout,
         pause: has_layout,
-        // Only meaningful with more than one display; disabled rather than hidden, so
-        // the item does not appear and disappear between setups.
-        cycle: display_count > 1,
     }
 }
 
@@ -422,26 +279,25 @@ fn run_and_notify<R: Runtime>(app: &AppHandle<R>, action: &str) {
 }
 
 fn toggle_pause<R: Runtime>(app: &AppHandle<R>) {
+    // Same command the window button and the shortcut use. The tray used to set
+    // the engine and the settings separately, which is how "paused" ended up
+    // meaning two different things depending on which surface was clicked.
     let state = app.state::<AppState>();
-    let now_paused = match state.engine.lock() {
-        Ok(mut engine) => {
-            if engine.is_paused() {
-                engine.resume().is_ok() && false
-            } else {
-                engine.pause().is_ok() && true
-            }
-        }
-        Err(_) => return,
+    let currently_paused = state
+        .engine
+        .lock()
+        .map(|engine| engine.is_paused())
+        .unwrap_or(false);
+    // `set_paused` is generic over the runtime in practice; the concrete handle is
+    // what Tauri's command signature asks for here.
+    let result = crate::commands::set_paused_for(app, state, !currently_paused);
+    let (ok, paused, message) = match result {
+        Ok(dto) => (true, dto.paused, None),
+        Err(error) => (false, currently_paused, Some(error)),
     };
-
-    if let Ok(mut settings) = state.settings.lock() {
-        settings.paused = now_paused;
-        let _ = settings.save(&state.settings_path);
-    }
-
     let _ = app.emit(
         "unfy://action",
-        serde_json::json!({ "action": "pause", "ok": true, "paused": now_paused }),
+        serde_json::json!({ "action": "pause", "ok": ok, "paused": paused, "message": message }),
     );
     refresh(app);
 }
@@ -590,21 +446,13 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
 
 #[cfg(test)]
 mod icon_tests {
-    //! Tinting arithmetic and menu enable rules.
+    //! Menu enable rules.
     //!
-    //! The first tinting implementation used `u16` for the luminance weights and
-    //! panicked on the first pixel (`255 * 1000` overflows `u16`); in release that
-    //! would have silently wrapped and tinted the icon wrong.
-    //!
-    //! The menu rules live here because the tray icon is not exposed to the
+    //! The rules live here because the tray icon is not exposed to the
     //! accessibility harness, so clicking the menu is the one part of the app that
     //! cannot be driven automatically.
 
     use super::menu_enabled;
-
-    fn luma(r: u8, g: u8, b: u8) -> u32 {
-        (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000
-    }
 
     #[test]
     fn restore_and_pause_need_a_layout_to_act_on() {
@@ -630,28 +478,12 @@ mod icon_tests {
     }
 
     #[test]
-    fn cycling_needs_a_second_display() {
-        assert!(!menu_enabled(false, false, 0).cycle);
-        assert!(!menu_enabled(false, false, 1).cycle);
-        assert!(menu_enabled(false, false, 2).cycle);
-    }
-
-    #[test]
-    fn luminance_stays_in_range_for_every_extreme() {
-        assert_eq!(luma(255, 255, 255), 255);
-        assert_eq!(luma(0, 0, 0), 0);
-        // The value that overflowed: pure white through the full weight.
-        assert!(luma(255, 255, 255) <= 255);
-    }
-
-    #[test]
-    fn tint_never_exceeds_eight_bits() {
-        for channel in [0u8, 1, 127, 254, 255] {
-            for l in [0u32, 128, 255] {
-                let scaled = channel as u32 * l / 255;
-                let mixed = (scaled + channel as u32) / 2;
-                assert!(mixed <= 255, "channel {channel} luma {l} produced {mixed}");
-            }
-        }
+    fn restore_needs_a_layout_regardless_of_display_count() {
+        // The explicit cycle item was removed: cycling is part of the target
+        // submenu, where the destination is visible before the click. Restore is
+        // driven by the recovery record, not by how many displays exist.
+        assert!(!menu_enabled(false, false, 0).restore);
+        assert!(!menu_enabled(false, false, 1).restore);
+        assert!(menu_enabled(false, true, 2).restore);
     }
 }

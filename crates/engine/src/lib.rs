@@ -11,6 +11,7 @@
 //!    and the read-back is still recoverable.
 //! 3. Result on disk after the read-back, whether it succeeded or not.
 //! 4. Restore before any new migration, before updating, before exit.
+//! 5. A read (preview, status) never mutates engine state.
 //!
 //! # Why the engine is generic
 //!
@@ -50,6 +51,7 @@ pub struct EligibleWindow {
     pub display: DisplaySnapshot,
     pub min_size: Option<unfy_domain::Size>,
     pub focused: bool,
+    pub capabilities: Capabilities,
 }
 
 /// A window the engine refused to touch, and why.
@@ -78,15 +80,19 @@ pub struct MigrationReport {
     pub outcomes: HashMap<WindowId, WindowOutcome>,
     pub skipped: Vec<SkippedWindow>,
     pub unplaced: Vec<WindowId>,
+    /// Windows that were already usable on the target and were not written to.
+    pub unchanged: usize,
+    /// Windows the engine decided not to touch because their preimage could not
+    /// be captured. They received zero platform writes.
+    pub not_attempted: Vec<WindowId>,
     pub cascaded: bool,
     /// Windows the application refused to move, with the process to name.
     pub refused: Vec<RefusedWindow>,
 }
 
-/// Result of a retarget: how many windows went home first, plus the gather.
+/// Result of a retarget: the windows that were re-planned onto a new target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetargetReport {
-    pub restored: usize,
     pub migration: MigrationReport,
 }
 
@@ -112,6 +118,11 @@ impl MigrationReport {
             .filter(|o| matches!(o, WindowOutcome::Rejected | WindowOutcome::Unknown))
             .count()
     }
+
+    /// Windows that still need attention, including those never attempted.
+    pub fn unfinished(&self) -> usize {
+        self.failed_count() + self.not_attempted.len()
+    }
 }
 
 /// Summary of a restore pass.
@@ -119,16 +130,27 @@ impl MigrationReport {
 pub struct RestoreReport {
     pub transaction: Option<uuid::Uuid>,
     pub outcomes: HashMap<WindowId, WindowOutcome>,
+    /// Windows that could not be restored and still owe a restore.
     pub pending: Vec<WindowId>,
+    /// Windows placed in a visible area because their original display is gone.
+    /// They are safe to use but their original position is still recorded, so a
+    /// later restore can finish the job once the display returns.
+    pub awaiting_original: Vec<WindowId>,
 }
 
 impl RestoreReport {
+    /// Whether the transaction is fully resolved and can be closed.
     pub fn is_complete(&self) -> bool {
-        self.pending.is_empty()
+        self.pending.is_empty() && self.awaiting_original.is_empty()
     }
 
     pub fn count(&self, outcome: WindowOutcome) -> usize {
         self.outcomes.values().filter(|o| **o == outcome).count()
+    }
+
+    /// Windows that still hold a recovery obligation.
+    pub fn outstanding(&self) -> usize {
+        self.pending.len() + self.awaiting_original.len()
     }
 }
 
@@ -137,62 +159,29 @@ impl RestoreReport {
 pub struct EngineConfig {
     pub layout: LayoutConfig,
     /// How far a window may drift from the requested rectangle before the engine
-    /// retries. Four physical pixels matches the product spec's tolerance.
+    /// retries.
     pub tolerance_px: i32,
     /// Attempts per window before it is reported as `Rejected`.
-    ///
-    /// Two is deliberate: the first write and one retry distinguish "the message
-    /// pump was slow" from "this application does not accept the move". A third
-    /// attempt costs another settle delay and has never been observed to succeed
-    /// in the verification harness.
     pub max_attempts: u8,
     /// Pause before re-requesting a window whose position did not stick.
-    ///
-    /// Only paid on the retry pass, so a batch of N windows costs at most one
-    /// settle wait per diverging window rather than one per window.
     pub retry_delay_ms: u64,
     /// Where journal files live. One file per transaction.
     pub journal_dir: PathBuf,
     /// A window narrower than this is not considered "reachable".
     pub min_reachable: unfy_domain::Size,
-    /// Seconds to wait at the start of `restore()`.
-    /// Advisory: the desktop layer waits this long before calling `restore`.
-    /// Kept in the config so diagnostics can report it, but the engine never
-    /// sleeps on it — see the note in `restore`.
+    /// Advisory restore delay, for diagnostics. The engine never sleeps on it.
     pub restore_delay_secs: u32,
     /// Called after each window has been submitted, with (done, total).
-    ///
-    /// The engine has no UI thread and must not grow one; this is the smallest
-    /// hook that lets a caller report progress. A batch of a hundred windows
-    /// completes in ~200 ms on an idle desktop, but one application that is
-    /// busy pumping its message queue can hold a single window for seconds - and
-    /// an indeterminate spinner for that long reads as a hang.
     pub on_progress: Option<std::sync::Arc<dyn Fn(usize, usize) + Send + Sync>>,
-    /// Executable names that are never moved.
+    /// Executable names that are never moved by a gather or rescue.
     ///
-    /// Matched case-insensitively against `WindowSnapshot::app_name`. This is the
-    /// escape hatch for applications the user does not want rearranged: media
-    /// players, capture tools, games, a full-screen dashboard.
-    ///
-    /// # What it does and does not block
-    ///
-    /// It blocks **gathering** and **rescue** - the two operations that move a
-    /// window somewhere new. It does not block **restoring**, which puts a window
-    /// back where it already was, nor the fallback that pulls a window into a
-    /// visible area when its display disappears. An excluded application must
-    /// never be stranded just because the user asked not to have it rearranged.
-    ///
-    /// Both halves are pinned by `an_exclusion_blocks_gathering_but_not_restoring`;
-    /// rescue has its own test. Keeping one half and dropping the other is the
-    /// failure this comment exists to prevent.
+    /// Never blocks restoring: an excluded application must not be stranded just
+    /// because the user asked not to have it rearranged.
     pub excluded_apps: Vec<String>,
 }
 
 impl std::fmt::Debug for EngineConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The progress callback is a closure and cannot be printed; everything
-        // else is plain data. Printing `on_progress: Some(..)` keeps the shape of
-        // the struct visible in logs without requiring a Debug bound on it.
         f.debug_struct("EngineConfig")
             .field("layout", &self.layout)
             .field("tolerance_px", &self.tolerance_px)
@@ -235,8 +224,13 @@ pub struct Engine<B: Backend> {
     transaction: Option<Transaction>,
     /// Outcomes accumulated for the current transaction.
     outcomes: HashMap<WindowId, WindowOutcome>,
-    /// Preimages captured for the current transaction, keyed by window.
+    /// First preimages captured for the current transaction, keyed by window.
+    /// Immutable for the lifetime of the transaction: a retarget, a second
+    /// gather or a rescue never overwrite the position the user started from.
     preimages: HashMap<WindowId, Preimage>,
+    /// Windows whose obligation was already settled in this process. Kept out of
+    /// the next restore pass.
+    resolved: HashMap<WindowId, WindowOutcome>,
     /// Set by `pause()`; blocks new gathers without discarding the layout.
     paused: bool,
 }
@@ -244,9 +238,18 @@ pub struct Engine<B: Backend> {
 struct Transaction {
     id: uuid::Uuid,
     journal: Journal,
-    /// The rectangle each window was last placed at by us, used to tell a user
-    /// move apart from our own write.
+    /// The rectangle and mode each window was last placed at by us, used to tell
+    /// a user move apart from our own write.
     last_applied: HashMap<WindowId, ObservedWindow>,
+}
+
+/// What `classify` decided about one enumerated window.
+struct Classified {
+    snapshot: WindowSnapshot,
+    display: DisplaySnapshot,
+    min_size: Option<unfy_domain::Size>,
+    focused: bool,
+    capabilities: Capabilities,
 }
 
 impl<B: Backend> Engine<B> {
@@ -258,6 +261,7 @@ impl<B: Backend> Engine<B> {
             transaction: None,
             outcomes: HashMap::new(),
             preimages: HashMap::new(),
+            resolved: HashMap::new(),
             paused: false,
         }
     }
@@ -274,8 +278,7 @@ impl<B: Backend> Engine<B> {
     ///
     /// Refused while a transaction is open: the plan for the current gather was
     /// computed with the old settings, and swapping them mid-flight would make
-    /// the journal disagree with what the user saw in the preview. The caller
-    /// must either wait for the next gather or restore first.
+    /// the journal disagree with what the user saw in the preview.
     pub fn update_config(&mut self, config: EngineConfig) -> Result<(), EngineError> {
         if self.state.may_write() {
             return Err(EngineError::InvalidTransition { from: self.state });
@@ -290,21 +293,16 @@ impl<B: Backend> Engine<B> {
 
     /// Resolve the configured target against the live topology.
     ///
-    /// Returns the configured display when it is still present, otherwise the
-    /// primary display. Never guesses silently: callers that need to distinguish
-    /// "configured target gone" from "no displays" should use
-    /// `preview()`/`migrate()` and handle `TargetDisplayMissing`.
+    /// Returns the configured display when it is still present, otherwise `None`.
+    /// Callers that need a fallback must ask the user: silently choosing the
+    /// primary display gathers windows onto a screen the remote client may not be
+    /// showing, which is worse than doing nothing.
     pub fn resolve_target(&self, configured_native_id: Option<&str>) -> Option<DisplayKey> {
         let displays = self.backend.topology().ok()?;
-        if let Some(native_id) = configured_native_id {
-            if let Some(found) = displays.iter().find(|d| d.key.native_id == native_id) {
-                return Some(found.key.clone());
-            }
-        }
+        let native_id = configured_native_id?;
         displays
             .iter()
-            .find(|d| d.primary)
-            .or_else(|| displays.first())
+            .find(|d| d.key.native_id == native_id)
             .map(|d| d.key.clone())
     }
 
@@ -313,20 +311,20 @@ impl<B: Backend> Engine<B> {
         self.preimages.len()
     }
 
+    /// How many of those still owe a restore.
+    pub fn unresolved_window_count(&self) -> usize {
+        self.preimages
+            .keys()
+            .filter(|id| !self.resolved.contains_key(*id))
+            .count()
+    }
+
     /// The transaction this engine currently owns, if any.
-    ///
-    /// The UI uses this to avoid reporting the live journal as "work left over
-    /// from a previous run".
     pub fn current_transaction(&self) -> Option<uuid::Uuid> {
         self.transaction.as_ref().map(|t| t.id)
     }
 
     /// A cheap fingerprint of the current display topology.
-    ///
-    /// Used to detect a hot-plug: when this changes, any plan computed against
-    /// the old topology is stale and windows may now sit outside every work
-    /// area. Comparing display identity plus geometry catches an unplug, a
-    /// resolution change, and a rearrangement, and nothing else.
     pub fn topology_signature(&self) -> Option<String> {
         let displays = self.backend.topology().ok()?;
         let mut parts: Vec<String> = displays
@@ -348,16 +346,6 @@ impl<B: Backend> Engine<B> {
     }
 
     /// React to a display being added, removed or reconfigured.
-    ///
-    /// Returns the windows that had to be moved back into a visible area.
-    ///
-    /// The dangerous case is a monitor disappearing while windows sit on it:
-    /// those windows are now unreachable, and the user may not even be able to
-    /// see that they exist. Rescue is deliberately allowed here even while a
-    /// transaction is open, because leaving a window off-screen is worse than
-    /// acting outside the normal plan. The snapshot keeps the original
-    /// coordinates, so a later restore can still put the window back if the
-    /// display returns.
     pub fn on_topology_changed(&mut self) -> Result<Vec<(WindowId, Rect)>, EngineError> {
         tracing::warn!(state = ?self.state, "display topology changed; rescuing unreachable windows");
         let rescued = self.rescue_offscreen()?;
@@ -371,15 +359,7 @@ impl<B: Backend> Engine<B> {
     }
 
     /// Stop acting on new gather requests while keeping captured windows.
-    ///
-    /// Pausing is not the same as restoring: the layout stays, the journal stays
-    /// open, and `resume()` puts the engine back to `Active` without touching a
-    /// window. This is what the user needs when they briefly work locally on the
-    /// host and do not want the next hotkey press to move anything.
     pub fn pause(&mut self) -> Result<(), EngineError> {
-        if self.transaction.is_none() {
-            return Ok(());
-        }
         if self.state == EngineState::Migrating || self.state == EngineState::Restoring {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
@@ -389,19 +369,14 @@ impl<B: Backend> Engine<B> {
     }
 
     /// Resume acting on gather requests.
+    ///
+    /// Pause is independent of whether a transaction exists, and resuming never
+    /// clears an error state: an unresolved journal must stay visible.
     pub fn resume(&mut self) -> Result<(), EngineError> {
         if !self.paused {
             return Ok(());
         }
         self.paused = false;
-        // Only a layout that was fully applied becomes `Active` again. Overwriting
-        // `Degraded` would claim the layout is complete while windows are still
-        // unplaced or a crash-adopted transaction is unresolved - and the overview
-        // offers "restore" or "keep" based on that claim.
-        // Only a layout that was fully applied becomes `Active` again. Overwriting
-        // `Degraded` would claim the layout is complete while windows are still
-        // unplaced or a crash-adopted transaction is unresolved - and the overview
-        // offers "restore" or "keep" based on that claim.
         if self.transaction.is_some() && self.state != EngineState::Degraded {
             self.state = EngineState::Active;
         }
@@ -416,27 +391,10 @@ impl<B: Backend> Engine<B> {
     /// Adopt a journal left behind by a previous run.
     ///
     /// Must be called before the engine is allowed to migrate, and before the UI
-    /// offers "restore". Adopting means the engine takes ownership of the
-    /// transaction: reopening the file for appends and loading the preimages into
-    /// memory, so `restore()` can put the windows back instead of merely telling
-    /// the user that something is wrong.
-    ///
-    /// A transaction with no preimages is discarded immediately; there is
-    /// nothing to restore and keeping it would block every future migration.
+    /// offers "restore". Only unresolved windows are loaded: a window that was
+    /// already put back must not be moved again because the process restarted.
     pub fn recover(&mut self, path: impl AsRef<std::path::Path>) -> Result<Recovered, EngineError> {
         let path = path.as_ref();
-        // A journal that cannot be read may describe windows that were already
-        // moved. Leaving the engine in `Idle` after this failure told the window
-        // "就绪" while a batch of preimages was unrecoverable, so the user saw a
-        // healthy tool over a desktop it could not put back. `Error` is what the
-        // state means here: no new writes, recovery and rescue still offered.
-        //
-        // Unreachable by corrupt *content*: `unfy_journal::recover` treats a
-        // failed record as a torn tail, which is the normal shape of an interrupted
-        // write, and returns `Clean`. This branch fires when the file cannot be read
-        // at all - locked, removed, or permission-denied underneath the app - which
-        // is why there is no unit test constructing it: the failure is an IO state,
-        // not a byte pattern.
         let recovered = match unfy_journal::recover(path) {
             Ok(recovered) => recovered,
             Err(e) => {
@@ -449,9 +407,10 @@ impl<B: Backend> Engine<B> {
             return Ok(recovered);
         };
 
-        if tx.preimages.is_empty() {
-            // Nothing was captured, so nothing can have moved. A leftover
-            // "Begin" record must not block the next migration forever.
+        if !tx.has_open_obligation() {
+            // Every captured window already reached a terminal state. The file is
+            // only history; remove it so the next launch does not report work that
+            // no longer exists.
             std::fs::remove_file(path).ok();
             self.state = EngineState::Idle;
             return Ok(Recovered::Clean);
@@ -470,6 +429,7 @@ impl<B: Backend> Engine<B> {
             .iter()
             .map(|p| (p.id.clone(), p.clone()))
             .collect();
+        self.resolved = tx.resolved.iter().cloned().collect();
         self.transaction = Some(Transaction {
             id: tx.transaction,
             journal,
@@ -480,16 +440,19 @@ impl<B: Backend> Engine<B> {
         tracing::warn!(
             transaction = %tx.transaction,
             preimages = tx.preimages.len(),
+            resolved = tx.resolved.len(),
             may_have_moved = tx.may_have_moved_windows(),
             "adopted unfinished transaction"
         );
         Ok(recovered)
     }
 
-    /// Read the newest journal in `dir` and adopt it, if any.
+    /// Adopt the unfinished transaction in `dir`, if any.
     ///
-    /// Called once at startup. Returns the adopted transaction's id when the
-    /// engine took over work from a previous run.
+    /// Every journal is examined. A file is never deleted because a newer one
+    /// exists: two files can describe two different sets of displaced windows, and
+    /// the modification time says nothing about whether their obligations were
+    /// settled.
     pub fn recover_latest(
         &mut self,
         dir: impl AsRef<std::path::Path>,
@@ -499,74 +462,75 @@ impl<B: Backend> Engine<B> {
             return Ok(None);
         };
 
-        // Only the newest journal can belong to the interrupted run; every
-        // earlier file is from a session that already ended or was superseded.
-        // Those are deleted here rather than accumulated: a user whose app
-        // crashed a few times would otherwise carry a growing pile of files that
-        // no code path ever reads again, and each startup would scan them.
-        let mut journals: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+        // Examine every journal. A file is never deleted because a newer one
+        // exists: two files can describe two different sets of displaced windows,
+        // and the modification time says nothing about whether their obligations
+        // were settled. Deleting a superseded journal was the reason a crashed
+        // gather could silently lose the only record of where its windows were.
+        let mut unfinished: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+        let mut failures = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_none_or(|e| e != "journal") {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else {
-                continue;
-            };
-            let Ok(modified) = meta.modified() else {
-                continue;
-            };
-            journals.push((modified, path));
-        }
-        journals.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
-
-        let newest = journals.first().cloned().map(|(_, path)| path);
-        for (_, stale) in journals.iter().skip(1) {
-            match std::fs::remove_file(stale) {
-                Ok(()) => tracing::info!(path = %stale.display(), "removed superseded journal"),
-                Err(e) => tracing::warn!(
-                    path = %stale.display(),
-                    error = %e,
-                    "could not remove superseded journal"
-                ),
+            match unfy_journal::recover(&path) {
+                Ok(Recovered::Clean) => {
+                    if std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %e,
+                                "could not remove a closed journal"
+                            );
+                        }
+                    }
+                }
+                Ok(Recovered::Unfinished(tx)) => {
+                    if !tx.has_open_obligation() {
+                        std::fs::remove_file(&path).ok();
+                        continue;
+                    }
+                    let at = entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                    unfinished.push((at, path));
+                }
+                Err(e) => failures.push(format!("{}: {e}", path.display())),
             }
         }
 
-        let Some(path) = newest else {
+        if !failures.is_empty() {
+            self.state = EngineState::Error;
+            return Err(EngineError::JournalCorrupt(failures.join("; ")));
+        }
+
+        unfinished.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        let Some((_, newest)) = unfinished.first().cloned() else {
             return Ok(None);
         };
+        if unfinished.len() > 1 {
+            tracing::warn!(
+                count = unfinished.len() - 1,
+                "more than one unfinished journal; the others are kept and will be adopted on a later launch"
+            );
+        }
 
-        match self.recover(&path)? {
+        match self.recover(&newest)? {
             Recovered::Unfinished(tx) => Ok(Some(tx.transaction)),
             Recovered::Clean => Ok(None),
         }
     }
 
-    /// Enumerate, filter and plan without touching a window.
-    pub fn preview(&mut self, target: &DisplayKey) -> Result<Preview, EngineError> {
-        if self.state.may_write() {
-            return Err(EngineError::InvalidTransition { from: self.state });
-        }
-        self.state = EngineState::Planning;
-
-        // A failed plan must not leave the engine in `Planning`: that state
-        // refuses every later call with `InvalidTransition`, so one transient
-        // platform error would wedge the app until restart. The preview was a
-        // read-only attempt that moved nothing, so returning to `Idle` is the
-        // honest end state.
-        // A failed plan must not leave the engine in `Planning`: that state
-        // refuses every later call with `InvalidTransition`, so one transient
-        // platform error would wedge the app until restart. The preview moved
-        // nothing, so returning to `Idle` is the honest end state.
-        let preview = match self.build_preview(target) {
-            Ok(preview) => preview,
-            Err(e) => {
-                self.state = EngineState::Idle;
-                return Err(e);
-            }
-        };
-        self.state = EngineState::Idle;
-        Ok(preview)
+    /// Enumerate, filter and plan without touching a window or the engine state.
+    ///
+    /// This used to set `Planning` and then unconditionally return to `Idle`. A
+    /// preview taken while a transaction was open therefore erased `Active`,
+    /// `Degraded` and `Error`, and the UI lost its restore entry point while the
+    /// windows were still displaced. A read must not mutate state.
+    pub fn preview(&self, target: &DisplayKey) -> Result<Preview, EngineError> {
+        self.build_preview(target)
     }
 
     fn build_preview(&self, target: &DisplayKey) -> Result<Preview, EngineError> {
@@ -587,14 +551,28 @@ impl<B: Backend> Engine<B> {
 
         let mut eligible = Vec::new();
         let mut skipped = Vec::new();
+        let mut candidates = Vec::new();
         for window in windows {
-            match self.classify(&window, &displays) {
-                Ok(Some((display, min_size))) => eligible.push(EligibleWindow {
-                    focused: window.focused,
-                    snapshot: window,
-                    display,
-                    min_size,
-                }),
+            match self.classify(&window, &displays, target) {
+                Ok(Some(classified)) => {
+                    let on_target = classified.display.key == *target;
+                    candidates.push(Candidate {
+                        id: classified.snapshot.id.clone(),
+                        current: classified.snapshot.visible_rect,
+                        min_size: classified.min_size,
+                        focused: classified.focused,
+                        source_work: classified.display.work_area,
+                        source_scale: classified.display.scale.x,
+                        already_on_target: on_target
+                            && unfy_layout::is_usable_on_target(
+                                classified.snapshot.visible_rect,
+                                target_display.work_area,
+                            ),
+                        can_resize: classified.capabilities.can_resize,
+                        can_move: classified.capabilities.can_move,
+                    });
+                    eligible.push(classified.snapshot.id.clone());
+                }
                 Ok(None) => {}
                 Err(reason) => skipped.push(SkippedWindow {
                     id: window.id.clone(),
@@ -604,36 +582,17 @@ impl<B: Backend> Engine<B> {
             }
         }
 
-        let candidates: Vec<Candidate> = eligible
-            .iter()
-            .map(|e| Candidate {
-                id: e.snapshot.id.clone(),
-                current: e.snapshot.visible_rect,
-                min_size: e.min_size,
-                focused: e.focused,
-            })
-            .collect();
-
-        // The source desktop for KeepLayout: the union rectangle of every
-        // display. A window's position relative to *this* is what "relative
-        // position" means, and it is stable no matter which windows happen to
-        // be eligible this run.
-        let mut source = displays[0].bounds;
-        for d in &displays[1..] {
-            source.left = source.left.min(d.bounds.left);
-            source.top = source.top.min(d.bounds.top);
-            source.right = source.right.max(d.bounds.right);
-            source.bottom = source.bottom.max(d.bounds.bottom);
-        }
-        let mut layout = self.config.layout;
-        layout.source_bounds = Some(source);
-
-        let plan = unfy_layout::plan(&candidates, target_display.work_area, &layout);
+        let plan = unfy_layout::plan(
+            &candidates,
+            target_display.work_area,
+            target_display.scale.x,
+            &self.config.layout,
+        );
 
         Ok(Preview {
             target: target.clone(),
             plan,
-            eligible: eligible.iter().map(|e| e.snapshot.id.clone()).collect(),
+            eligible,
             skipped,
         })
     }
@@ -646,7 +605,8 @@ impl<B: Backend> Engine<B> {
         &self,
         window: &WindowSnapshot,
         displays: &[DisplaySnapshot],
-    ) -> Result<Option<(DisplaySnapshot, Option<unfy_domain::Size>)>, SkipReason> {
+        target: &DisplayKey,
+    ) -> Result<Option<Classified>, SkipReason> {
         if self.is_excluded(window) {
             return Err(SkipReason::ExcludedApp);
         }
@@ -663,280 +623,302 @@ impl<B: Backend> Engine<B> {
             return Err(SkipReason::PermissionDenied);
         }
 
+        // Resolve by geometry, not by the snapshot's `display` field: the Windows
+        // backend cannot fill that field during enumeration without a second
+        // round trip per window, and a stale value would make "already on target"
+        // wrong in both directions.
         let display = displays
             .iter()
-            .find(|d| d.key == window.display)
+            .max_by_key(|d| d.bounds.intersection_area(&window.visible_rect))
+            .filter(|d| d.bounds.intersection_area(&window.visible_rect) > 0)
             .or_else(|| {
                 displays
                     .iter()
-                    .max_by_key(|d| d.bounds.intersection_area(&window.visible_rect))
+                    .find(|d| d.key == window.display || d.key == *target)
             })
             .ok_or(SkipReason::Invisible)?;
 
-        // The window's own minimum. Asking `capabilities` costs a cross-process
-        // round trip, so it happens here - once per window that will actually be
-        // placed - rather than during enumeration.
-        Ok(Some((display.clone(), capabilities.min_size)))
+        Ok(Some(Classified {
+            snapshot: window.clone(),
+            display: display.clone(),
+            min_size: capabilities.min_size,
+            focused: window.focused,
+            capabilities,
+        }))
     }
 
-    /// Move every eligible window onto `target`.
-    ///
-    /// Returns an error only when the transaction could not be started or had to
-    /// be aborted. Per-window failures are reported in the result.
+    /// Move every eligible window onto `target`, starting a new transaction.
     pub fn migrate(&mut self, target: &DisplayKey) -> Result<MigrationReport, EngineError> {
+        self.gather(target, false)
+    }
+
+    /// Bring newly appeared windows into an existing transaction, keeping every
+    /// first preimage already captured.
+    pub fn gather_new(&mut self, target: &DisplayKey) -> Result<MigrationReport, EngineError> {
+        self.gather(target, true)
+    }
+
+    /// Re-plan the captured windows onto a different target.
+    ///
+    /// The original preimages are kept: this is what "the target display changed"
+    /// means, not "start over from where the windows are now". The old
+    /// implementation ran a full restore first, which recorded the restored
+    /// positions as the new home and could overwrite the real baseline when the
+    /// original display was missing.
+    pub fn retarget(&mut self, target: &DisplayKey) -> Result<RetargetReport, EngineError> {
+        if self.transaction.is_none() {
+            return Ok(RetargetReport {
+                migration: self.gather(target, false)?,
+            });
+        }
+        Ok(RetargetReport {
+            migration: self.gather(target, true)?,
+        })
+    }
+
+    fn gather(
+        &mut self,
+        target: &DisplayKey,
+        allow_existing: bool,
+    ) -> Result<MigrationReport, EngineError> {
         if self.state.may_write() {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
         if self.state == EngineState::Error {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
-
-        // A second gather while a transaction is open must not capture new
-        // preimages: the windows have already moved, so the "original" position
-        // would be recorded as the position this engine just produced. The user
-        // asked to change the target, not to redefine home. Restore first.
-        // Pause is checked first: when both apply, "automation is paused" is the
-        // actionable message, and telling the user to restore would be wrong —
-        // resuming is what they actually need to do.
         if self.paused {
             return Err(EngineError::Paused);
         }
-        if self.transaction.is_some() {
+        if !allow_existing && self.transaction.is_some() {
             return Err(EngineError::TransactionAlreadyOpen);
         }
+        // With an open transaction, every captured window already has a preimage.
+        // A window whose obligation is still open must not be re-planned without
+        // its original baseline, so retargeting is allowed; a second *fresh*
+        // gather is not.
 
         let t0 = std::time::Instant::now();
         let preview = self.build_preview(target)?;
         let t_preview = t0.elapsed().as_millis();
-        if preview.plan.is_empty() {
-            self.state = EngineState::Idle;
+
+        let mut unplaced: Vec<WindowId> = preview
+            .plan
+            .unplaced
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut not_attempted: Vec<WindowId> = Vec::new();
+
+        // Only windows that need a write, and whose preimage is not already
+        // captured, are candidates for this pass.
+        let placements: Vec<unfy_layout::Placement> = preview
+            .plan
+            .placements
+            .iter()
+            .filter(|p| !p.unchanged)
+            .cloned()
+            .collect();
+        let unchanged = preview.plan.placements.len() - placements.len();
+
+        if placements.is_empty() {
+            if self.transaction.is_none() {
+                self.state = EngineState::Idle;
+            }
             return Ok(MigrationReport {
-                transaction: uuid::Uuid::nil(),
+                transaction: self
+                    .transaction
+                    .as_ref()
+                    .map(|t| t.id)
+                    .unwrap_or(uuid::Uuid::nil()),
                 applied: Vec::new(),
-                outcomes: HashMap::new(),
-                skipped: preview.skipped,
-                unplaced: Vec::new(),
-                cascaded: false,
-                refused: Vec::new(),
-            });
-        }
-
-        self.state = EngineState::Migrating;
-
-        let t1 = std::time::Instant::now();
-        // 1. Durable preimages for every window we are about to touch.
-        // One id, used for the filename and for every record inside it.
-        let transaction_id = uuid::Uuid::new_v4();
-        let journal_path = self
-            .config
-            .journal_dir
-            .join(format!("{transaction_id}.journal"));
-        let mut journal = Journal::begin_named(
-            &journal_path,
-            transaction_id,
-            &format!(
-                "target={} displays={}",
-                preview.target.native_id,
-                preview.plan.placements.len()
-            ),
-        )
-        .map_err(|e| {
-            // Leaving the state at `Migrating` after a failed journal write is the
-            // worst outcome available: every later call is refused with
-            // `InvalidTransition`, so the app is stuck until it restarts, and the
-            // status says it is busy doing something it is not doing.
-            self.state = EngineState::Error;
-            EngineError::JournalWrite(e.to_string())
-        })?;
-
-        let transaction_id = journal.transaction();
-
-        // Outcomes are collected while capturing preimages too (a window can
-        // vanish before we snapshot it), so clear before the loop, not after.
-        self.outcomes.clear();
-
-        let mut preimages = HashMap::new();
-        for placement in &preview.plan.placements {
-            let Some(eligible) = preview.eligible.iter().find(|id| **id == placement.id) else {
-                continue;
-            };
-            let _ = eligible;
-
-            // Re-read the window so the preimage matches what is on screen now,
-            // not what enumeration reported a moment ago.
-            let observed = match self.backend.read_back(&placement.id) {
-                Ok(observed) => observed,
-                Err(PlatformError::WindowGone) => {
-                    // The window disappeared between enumeration and now. There
-                    // is nothing to snapshot and nothing to move, but the user
-                    // still deserves to see it in the report.
-                    self.outcomes
-                        .insert(placement.id.clone(), WindowOutcome::Gone);
-                    continue;
-                }
-                Err(_) => continue,
-            };
-
-            // A failing enumeration here means the platform went away mid-flight.
-            // The journal already holds preimages for earlier windows, so the
-            // transaction must stay open for recovery - but the state has to move
-            // to `Degraded`, not sit at `Migrating`, or nothing can be retried.
-            let snapshot = match self.backend.enumerate() {
-                Ok(windows) => windows.into_iter().find(|w| w.id == placement.id),
-                Err(e) => {
-                    self.state = EngineState::Degraded;
-                    return Err(EngineError::Platform(e.to_string()));
-                }
-            };
-
-            let Some(snapshot) = snapshot else {
-                continue;
-            };
-            let display = self.display_of(&snapshot)?;
-
-            let preimage = Preimage {
-                id: snapshot.id.clone(),
-                display_native_id: display.key.native_id.clone(),
-                display_quality: display.key.quality,
-                display_work_area: display.work_area,
-                display_scale: display.scale,
-                visible_rect: observed.visible_rect,
-                outer_rect: snapshot.outer_rect,
-                mode: observed.mode,
-                topmost: snapshot.topmost,
-                native_placement: snapshot.native_placement.clone(),
-            };
-            journal.write_preimage(&preimage).map_err(|e| {
-                self.state = EngineState::Error;
-                EngineError::JournalWrite(e.to_string())
-            })?;
-            preimages.insert(placement.id.clone(), preimage);
-        }
-
-        let t_preimage = t1.elapsed().as_millis();
-
-        // The invariant: every preimage is on disk before the first window moves.
-        // A failure here means the durability guarantee is gone, so no window may
-        // be touched: the engine enters `Error` rather than proceeding on a
-        // journal that might not survive a crash.
-        journal.durable().map_err(|e| {
-            self.state = EngineState::Error;
-            EngineError::JournalWrite(e.to_string())
-        })?;
-
-        if preimages.is_empty() {
-            journal
-                .close_and_remove()
-                .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
-            self.state = EngineState::Idle;
-            return Ok(MigrationReport {
-                transaction: transaction_id,
-                applied: Vec::new(),
-                // Windows that vanished during preimage capture are still
-                // reported; silently dropping them would look like success.
                 outcomes: self.outcomes.clone(),
                 skipped: preview.skipped,
-                unplaced: Vec::new(),
+                unplaced,
+                unchanged,
+                not_attempted,
                 cascaded: preview.plan.cascaded,
                 refused: Vec::new(),
             });
         }
 
-        self.transaction = Some(Transaction {
-            id: transaction_id,
-            journal,
-            last_applied: HashMap::new(),
-        });
-        self.preimages = preimages;
-
-        // 2. Apply, one window at a time, with the intent written first.
-        //    Windows that do not settle are collected here and retried once the
-        //    whole plan has been submitted.
-        let mut settling: Vec<(WindowId, WindowPlan)> = Vec::new();
-        let mut applied = Vec::new();
-        let mut unplaced = Vec::new();
-        for id in preview.plan.unplaced.iter().map(|(id, _)| id.clone()) {
-            unplaced.push(id);
+        // 1. Open a transaction if this is a fresh gather.
+        let mut started_here = false;
+        if self.transaction.is_none() {
+            let transaction_id = uuid::Uuid::new_v4();
+            let journal_path = self
+                .config
+                .journal_dir
+                .join(format!("{transaction_id}.journal"));
+            let journal = Journal::begin_named(
+                &journal_path,
+                transaction_id,
+                &format!(
+                    "target={} windows={}",
+                    preview.target.native_id,
+                    placements.len()
+                ),
+            )
+            .map_err(|e| {
+                self.state = EngineState::Error;
+                EngineError::JournalWrite(e.to_string())
+            })?;
+            self.outcomes.clear();
+            self.resolved.clear();
+            self.transaction = Some(Transaction {
+                id: journal.transaction(),
+                journal,
+                last_applied: HashMap::new(),
+            });
+            started_here = true;
         }
+        self.state = EngineState::Migrating;
 
-        // Intents are written in batches: every intent in a batch is durable
-        // before any window in it is touched, so a crash can only leave windows
-        // whose intent is already on disk. Batching keeps the fsync count
-        // proportional to batches rather than windows.
-        const BATCH: usize = 16;
-        let placements = &preview.plan.placements;
-        let mut next = 0usize;
-
-        while next < placements.len() {
-            let end = (next + BATCH).min(placements.len());
-            let Some(transaction) = self.transaction.as_mut() else {
-                break;
-            };
-            let mut wrote_all = true;
-            for placement in &placements[next..end] {
-                if transaction
-                    .journal
-                    .write_intent(&placement.id, placement.rect, WindowMode::Normal)
-                    .is_err()
-                {
-                    wrote_all = false;
-                    break;
+        // 2. Capture the first preimage of every window this pass will touch.
+        //    A failure here removes the window from the commit set: no preimage,
+        //    no write.
+        let t1 = std::time::Instant::now();
+        let mut captured_now = 0usize;
+        for placement in &placements {
+            if self.preimages.contains_key(&placement.id) {
+                continue;
+            }
+            match self.capture_preimage(&placement.id) {
+                Ok(preimage) => {
+                    if let Some(transaction) = self.transaction.as_mut() {
+                        if let Err(e) = transaction.journal.write_preimage(&preimage) {
+                            self.state = EngineState::Error;
+                            return Err(EngineError::JournalWrite(e.to_string()));
+                        }
+                    }
+                    self.preimages.insert(placement.id.clone(), preimage);
+                    captured_now += 1;
+                }
+                Err(outcome) => {
+                    not_attempted.push(placement.id.clone());
+                    self.outcomes.insert(placement.id.clone(), outcome);
                 }
             }
-            let durable = transaction.journal.durable().is_ok();
+        }
+
+        // 3. The durability barrier. Without it the preimages are only in the page
+        //    cache and a crash could lose them after the windows moved.
+        if let Some(transaction) = self.transaction.as_mut() {
+            if let Err(e) = transaction.journal.durable() {
+                self.state = EngineState::Error;
+                return Err(EngineError::JournalWrite(e.to_string()));
+            }
+        }
+        let t_preimage = t1.elapsed().as_millis();
+
+        // Nothing captured at all: no window may be written, so close the journal
+        // we may have just created and report honestly.
+        if self.preimages.is_empty() {
+            if started_here {
+                if let Some(transaction) = self.transaction.take() {
+                    let _ = transaction.journal.close_and_remove();
+                }
+                self.state = EngineState::Idle;
+            }
+            return Ok(MigrationReport {
+                transaction: uuid::Uuid::nil(),
+                applied: Vec::new(),
+                outcomes: self.outcomes.clone(),
+                skipped: preview.skipped,
+                unplaced,
+                unchanged,
+                not_attempted,
+                cascaded: preview.plan.cascaded,
+                refused: Vec::new(),
+            });
+        }
+
+        // 4. Commit only prepared windows.
+        let prepared: Vec<unfy_layout::Placement> = placements
+            .into_iter()
+            .filter(|p| self.preimages.contains_key(&p.id))
+            .collect();
+
+        let mut applied = Vec::new();
+        let mut settling: Vec<(WindowId, WindowPlan)> = Vec::new();
+
+        const BATCH: usize = 16;
+        let mut next = 0usize;
+        while next < prepared.len() {
+            let end = (next + BATCH).min(prepared.len());
+            let batch = &prepared[next..end];
+
+            let mut wrote_all = true;
+            if let Some(transaction) = self.transaction.as_mut() {
+                for placement in batch {
+                    let mode = self
+                        .preimages
+                        .get(&placement.id)
+                        .map(|p| p.mode)
+                        .unwrap_or(WindowMode::Normal);
+                    if transaction
+                        .journal
+                        .write_intent(&placement.id, placement.rect, mode)
+                        .is_err()
+                    {
+                        wrote_all = false;
+                        break;
+                    }
+                }
+            }
+            let durable = self
+                .transaction
+                .as_mut()
+                .map(|t| t.journal.durable().is_ok())
+                .unwrap_or(false);
             if !wrote_all || !durable {
-                break;
+                self.state = EngineState::Error;
+                return Err(EngineError::JournalWrite(
+                    "could not persist the move intent; no further windows were touched".to_string(),
+                ));
             }
 
-            for placement in &placements[next..end] {
+            for placement in batch {
+                let mode = self
+                    .preimages
+                    .get(&placement.id)
+                    .map(|p| p.mode)
+                    .unwrap_or(WindowMode::Normal);
                 let plan = WindowPlan {
                     visible_rect: placement.rect,
-                    mode: WindowMode::Normal,
+                    mode,
                 };
-
-                // First pass: submit and read back, never sleep. Diverging windows are
-                // retried after the whole plan has been submitted, so one slow
-                // application cannot serialise a hundred windows behind it.
                 let outcome = self.apply_once(&placement.id, &plan);
                 if outcome == WindowOutcome::Unknown {
                     settling.push((placement.id.clone(), plan));
                 }
-
                 let observed = self.backend.read_back(&placement.id).ok();
-
-                let record = AppliedResult {
-                    id: placement.id.clone(),
-                    outcome,
-                    observed: observed.map(|o| ObservedRect {
-                        visible_rect: o.visible_rect,
-                        mode: o.mode,
-                    }),
-                };
-                if let Some(transaction) = self.transaction.as_mut() {
-                    let _ = transaction.journal.write_result(&record);
-                    if let Some(observed) = observed {
-                        transaction
-                            .last_applied
-                            .insert(placement.id.clone(), observed);
-                    }
+                if let Err(e) = self.record_result(&placement.id, outcome, observed) {
+                    self.state = EngineState::Error;
+                    return Err(e);
                 }
-                self.outcomes.insert(placement.id.clone(), outcome);
                 if let Some(progress) = self.config.on_progress.as_ref() {
-                    progress(self.outcomes.len(), placements.len());
+                    progress(self.outcomes.len(), prepared.len());
                 }
                 if outcome == WindowOutcome::Applied {
                     applied.push(placement.id.clone());
                 }
             }
-
             next = end;
         }
 
         let t_apply = t1.elapsed().as_millis().saturating_sub(t_preimage);
 
-        if let Some(transaction) = self.transaction.as_mut() {
-            if transaction.journal.durable().is_err() {
-                tracing::warn!("could not flush first-pass results to disk");
+        // 5. One retry pass for windows that had not settled.
+        for (id, plan) in settling {
+            let outcome = self.apply_with_retry(&id, &plan);
+            let observed = self.backend.read_back(&id).ok();
+            if let Err(e) = self.record_result(&id, outcome, observed) {
+                self.state = EngineState::Error;
+                return Err(e);
+            }
+            if outcome == WindowOutcome::Applied && !applied.contains(&id) {
+                applied.push(id.clone());
             }
         }
 
@@ -944,60 +926,15 @@ impl<B: Backend> Engine<B> {
             enumerate_and_plan_ms = t_preview,
             preimage_ms = t_preimage,
             apply_ms = t_apply,
-            "migration phase timings"
+            captured_now,
+            "gather phase timings"
         );
-
-        // 3. Retry pass. Only diverging windows pay the settle delay, and the
-        //    first retry is immediate: an application that simply had not pumped
-        //    its queue yet usually lands correctly on the second request, so
-        //    sleeping before it would waste the budget for no benefit.
-        for (id, plan) in settling {
-            let outcome = self.apply_with_retry(&id, &plan);
-            let observed = self.backend.read_back(&id).ok();
-            let record = AppliedResult {
-                id: id.clone(),
-                outcome,
-                observed: observed.map(|o| ObservedRect {
-                    visible_rect: o.visible_rect,
-                    mode: o.mode,
-                }),
-            };
-            if let Some(transaction) = self.transaction.as_mut() {
-                let _ = transaction.journal.write_result(&record);
-                if let Some(observed) = observed {
-                    transaction.last_applied.insert(id.clone(), observed);
-                }
-            }
-            if outcome == WindowOutcome::Applied && !applied.contains(&id) {
-                applied.push(id.clone());
-            }
-            self.outcomes.insert(id, outcome);
-        }
-
-        if let Some(transaction) = self.transaction.as_mut() {
-            if transaction.journal.durable().is_err() {
-                tracing::warn!("could not flush retry results to disk");
-            }
-        }
 
         self.state = if applied.is_empty() {
             EngineState::Degraded
         } else {
             EngineState::Active
         };
-        tracing::info!(
-            transaction = %transaction_id,
-            applied = applied.len(),
-            refused = self
-                .outcomes
-                .values()
-                .filter(|o| matches!(o, WindowOutcome::Rejected | WindowOutcome::Unknown))
-                .count(),
-            skipped = preview.skipped.len(),
-            cascaded = preview.plan.cascaded,
-            state = ?self.state,
-            "migration finished"
-        );
 
         let refused = self
             .outcomes
@@ -1011,27 +948,110 @@ impl<B: Backend> Engine<B> {
             })
             .collect();
 
+        tracing::info!(
+            transaction = %self.transaction.as_ref().map(|t| t.id).unwrap_or_default(),
+            applied = applied.len(),
+            unchanged,
+            not_attempted = not_attempted.len(),
+            skipped = preview.skipped.len(),
+            state = ?self.state,
+            "gather finished"
+        );
+
         Ok(MigrationReport {
-            transaction: transaction_id,
+            transaction: self
+                .transaction
+                .as_ref()
+                .map(|t| t.id)
+                .unwrap_or(uuid::Uuid::nil()),
             applied,
             outcomes: self.outcomes.clone(),
             skipped: preview.skipped,
-            unplaced,
+            unplaced: std::mem::take(&mut unplaced),
+            unchanged,
+            not_attempted,
             cascaded: preview.plan.cascaded,
             refused,
         })
     }
 
-    /// Submit one window and read it back once.
-    ///
-    /// This is the *first* pass: it never sleeps, so a hundred windows cost one
-    /// round of platform calls rather than a worst-case wait per window. Windows
-    /// that have not settled are collected and retried afterwards by
-    /// [`Self::apply_with_retry`], which is where the settle delay is paid.
+    /// Re-read one window and build the preimage the journal must hold before any
+    /// write. `Err` carries the outcome to report for a window that cannot be
+    /// snapshotted; such a window must receive zero platform writes.
+    fn capture_preimage(&self, id: &WindowId) -> Result<Preimage, WindowOutcome> {
+        let observed = match self.backend.read_back(id) {
+            Ok(observed) => observed,
+            Err(PlatformError::WindowGone) => return Err(WindowOutcome::Gone),
+            Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
+                return Err(WindowOutcome::Skipped)
+            }
+            Err(_) => return Err(WindowOutcome::Unknown),
+        };
+
+        let windows = self
+            .backend
+            .enumerate()
+            .map_err(|_| WindowOutcome::Unknown)?;
+        let snapshot = windows
+            .into_iter()
+            .find(|w| w.id == *id)
+            .ok_or(WindowOutcome::Gone)?;
+
+        let displays = self
+            .backend
+            .topology()
+            .map_err(|_| WindowOutcome::Unknown)?;
+        let display = displays
+            .iter()
+            .max_by_key(|d| d.bounds.intersection_area(&observed.visible_rect))
+            .or_else(|| displays.iter().find(|d| d.key == snapshot.display))
+            .ok_or(WindowOutcome::Unknown)?;
+
+        Ok(Preimage {
+            id: snapshot.id.clone(),
+            display_native_id: display.key.native_id.clone(),
+            display_quality: display.key.quality,
+            display_work_area: display.work_area,
+            display_scale: display.scale,
+            visible_rect: observed.visible_rect,
+            outer_rect: snapshot.outer_rect,
+            mode: observed.mode,
+            topmost: snapshot.topmost,
+            native_placement: snapshot.native_placement.clone(),
+        })
+    }
+
+    /// Persist one result and update the last-write record the restore path uses
+    /// to distinguish a user move from our own.
+    fn record_result(
+        &mut self,
+        id: &WindowId,
+        outcome: WindowOutcome,
+        observed: Option<ObservedWindow>,
+    ) -> Result<(), EngineError> {
+        let record = AppliedResult {
+            id: id.clone(),
+            outcome,
+            observed: observed.map(|o| ObservedRect {
+                visible_rect: o.visible_rect,
+                mode: o.mode,
+            }),
+        };
+        if let Some(transaction) = self.transaction.as_mut() {
+            transaction
+                .journal
+                .write_result(&record)
+                .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
+            if let Some(observed) = observed {
+                transaction.last_applied.insert(id.clone(), observed);
+            }
+        }
+        self.outcomes.insert(id.clone(), outcome);
+        Ok(())
+    }
+
+    /// Submit one window and read it back once, without sleeping.
     fn apply_once(&self, id: &WindowId, plan: &WindowPlan) -> WindowOutcome {
-        // Async submission: do not block on the target application pumping its
-        // queue. The read-back below still verifies the result, and diverging
-        // windows are retried synchronously afterwards.
         match self.backend.apply_async(id, plan) {
             Ok(()) => {}
             Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
@@ -1043,15 +1063,9 @@ impl<B: Backend> Engine<B> {
 
         match self.backend.read_back(id) {
             Ok(observed) => {
-                if within_tolerance(
-                    observed.visible_rect,
-                    plan.visible_rect,
-                    self.config.tolerance_px,
-                ) {
+                if matches_plan(&observed, plan, self.config.tolerance_px) {
                     WindowOutcome::Applied
                 } else {
-                    // Diverged, but not yet a failure: the retry pass gets a
-                    // chance once every other window has been submitted.
                     WindowOutcome::Unknown
                 }
             }
@@ -1061,15 +1075,6 @@ impl<B: Backend> Engine<B> {
     }
 
     /// Put a rejected window back to the size it had before we touched it.
-    ///
-    /// A window that refuses the position often accepts the size: clash-verge pins
-    /// itself to the corner of the screen while still honouring `SetWindowPos`'s
-    /// dimensions, so a failed gather left it smaller or larger than the user had
-    /// it. A move we could not complete must not leave a visible change behind -
-    /// "it did not work" should look like nothing happened.
-    ///
-    /// Best effort: a window that refuses both is left alone, and the journal still
-    /// holds the original rectangle for the restore path.
     fn revert_size(&self, id: &WindowId) {
         let Some(preimage) = self.preimages.get(id) else {
             return;
@@ -1080,22 +1085,17 @@ impl<B: Backend> Engine<B> {
         if same_geometry(&observed.visible_rect, &preimage.visible_rect) {
             return;
         }
-        let mut plan = WindowPlan {
-            visible_rect: preimage.visible_rect,
+        let plan = WindowPlan {
+            visible_rect: Rect::new(
+                observed.visible_rect.left,
+                observed.visible_rect.top,
+                observed.visible_rect.left + preimage.visible_rect.width(),
+                observed.visible_rect.top + preimage.visible_rect.height(),
+            ),
             mode: preimage.mode,
         };
-        // Keep where it actually is: only the size is being corrected, and asking
-        // for the old position again is the move that already failed.
-        plan.visible_rect = Rect::new(
-            observed.visible_rect.left,
-            observed.visible_rect.top,
-            observed.visible_rect.left + preimage.visible_rect.width(),
-            observed.visible_rect.top + preimage.visible_rect.height(),
-        );
         if self.backend.apply(id, &plan).is_err() {
             tracing::debug!(window = ?id, "could not restore a rejected window's size");
-        } else {
-            tracing::info!(window = ?id, "restored size of a window that refused to move");
         }
     }
 
@@ -1126,20 +1126,12 @@ impl<B: Backend> Engine<B> {
 
             match self.backend.read_back(id) {
                 Ok(observed) => {
-                    if within_tolerance(
-                        observed.visible_rect,
-                        plan.visible_rect,
-                        self.config.tolerance_px,
-                    ) {
+                    if matches_plan(&observed, plan, self.config.tolerance_px) {
                         return WindowOutcome::Applied;
                     }
                     if attempt == self.config.max_attempts {
                         return WindowOutcome::Rejected;
                     }
-                    // Let a self-correcting application settle rather than racing
-                    // it; this is the only place the engine sleeps, and the first
-                    // retry skips it because most divergences are just a slow
-                    // message pump.
                     if attempt > 1 {
                         std::thread::sleep(std::time::Duration::from_millis(
                             self.config.retry_delay_ms,
@@ -1168,51 +1160,26 @@ impl<B: Backend> Engine<B> {
             .any(|rule| rule.eq_ignore_ascii_case(&window.app_name))
     }
 
-    fn display_of(&self, window: &WindowSnapshot) -> Result<DisplaySnapshot, EngineError> {
-        let displays = self
-            .backend
-            .topology()
-            .map_err(|e| EngineError::Platform(e.to_string()))?;
-        displays
-            .into_iter()
-            .find(|d| d.key == window.display)
-            .or_else(|| {
-                let mut best: Option<(i64, DisplaySnapshot)> = None;
-                for d in self.backend.topology().unwrap_or_default().into_iter() {
-                    let area = d.bounds.intersection_area(&window.visible_rect);
-                    if best.as_ref().is_none_or(|(b, _)| area > *b) {
-                        best = Some((area, d));
-                    }
-                }
-                best.map(|(_, d)| d)
-            })
-            .ok_or(EngineError::TargetDisplayMissing)
-    }
-
     /// Restore every window captured by the current transaction.
     ///
-    /// Windows the user moved after we placed them are left alone; the outcome is
-    /// `KeptUserChange`. Windows whose original display is gone are clamped into
-    /// a visible work area and reported as `FallbackVisible`.
+    /// Windows the user moved or resized after we placed them are left alone; the
+    /// outcome is `KeptUserChange`. Windows whose original display is gone are
+    /// clamped into a visible work area and reported as `FallbackVisible`, while
+    /// keeping their original position on record.
     pub fn restore(&mut self) -> Result<RestoreReport, EngineError> {
         if self.state == EngineState::Idle && self.transaction.is_none() {
             return Ok(RestoreReport {
                 transaction: None,
                 outcomes: HashMap::new(),
                 pending: Vec::new(),
+                awaiting_original: Vec::new(),
             });
         }
         if self.state == EngineState::Migrating || self.state == EngineState::Planning {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
 
-        // The user's restore delay is deliberately *not* applied here. Sleeping
-        // inside this method blocks the engine mutex, which froze status polling
-        // and the tray for the whole delay (up to 300 s). The desktop layer owns
-        // the wait and can cancel it when a newer request arrives; see
-        // `apps/desktop/src-tauri/src/schedule.rs`.
         self.state = EngineState::Restoring;
-        self.paused = false;
 
         let Some(transaction) = self.transaction.as_ref() else {
             self.state = EngineState::Idle;
@@ -1220,6 +1187,7 @@ impl<B: Backend> Engine<B> {
                 transaction: None,
                 outcomes: HashMap::new(),
                 pending: Vec::new(),
+                awaiting_original: Vec::new(),
             });
         };
         let transaction_id = transaction.id;
@@ -1227,62 +1195,81 @@ impl<B: Backend> Engine<B> {
         let displays = self
             .backend
             .topology()
-            .map_err(|e| EngineError::Platform(e.to_string()))?;
+            .map_err(|e| {
+                self.state = EngineState::Degraded;
+                EngineError::Platform(e.to_string())
+            })?;
 
-        let preimages: Vec<Preimage> = self.preimages.values().cloned().collect();
+        let preimages: Vec<Preimage> = self
+            .preimages
+            .iter()
+            .filter(|(id, _)| !self.resolved.contains_key(*id))
+            .map(|(_, p)| p.clone())
+            .collect();
         let mut outcomes = HashMap::new();
         let mut pending = Vec::new();
+        let mut awaiting_original = Vec::new();
 
         for preimage in preimages {
             let outcome = self.restore_one(&preimage, &displays);
+            let observed = self.backend.read_back(&preimage.id).ok();
+            let record = AppliedResult {
+                id: preimage.id.clone(),
+                outcome,
+                observed: observed.map(|o| ObservedRect {
+                    visible_rect: o.visible_rect,
+                    mode: o.mode,
+                }),
+            };
+
+            // A failed journal write stops the pass. Continuing would move more
+            // windows without a durable record of what happened to them.
+            if let Some(transaction) = self.transaction.as_mut() {
+                if let Err(e) = transaction.journal.write_result(&record) {
+                    self.state = EngineState::Error;
+                    return Err(EngineError::JournalWrite(e.to_string()));
+                }
+                if let Some(observed) = observed {
+                    transaction.last_applied.insert(preimage.id.clone(), observed);
+                }
+            }
             outcomes.insert(preimage.id.clone(), outcome);
 
-            if let Some(transaction) = self.transaction.as_mut() {
-                let _ = transaction.journal.write_result(&AppliedResult {
-                    id: preimage.id.clone(),
-                    outcome,
-                    observed: self
-                        .backend
-                        .read_back(&preimage.id)
-                        .ok()
-                        .map(|o| ObservedRect {
-                            visible_rect: o.visible_rect,
-                            mode: o.mode,
-                        }),
-                });
-            }
-
-            if matches!(outcome, WindowOutcome::Rejected | WindowOutcome::Unknown) {
+            let settled = matches!(
+                outcome,
+                WindowOutcome::Restored
+                    | WindowOutcome::KeptUserChange
+                    | WindowOutcome::Gone
+                    | WindowOutcome::Skipped
+            );
+            if settled {
+                if let Err(e) = self.resolve(&preimage.id, outcome) {
+                    self.state = EngineState::Error;
+                    return Err(e);
+                }
+            } else if outcome == WindowOutcome::FallbackVisible {
+                awaiting_original.push(preimage.id.clone());
+            } else {
                 pending.push(preimage.id.clone());
             }
         }
 
         self.outcomes.extend(outcomes.clone());
 
-        if pending.is_empty() {
-            if let Some(transaction) = self.transaction.take() {
-                let _ = transaction.journal.close_and_remove();
-            }
-            self.preimages.clear();
+        if pending.is_empty() && awaiting_original.is_empty() {
+            self.close_transaction()?;
             self.state = EngineState::Idle;
         } else {
             self.state = EngineState::Degraded;
         }
+
         tracing::info!(
             transaction = %transaction_id,
-            restored = outcomes
-                .values()
-                .filter(|o| **o == WindowOutcome::Restored)
-                .count(),
-            kept_user_change = outcomes
-                .values()
-                .filter(|o| **o == WindowOutcome::KeptUserChange)
-                .count(),
-            fallback = outcomes
-                .values()
-                .filter(|o| **o == WindowOutcome::FallbackVisible)
-                .count(),
+            restored = outcomes.values().filter(|o| **o == WindowOutcome::Restored).count(),
+            kept_user_change = outcomes.values().filter(|o| **o == WindowOutcome::KeptUserChange).count(),
+            fallback = outcomes.values().filter(|o| **o == WindowOutcome::FallbackVisible).count(),
             pending = pending.len(),
+            awaiting_original = awaiting_original.len(),
             state = ?self.state,
             "restore finished"
         );
@@ -1291,26 +1278,72 @@ impl<B: Backend> Engine<B> {
             transaction: Some(transaction_id),
             outcomes,
             pending,
+            awaiting_original,
         })
+    }
+
+    /// Persist that one window owes nothing further, then drop its obligation from
+    /// memory. The journal record comes first: a crash between the two must not
+    /// resurrect a window that was already put back.
+    fn resolve(&mut self, id: &WindowId, outcome: WindowOutcome) -> Result<(), EngineError> {
+        if let Some(transaction) = self.transaction.as_mut() {
+            transaction
+                .journal
+                .write_resolved(id, outcome)
+                .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
+            transaction
+                .journal
+                .durable()
+                .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
+        }
+        self.resolved.insert(id.clone(), outcome);
+        Ok(())
+    }
+
+    fn close_transaction(&mut self) -> Result<(), EngineError> {
+        let Some(transaction) = self.transaction.take() else {
+            self.preimages.clear();
+            self.resolved.clear();
+            return Ok(());
+        };
+        // `close_and_remove` writes Closed and fsyncs before deleting. If the
+        // close fails the file stays and the caller must keep the obligations, so
+        // the transaction is put back rather than dropped.
+        match transaction.journal.close_and_remove() {
+            Ok(()) => {
+                self.preimages.clear();
+                self.resolved.clear();
+                Ok(())
+            }
+            Err(e) => {
+                self.state = EngineState::Error;
+                Err(EngineError::JournalWrite(e.to_string()))
+            }
+        }
     }
 
     fn restore_one(&self, preimage: &Preimage, displays: &[DisplaySnapshot]) -> WindowOutcome {
         let current = match self.backend.read_back(&preimage.id) {
             Ok(observed) => observed,
             Err(PlatformError::WindowGone) => return WindowOutcome::Gone,
+            Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
+                return WindowOutcome::Skipped
+            }
             Err(_) => return WindowOutcome::Unknown,
         };
 
-        // If the user moved the window after we placed it, keep their position.
+        // If the user changed the window after we placed it, keep their change.
+        // Both the rectangle and the mode matter: maximising a window we tiled is
+        // an external change even though the rectangle may coincide.
         if let Some(transaction) = self.transaction.as_ref() {
             if let Some(last) = transaction.last_applied.get(&preimage.id) {
-                if !within_tolerance(
+                let moved = !within_tolerance(
                     current.visible_rect,
                     last.visible_rect,
                     self.config.tolerance_px,
-                ) {
-                    // Only keep the user's position if it is reachable; an
-                    // off-screen window must still be rescued.
+                );
+                let restated = current.mode != last.mode;
+                if moved || restated {
                     let reachable = displays.iter().any(|d| {
                         current.visible_rect.reachable_in(
                             &d.work_area,
@@ -1344,9 +1377,9 @@ impl<B: Backend> Engine<B> {
                 }
             }
             _ => {
-                // Original display gone or identity too weak: put it in a
-                // visible place rather than at a coordinate that no longer
-                // exists.
+                // Original display gone or identity too weak: put it in a visible
+                // place rather than at a coordinate that no longer exists, and
+                // keep the original baseline so a later restore can finish.
                 let Some(fallback) = displays.iter().find(|d| d.primary).or(displays.first())
                 else {
                     return WindowOutcome::Unknown;
@@ -1359,6 +1392,9 @@ impl<B: Backend> Engine<B> {
                 return match self.backend.apply(&preimage.id, &plan) {
                     Ok(()) => WindowOutcome::FallbackVisible,
                     Err(PlatformError::WindowGone) => WindowOutcome::Gone,
+                    Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
+                        WindowOutcome::Skipped
+                    }
                     Err(_) => WindowOutcome::Unknown,
                 };
             }
@@ -1395,12 +1431,6 @@ impl<B: Backend> Engine<B> {
             if !window.is_migratable() {
                 continue;
             }
-            // An exclusion rule means "do not move this application's windows",
-            // without an exception for windows that are hard to reach. Rescue used
-            // to ignore it, so the one feature a user reaches for when a window
-            // misbehaves would drag around the applications they had explicitly
-            // asked it to leave alone - and the exclusions page promises the
-            // opposite.
             if self.is_excluded(&window) {
                 continue;
             }
@@ -1423,8 +1453,45 @@ impl<B: Backend> Engine<B> {
                 visible_rect: rect,
                 mode: window.mode,
             };
-            if self.backend.apply(&window.id, &plan).is_ok() {
-                rescued.push((window.id, rect));
+
+            // A rescue of a window this transaction already moved is still one of
+            // our writes. Recording it prevents the next restore from mistaking it
+            // for a user drag.
+            if self.preimages.contains_key(&window.id) {
+                if let Some(transaction) = self.transaction.as_mut() {
+                    if transaction
+                        .journal
+                        .write_intent(&window.id, rect, window.mode)
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    if transaction.journal.durable().is_err() {
+                        continue;
+                    }
+                }
+            }
+
+            match self.backend.apply(&window.id, &plan) {
+                Ok(()) => {
+                    if self.preimages.contains_key(&window.id) {
+                        if let Ok(observed) = self.backend.read_back(&window.id) {
+                            if let Some(transaction) = self.transaction.as_mut() {
+                                transaction.last_applied.insert(window.id.clone(), observed);
+                                let _ = transaction.journal.write_result(&AppliedResult {
+                                    id: window.id.clone(),
+                                    outcome: WindowOutcome::FallbackVisible,
+                                    observed: Some(ObservedRect {
+                                        visible_rect: observed.visible_rect,
+                                        mode: observed.mode,
+                                    }),
+                                });
+                            }
+                        }
+                    }
+                    rescued.push((window.id, rect));
+                }
+                Err(_) => continue,
             }
         }
         Ok(rescued)
@@ -1432,71 +1499,26 @@ impl<B: Backend> Engine<B> {
 
     /// Commit the current transaction, leaving windows where they are.
     ///
-    /// Used when the user explicitly chooses "keep this layout". The journal is
-    /// closed so the next launch does not try to restore it.
-    /// Re-plan the current set of windows onto `target`, keeping the original
-    /// preimages.
-    ///
-    /// This is what "re-gather to a different display" means to a user: the
-    /// windows are already gathered, and the target display changed (a typo, a
-    /// second remote session, a monitor re-arranged). Doing it as `restore` then
-    /// `migrate` would work but would throw away the preimages and record the
-    /// restored positions as the new home, so a later restore could land nowhere
-    /// near where the user started.
-    ///
-    /// The implementable version runs the restore first (to get the windows back
-    /// to their original rectangles), then a fresh gather. Window positions, not
-    /// the journal, are what the planner reads, so the intermediate state has to
-    /// exist. If the restore leaves windows pending, retargeting is refused:
-    /// planning on top of half-restored windows would produce a layout the user
-    /// cannot reason about.
-    pub fn retarget(&mut self, target: &DisplayKey) -> Result<RetargetReport, EngineError> {
-        if self.state.may_write() {
-            return Err(EngineError::InvalidTransition { from: self.state });
-        }
-        if self.paused {
-            return Err(EngineError::Paused);
-        }
-
-        // Idle with no transaction: nothing to restore, so this is a plain
-        // gather.
-        if self.transaction.is_none() {
-            let migration = self.migrate(target)?;
-            return Ok(RetargetReport {
-                restored: 0,
-                migration,
-            });
-        }
-
-        let restore = self.restore()?;
-        if !restore.is_complete() {
-            // Leave the engine in whatever state restore produced (Degraded).
-            // The caller reports the pending count so the UI can offer "try
-            // again" instead of pretending the retarget finished.
-            return Err(EngineError::RestoreIncomplete {
-                pending: restore.pending.len(),
-            });
-        }
-
-        let migration = self.migrate(target)?;
-        Ok(RetargetReport {
-            restored: restore
-                .outcomes
-                .values()
-                .filter(|o| **o == WindowOutcome::Restored)
-                .count(),
-            migration,
-        })
-    }
-
+    /// Used when the user explicitly chooses "keep this layout". Every window is
+    /// resolved in the journal *before* the file is closed, so a crash mid-way
+    /// cannot reopen windows the user had accepted.
     pub fn keep_current_layout(&mut self) -> Result<(), EngineError> {
-        if let Some(transaction) = self.transaction.take() {
-            transaction
-                .journal
-                .close_and_remove()
-                .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
+        if self.transaction.is_none() {
+            self.preimages.clear();
+            self.resolved.clear();
+            self.state = EngineState::Idle;
+            return Ok(());
         }
-        self.preimages.clear();
+        let ids: Vec<WindowId> = self
+            .preimages
+            .keys()
+            .filter(|id| !self.resolved.contains_key(*id))
+            .cloned()
+            .collect();
+        for id in ids {
+            self.resolve(&id, WindowOutcome::KeptUserChange)?;
+        }
+        self.close_transaction()?;
         self.state = EngineState::Idle;
         Ok(())
     }
@@ -1507,6 +1529,16 @@ fn within_tolerance(a: Rect, b: Rect, tolerance: i32) -> bool {
         && (a.top - b.top).abs() <= tolerance
         && (a.width() - b.width()).abs() <= tolerance
         && (a.height() - b.height()).abs() <= tolerance
+}
+
+/// Whether an observation satisfies a plan.
+///
+/// The mode is part of the contract: a window that ends up maximized after being
+/// asked to tile covers every other window on the target, so reporting success on
+/// the rectangle alone would be a lie the user can see.
+fn matches_plan(observed: &ObservedWindow, plan: &WindowPlan, tolerance: i32) -> bool {
+    within_tolerance(observed.visible_rect, plan.visible_rect, tolerance)
+        && observed.mode == plan.mode
 }
 
 fn same_geometry(a: &Rect, b: &Rect) -> bool {
@@ -1532,7 +1564,7 @@ impl PendingWork {
     pub fn from_recovered(tx: &RecoveredTransaction) -> Self {
         Self {
             transaction: tx.transaction,
-            windows: tx.preimages.len(),
+            windows: tx.touched_windows().len(),
             may_have_moved: tx.may_have_moved_windows() || tx.has_unresolved_intent(),
             truncated_bytes: tx.truncated_bytes,
         }

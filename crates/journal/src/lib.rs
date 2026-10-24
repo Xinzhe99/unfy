@@ -93,7 +93,7 @@ pub type Result<T, E = JournalError> = std::result::Result<T, E>;
 
 /// Current schema version. Bumped only for changes that old readers cannot
 /// interpret; the recovery path must keep reading every version it ever wrote.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A single migration transaction on disk.
 #[derive(Debug)]
@@ -125,6 +125,9 @@ pub struct RecoveredTransaction {
     pub preimages: Vec<Preimage>,
     pub intents: Vec<RecoveredIntent>,
     pub results: Vec<AppliedResult>,
+    /// Windows whose recovery obligation is finished, with the outcome that
+    /// finished it. A later run must not handle these again.
+    pub resolved: Vec<(WindowId, unfy_domain::WindowOutcome)>,
     /// Bytes dropped from the tail because their CRC did not match.
     pub truncated_bytes: u64,
 }
@@ -170,9 +173,33 @@ impl RecoveredTransaction {
             .any(|intent| !self.results.iter().any(|r| r.id == intent.id))
     }
 
-    /// Every window that needs an outcome: anything with a preimage.
+    /// Every window that still needs an outcome: preimages minus resolutions.
     pub fn touched_windows(&self) -> Vec<WindowId> {
-        self.preimages.iter().map(|p| p.id.clone()).collect()
+        self.preimages
+            .iter()
+            .map(|p| p.id.clone())
+            .filter(|id| self.is_unresolved(id))
+            .collect()
+    }
+
+    /// Whether this window still owes the user a restore.
+    pub fn is_unresolved(&self, id: &WindowId) -> bool {
+        !self.resolved.iter().any(|(resolved, _)| resolved == id)
+    }
+
+    /// The resolution recorded for a window, if any.
+    pub fn resolution(&self, id: &WindowId) -> Option<unfy_domain::WindowOutcome> {
+        self.resolved
+            .iter()
+            .find(|(resolved, _)| resolved == id)
+            .map(|(_, outcome)| *outcome)
+    }
+
+    /// Whether the transaction still has work, considering resolutions.
+    pub fn has_open_obligation(&self) -> bool {
+        self.preimages
+            .iter()
+            .any(|p| self.is_unresolved(&p.id))
     }
 }
 
@@ -333,6 +360,23 @@ impl Journal {
         })
     }
 
+    /// Record that a window no longer owes a restore.
+    ///
+    /// Must be durable before the in-memory preimage is dropped: a crash after
+    /// the close but before this record would otherwise reopen a window that was
+    /// already put back.
+    pub fn write_resolved(
+        &mut self,
+        id: &WindowId,
+        resolution: unfy_domain::WindowOutcome,
+    ) -> Result<()> {
+        self.append(&Record::Resolved {
+            transaction: self.transaction,
+            id: id.clone(),
+            resolution,
+        })
+    }
+
     /// Close the transaction. After this returns, recovery will treat the file
     /// as clean and the caller may delete it.
     pub fn close(mut self) -> Result<()> {
@@ -382,38 +426,164 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
     let mut preimages = Vec::new();
     let mut intents = Vec::new();
     let mut results = Vec::new();
+    let mut resolved = Vec::new();
     let mut closed = false;
     let mut truncated = 0u64;
+    let mut saw_begin = false;
 
     while offset < bytes.len() {
         match Record::decode(&bytes[offset..]) {
             Ok(Some((record, consumed))) => {
+                // A record for a different transaction inside this file means the
+                // file was overwritten or concatenated. Treating it as "just
+                // another record" would silently merge two recoveries and could
+                // write one transaction's rectangles onto another's windows.
+                if closed {
+                    return Err(JournalError::Corrupt {
+                        offset: offset as u64,
+                        reason: "record after Closed".to_string(),
+                    });
+                }
+                if saw_begin && record.transaction() != transaction.unwrap_or_default() {
+                    return Err(JournalError::Corrupt {
+                        offset: offset as u64,
+                        reason: "record belongs to a different transaction".to_string(),
+                    });
+                }
                 match record {
                     Record::Begin {
                         schema_version: v,
                         transaction: t,
                         ..
                     } => {
+                        if saw_begin {
+                            // Two Begin records cannot belong to one transaction.
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "duplicate Begin record".to_string(),
+                            });
+                        }
+                        saw_begin = true;
                         transaction = Some(t);
                         schema_version = v;
                     }
-                    Record::Preimage { preimage, .. } => preimages.push(preimage),
-                    Record::Result { result, .. } => results.push(result),
-                    Record::Closed { .. } => closed = true,
+                    Record::Preimage {
+                        preimage,
+                        transaction: t,
+                    } => {
+                        if !saw_begin {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Preimage before Begin".to_string(),
+                            });
+                        }
+                        let _ = t;
+                        // Duplicate preimages are only legal when identical: a
+                        // second, different preimage would overwrite the position
+                        // the user actually started from.
+                        if let Some(existing) = preimages
+                            .iter()
+                            .find(|p: &&Preimage| p.id == preimage.id)
+                        {
+                            if existing != &preimage {
+                                return Err(JournalError::Corrupt {
+                                    offset: offset as u64,
+                                    reason: "conflicting duplicate preimage".to_string(),
+                                });
+                            }
+                        } else {
+                            preimages.push(preimage);
+                        }
+                    }
                     Record::Intent {
-                        id, target, mode, ..
-                    } => intents.push(RecoveredIntent { id, target, mode }),
+                        id,
+                        target,
+                        mode,
+                        transaction: _,
+                    } => {
+                        if !saw_begin {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Intent before Begin".to_string(),
+                            });
+                        }
+                        if !preimages.iter().any(|p| p.id == id) {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Intent for a window with no preimage".to_string(),
+                            });
+                        }
+                        intents.push(RecoveredIntent { id, target, mode });
+                    }
+                    Record::Result {
+                        result,
+                        transaction: _,
+                    } => {
+                        if !saw_begin {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Result before Begin".to_string(),
+                            });
+                        }
+                        results.push(result);
+                    }
+                    Record::Resolved {
+                        id,
+                        resolution,
+                        transaction: _,
+                    } => {
+                        if !saw_begin {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Resolved before Begin".to_string(),
+                            });
+                        }
+                        if !preimages.iter().any(|p| p.id == id) {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Resolved for a window with no preimage".to_string(),
+                            });
+                        }
+                        resolved.push((id, resolution));
+                    }
+                    Record::Closed { .. } => {
+                        if !saw_begin {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Closed before Begin".to_string(),
+                            });
+                        }
+                        if closed {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "duplicate Closed record".to_string(),
+                            });
+                        }
+                        closed = true;
+                    }
                 }
                 offset += consumed;
             }
             Ok(None) => {
-                // Partial record at the tail: a write was interrupted.
+                // The buffer ends inside a record: an interrupted append. That is
+                // only a legal shape at the *tail*; everything before it parsed.
                 truncated = (bytes.len() - offset) as u64;
                 break;
             }
             Err(reason) => {
+                // A record that will not decode is either a torn append or a file
+                // that was damaged after the fact. They are distinguishable by
+                // position: a tail after a valid Begin and before Closed is the
+                // normal shape of an interrupted write, while anything before the
+                // first valid record - or after a Closed - cannot be explained by
+                // an interrupted append and must not be silently dropped.
+                if !saw_begin || closed {
+                    return Err(JournalError::Corrupt {
+                        offset: offset as u64,
+                        reason,
+                    });
+                }
                 truncated = (bytes.len() - offset) as u64;
-                let _ = reason;
                 break;
             }
         }
@@ -424,17 +594,38 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
         std::fs::write(&sidecar, &bytes[offset..])?;
     }
 
-    match transaction {
-        Some(transaction) if !closed => Ok(Recovered::Unfinished(RecoveredTransaction {
-            transaction,
-            schema_version,
-            preimages,
-            intents,
-            results,
-            truncated_bytes: truncated,
-        })),
-        _ => Ok(Recovered::Clean),
+    let Some(transaction) = transaction else {
+        // A file with no Begin is not a journal this version can interpret. It may
+        // be a partially created file (harmless) or garbage; either way it cannot
+        // describe a recovery obligation.
+        if bytes.is_empty() {
+            return Ok(Recovered::Clean);
+        }
+        return Err(JournalError::Corrupt {
+            offset: 0,
+            reason: "no Begin record".to_string(),
+        });
+    };
+
+    if closed && !resolved.is_empty() {
+        // A clean close means every obligation was settled before the close; the
+        // records are kept only as history.
+        return Ok(Recovered::Clean);
     }
+
+    if closed {
+        return Ok(Recovered::Clean);
+    }
+
+    Ok(Recovered::Unfinished(RecoveredTransaction {
+        transaction,
+        schema_version,
+        preimages,
+        intents,
+        results,
+        resolved,
+        truncated_bytes: truncated,
+    }))
 }
 
 fn now_unix_ms() -> u64 {

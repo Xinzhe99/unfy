@@ -144,14 +144,7 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
         }
     };
 
-    let mut observation = unfy_detect::platform::observe(&topology);
-    // The manual marker lives in memory, not in the OS: the detector's platform
-    // probe always reports `false` for it. Merging it here means a user-marked
-    // session keeps activating regardless of what the probes see, and ending it is
-    // also a user action (clearing the flag).
-    observation.manual_marker = state
-        .manual_remote
-        .load(std::sync::atomic::Ordering::SeqCst);
+    let observation = unfy_detect::platform::observe(&topology);
 
     // Log only when the *observation* changes, not on every poll: two lines a
     // second would bury every other event within minutes. The interesting moment
@@ -180,6 +173,28 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
         };
         tracker.observe(&observation)
     };
+
+    // Publish what is visible, including evidence that does not authorise an
+    // automatic action. Without this the overview could only say "nothing
+    // detected" while a remote tool was plainly running.
+    match tracker_verdict(&state, &observation) {
+        Some(verdict) => {
+            let _ = app.emit(
+                "unfy://remote",
+                serde_json::json!({
+                    "active": matches!(verdict, unfy_detect::Verdict::Connected(_)),
+                    "candidate": matches!(verdict, unfy_detect::Verdict::Candidate(_)),
+                    "evidence": match &verdict {
+                        unfy_detect::Verdict::Connected(e) | unfy_detect::Verdict::Candidate(e) => {
+                            Some(crate::message::evidence_message(e))
+                        }
+                        _ => None,
+                    },
+                }),
+            );
+        }
+        None => {}
+    }
 
     match transition {
         Transition::None => {}
@@ -291,18 +306,15 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
 
             match session_end(settings.auto_restore, paused) {
                 SessionEnd::Restore => {}
-                SessionEnd::Defer => {
-                    state
-                        .deferred_restore
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    tracing::info!("remote session ended while paused; restore deferred");
-                    return;
-                }
-                SessionEnd::Ignore => {
+                SessionEnd::Retain => {
+                    // The transaction is kept, and the UI keeps offering the manual
+                    // restore. Nothing is remembered "for later": the detector fires
+                    // the end of a session once, so a flag consumed by an unrelated
+                    // resume was a hidden debt the user never asked for.
                     tracing::info!(
                         auto_restore = settings.auto_restore,
                         paused,
-                        "remote session ended; not restoring"
+                        "remote session ended; windows stay gathered and the manual restore stays available"
                     );
                     return;
                 }
@@ -357,6 +369,15 @@ pub fn tick<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// The tracker's view of the observation just taken, if it can be read.
+fn tracker_verdict(
+    state: &AppState,
+    observation: &unfy_detect::Observation,
+) -> Option<unfy_detect::Verdict> {
+    let tracker = state.detector.lock().ok()?;
+    Some(tracker.verdict(observation))
+}
+
 fn current_sensitivity<R: Runtime>(app: &AppHandle<R>) -> Sensitivity {
     let Some(state) = app.try_state::<AppState>() else {
         return Sensitivity::Off;
@@ -403,9 +424,10 @@ fn gather<R: Runtime>(app: &AppHandle<R>, evidence: &Evidence) -> Result<usize, 
         // (`humanError`). A Chinese sentence here reached the user verbatim.
         .ok_or_else(|| "no_displays".to_string())?;
 
-    // `retarget` handles the case where a layout is already active: restoring
-    // first keeps the original preimages, so an auto-gather triggered by a second
-    // remote tool cannot redefine where the windows "came from".
+    // A session that starts while a layout is already in effect must not
+    // redefine where the windows came from. `retarget` re-plans onto the new
+    // target and keeps every first preimage, which is exactly the behaviour
+    // needed for "the second remote tool sees a different screen".
     match engine.retarget(&target) {
         Ok(retarget) => {
             let applied = retarget.migration.applied_count();
@@ -428,13 +450,9 @@ const AUTO_GATHER_COOLDOWN: std::time::Duration = std::time::Duration::from_secs
 /// What the end of a session owes the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionEnd {
-    /// Automatic restore is off: the layout stays until the user restores it.
-    Ignore,
-    /// Automation is paused, so the cleanup is remembered and run on resume.
-    ///
-    /// The detector reports the end of a session exactly once, so forgetting this
-    /// would leave the windows gathered with nothing left to remind anyone.
-    Defer,
+    /// Automatic restore is off, or automation is paused: the layout stays until
+    /// the user restores it by hand. The recovery record is never discarded.
+    Retain,
     /// Put the windows back now.
     Restore,
 }
@@ -519,11 +537,8 @@ struct RestoreSummary {
 
 /// Decide what the end of a session should do.
 fn session_end(auto_restore: bool, paused: bool) -> SessionEnd {
-    if !auto_restore {
-        return SessionEnd::Ignore;
-    }
-    if paused {
-        return SessionEnd::Defer;
+    if !auto_restore || paused {
+        return SessionEnd::Retain;
     }
     SessionEnd::Restore
 }
@@ -671,12 +686,11 @@ mod tests {
     fn the_end_of_a_session_restores_only_when_asked() {
         assert_eq!(session_end(true, false), SessionEnd::Restore);
         // Off means the layout stays; the user restores it by hand.
-        assert_eq!(session_end(false, false), SessionEnd::Ignore);
-        // Paused is not off: the cleanup is owed and must be remembered.
-        assert_eq!(session_end(true, true), SessionEnd::Defer);
-        // A paused engine with automatic restore off owes nothing, so nothing is
-        // remembered.
-        assert_eq!(session_end(false, true), SessionEnd::Ignore);
+        assert_eq!(session_end(false, false), SessionEnd::Retain);
+        // Paused keeps the layout too. The recovery record is retained, and the
+        // manual restore stays offered; nothing is deferred to an unrelated resume.
+        assert_eq!(session_end(true, true), SessionEnd::Retain);
+        assert_eq!(session_end(false, true), SessionEnd::Retain);
     }
 
     #[test]

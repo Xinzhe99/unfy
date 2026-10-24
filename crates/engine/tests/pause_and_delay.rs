@@ -72,10 +72,19 @@ fn pause_keeps_the_layout_and_blocks_new_gathers() {
 }
 
 #[test]
-fn pause_without_a_transaction_is_a_noop() {
+fn pause_without_a_transaction_still_pauses_automation() {
+    // Pause is an automation policy, not a property of a transaction. It used to
+    // be a no-op without one, so the UI said "paused" while the engine kept
+    // gathering on the next automatic trigger.
     let mut engine = Engine::new(backend(), config("pause-idle"));
     engine.pause().expect("pause on idle");
-    // Nothing was captured, so there is no state to protect.
+    assert!(engine.is_paused(), "pause must survive without a transaction");
+    // And it must actually block a gather, which is the effect the user asked for.
+    assert!(matches!(
+        engine.migrate(&target()),
+        Err(unfy_domain::EngineError::Paused)
+    ));
+    engine.resume().expect("resume");
     assert!(!engine.is_paused());
 }
 

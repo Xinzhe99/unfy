@@ -436,20 +436,6 @@ export function GeneralPage({
 
       <Card title={t("隐私")}>
         <SettingRow
-          label={t("使用统计")}
-          hint={t("当前版本没有任何上传代码，这个开关只记录你的选择。将来若实现，只发送功能使用次数与错误类型，不含窗口标题与屏幕内容")}
-        >
-          <Switch
-            checked={settings.telemetry}
-            disabled={busy}
-            label={t("使用统计")}
-            onChange={(telemetry) => onSave({ telemetry })}
-          />
-        </SettingRow>
-
-        <div className="border-t border-[var(--color-border)]" />
-
-        <SettingRow
           label={t("活动历史")}
           hint={t("记录了每次整理、恢复与救援的时间与窗口数量。清除后无法恢复，其他设置不受影响")}
         >

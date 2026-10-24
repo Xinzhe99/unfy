@@ -179,8 +179,6 @@ const EN: Record<string, string> = {
   "识别屏幕编号": "Show display numbers",
   "识别编号会在每块屏幕中央短暂显示数字，用来对照远程画面确认是哪一块。":
     "Shows a number briefly in the centre of each screen, so you can match it against the remote view.",
-  "标记为远程会话": "Mark as remote session",
-  "结束远程会话标记": "End remote-session marker",
   "远程会话": "Remote session",
   "读取设置文件失败，已改用默认设置。原文件保留为 settings.json.invalid，可以手工修复后重启。":
     "The settings file could not be read, so defaults are in use. The original is kept as settings.json.invalid - fix it by hand and restart to recover.",
@@ -219,8 +217,6 @@ const EN: Record<string, string> = {
   "自动恢复": "Auto restore",
   "暂停状态变更": "Pause changed",
   "没有接受位置调整的应用": "Applications that refused to move",
-  "排除": "Exclude",
-  "全部排除": "Exclude all",
   "工具": "Tools",
   "导出诊断包": "Export diagnostics",
   "查看诊断内容": "View diagnostics",
@@ -252,14 +248,11 @@ const EN: Record<string, string> = {
   "排列方式": "Arrangement",
   "等分排列，列数按窗口数量自动选择；焦点窗口放第一格。":
     "Even grid; the column count follows the number of windows, and the focused window takes the first cell.",
-  "焦点窗口占主区域，其余在侧栏排列。":
-    "The focused window takes the main area; the rest fill a side column.",
-  "保持窗口的相对位置和大小，整体搬到目标屏。":
-    "Keeps every window's relative position and size, and moves the whole arrangement onto the target screen.",
+  "保留窗口大小和最大化状态，把其他屏的窗口移过来。目标屏上已有的窗口保持原样。":
+    "Keeps each window's size and maximised state, and moves windows from the other screens onto the target. Windows already on the target stay where they are.",
   "布局方式": "Arrangement",
   "网格": "Grid",
-  "主次": "Main + side",
-  "默认": "Default",
+  "移到目标屏": "Move to target screen",
   "边距": "Margin",
   "窗口与屏幕边缘的距离": "Distance between windows and the screen edge",
   "像素": "px",
@@ -275,8 +268,8 @@ const EN: Record<string, string> = {
 
   // ---- exclusions ------------------------------------------------------
   // (duplicate removed: 排除的应用)
-  "这些应用的窗口不会在整理时被移动，也不会在恢复时被处理。":
-    "Windows of these applications are neither moved when gathering nor touched when restoring.",
+  "以后整理时跳过这些应用；已经整理的窗口仍可恢复。":
+    "These applications are skipped by future gathers; windows already gathered can still be restored.",
   "{count} 条规则": "{count} rules",
   "还没有排除任何应用。": "No applications excluded yet.",
   "移除": "Remove",
@@ -413,9 +406,6 @@ const EN: Record<string, string> = {
   "已恢复默认设置，目标显示器已保留。":
     "Defaults restored; the target display was kept.",
   "隐私": "Privacy",
-  "使用统计": "Usage statistics",
-  "当前版本没有任何上传代码，这个开关只记录你的选择。将来若实现，只发送功能使用次数与错误类型，不含窗口标题与屏幕内容":
-    "This build contains no upload code at all; the switch only records your choice. If it is ever implemented, it will send feature counts and error types only - never window titles or screen contents.",
   "语言": "Language",
   "界面语言": "Interface language",
   "跟随系统语言，可在需要时手动指定":
@@ -450,10 +440,10 @@ const EN: Record<string, string> = {
   "随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。":
     "Change this any time in Settings → Remote-session detection. Nothing moves automatically before you do.",
   "有些窗口不会被移动": "Some windows will not move",
-  "有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处。这不是失败：Unfy 会把它们的名字列出来，并给一个「排除」按钮。":
-    "Some windows do not take the new position: a few snap back on their own, others are too large for the cell. They stay where they are, and that is not a failure: Unfy lists them and offers an Exclude button.",
-  "排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。":
-    "Once excluded, they are neither moved nor counted as unsettled.",
+  "有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处，不是失败：Unfy 会列出它们的名字，你可以逐个选择「不再整理此应用」。":
+    "Some windows do not take the new position: a few snap back on their own, others are too large for the cell. They stay where they are, and that is not a failure: Unfy lists them and lets you mark an application \"Never gather this app\".",
+  "这个选择只影响以后的整理；已经整理过的窗口仍然可以恢复。":
+    "That choice only affects later gathers; windows that were already gathered can still be restored.",
   "全屏应用、最小化的窗口和系统外壳本来就会跳过。":
     "Full-screen applications, minimised windows and shell windows are skipped regardless.",
   "随时可以纠正": "You can always correct it",
@@ -509,17 +499,14 @@ const EN: Record<string, string> = {
   "没有发现越界窗口。": "No off-screen windows found.",
   "已把 {count} 个窗口移回可见区域。":
     "Moved {count} windows back into view.",
-  "已标记为远程会话。开启了自动整理的话，窗口会按设置收拢。":
-    "Marked as a remote session. If automatic gathering is on, windows will be gathered accordingly.",
-  "已结束远程会话标记。": "Remote-session marker cleared.",
   "活动历史": "Activity history",
   "记录了每次整理、恢复与救援的时间与窗口数量。清除后无法恢复，其他设置不受影响":
     "Records the time and window count of every gather, restore and rescue. Clearing it cannot be undone; no other setting is affected",
   "清除历史": "Clear history",
-  "这些窗口没有接受新的位置：有的会自己纠正，有的大到放不进格子。排除它们可以避免每次都重试。":
-    "These windows did not take the new position: some snap back on their own, others are too large for the cell. Excluding them stops the retry.",
+  "这些窗口没有接受新的位置：有的会自己纠正，有的大到放不进格子。以后整理时跳过某个应用可以避免每次都重试；这只影响之后的整理，已经整理的窗口仍然可以恢复。":
+    "These windows did not take the new position: some snap back on their own, others are too large for the cell. Skipping an application in future gathers stops the retry; that only affects later gathers, and windows already gathered can still be restored.",
   "仍在原处：": "Still in place:",
-  "排除这些应用": "Exclude these apps",
+  "不再整理此应用": "Never gather this app",
   "显示全部 {count} 条": "Show all {count}",
   "收起": "Show fewer",
   "活动历史已清除。": "Activity history cleared.",

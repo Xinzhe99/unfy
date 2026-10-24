@@ -61,7 +61,7 @@ export function ExclusionsPage({
     <>
       <Card
         title={t("排除的应用")}
-        description={t("这些应用的窗口不会在整理时被移动，也不会在恢复时被处理。")}
+        description={t("以后整理时跳过这些应用；已经整理的窗口仍可恢复。")}
         aside={
           <div className="flex items-center gap-2">
             <span className="text-[11px] tabular-nums text-[var(--color-muted)]">

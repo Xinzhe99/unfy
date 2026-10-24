@@ -228,13 +228,11 @@ fn executable_name(pid: u32) -> Option<String> {
 /// One poll: every observation the detector consumes.
 pub fn observe(displays: &[DisplaySnapshot]) -> Observation {
     Observation {
+        available: true,
         rdp_active: rdp_session(),
         virtual_displays: virtual_displays(displays),
         tools_running: remote_tools_running(),
         tools_connected: remote_tools_connected(),
-        // The OS cannot report a manual marker; the desktop layer owns that flag
-        // and overwrites this field before feeding the tracker.
-        manual_marker: false,
     }
 }
 

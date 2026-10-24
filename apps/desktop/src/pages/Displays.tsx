@@ -87,9 +87,8 @@ export function DisplaysPage({
             disabled={busy}
             onChange={(layout_mode) => onSave({ layout_mode })}
             options={[
-              { value: "default", label: t("默认") },
+              { value: "default", label: t("移到目标屏") },
               { value: "grid", label: t("网格") },
-              { value: "primary_side", label: t("主次") },
             ]}
           />
         </SettingRow>
@@ -127,9 +126,10 @@ export function DisplaysPage({
 function layoutDescription(mode: SettingsDto["layout_mode"]): string {
   switch (mode) {
     case "default":
-      return t("保持窗口的相对位置和大小，整体搬到目标屏。");
-    case "primary_side":
-      return t("焦点窗口占主区域，其余在侧栏排列。");
+      // The name now describes the behaviour, and the sentence adds the two facts a
+      // user cannot infer: their sizes survive, and windows already on the target
+      // are left alone rather than being pulled across.
+      return t("保留窗口大小和最大化状态，把其他屏的窗口移过来。目标屏上已有的窗口保持原样。");
     default:
       return t("等分排列，列数按窗口数量自动选择；焦点窗口放第一格。");
   }

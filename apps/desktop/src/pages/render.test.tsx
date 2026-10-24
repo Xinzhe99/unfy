@@ -83,7 +83,6 @@ const settings: SettingsDto = {
   hotkey_restore: null,
   restore_delay_secs: 0,
   auto_update: true,
-  telemetry: false,
   excluded_apps: [],
   onboarding_done: true,
   onboarding_step: 3,
@@ -228,7 +227,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -273,7 +271,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -310,7 +307,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -344,7 +340,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -375,7 +370,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -412,7 +406,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -421,8 +414,14 @@ describe("pages render", () => {
     expect(html).toContain("msedge.exe");
     expect(html).not.toContain(">notepad.exe<");
     expect(html).toContain("没有接受位置调整");
-    // A single remaining name needs no bulk action.
+    // Per application, as a named secondary action, and never as a bulk sweep:
+    // "exclude everything that failed" was being offered as the fix for a failure
+    // it cannot fix.
+    expect(html).toContain("不再整理此应用");
     expect(html).not.toContain("全部排除");
+    // Exclusion is described for what it does. The copy must not imply it stands
+    // in for a restore, and must say that already-gathered windows still come back.
+    expect(html).toContain("仍然可以恢复");
   });
 
   test("overview reports windows held by an unfinished transaction", () => {
@@ -449,13 +448,55 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
     // "ready" while five windows are displaced is the failure this row prevents.
     expect(html).toContain("待恢复窗口");
     expect(html).toContain("5 个");
+  });
+
+  test("an open transaction offers restore whatever the state name says", () => {
+    // `pending_windows` is the backend's own answer to "are any windows still held
+    // by an unfinished transaction", and it counts a journal the engine adopted
+    // from a previous run. Keying the restore entry off the state name alone meant
+    // an engine that reported `idle` (or one in `error`) while a journal was still
+    // open offered a gather instead - the one action that cannot run.
+    for (const state of ["idle", "error", "planning"] as const) {
+      const html = renderToStaticMarkup(
+        <OverviewPage
+          status={{ ...status, state, pending_windows: 3 }}
+          settings={settings}
+          preview={null}
+          displays={displays}
+          activity={[]}
+          progress={null}
+          busy={false}
+          onPreview={noop}
+          onMigrate={noop}
+          onRestore={noop}
+          onPause={noop}
+          onRescue={noop}
+          onIdentify={noop}
+          onExport={noop}
+          diagnosticsPreview={null}
+          onPreviewDiagnostics={noop}
+          onOpenConfigDir={noop}
+          onOpenDisplays={noop}
+          onExclude={noop}
+          onKeepLayout={noop}
+          onDismissError={noop}
+          pendingApps={[]}
+        />,
+      );
+      expect([state, html.includes("恢复本次布局") || html.includes("尝试恢复")]).toEqual([
+        state,
+        true,
+      ]);
+      // The gather button is the opposite of what this state needs: pressing it
+      // returns "already active" and moves nothing.
+      expect([state, html.includes("整理到目标屏")]).toEqual([state, false]);
+    }
   });
 
   test("overview explains how to trigger a gather without the window", () => {
@@ -482,7 +523,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -518,7 +558,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -550,7 +589,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -582,7 +620,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -620,7 +657,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -669,7 +705,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -678,37 +713,11 @@ describe("pages render", () => {
     expect(picker).toContain("显示器 1（主）");
   });
 
-  test("overview offers a manual remote-session marker", () => {
-    const inactive = renderToStaticMarkup(
-      <OverviewPage
-        status={status}
-        settings={settings}
-        preview={null}
-        displays={displays}
-        activity={[]}
-        progress={null}
-        busy={false}
-        onPreview={noop}
-        onMigrate={noop}
-        onRestore={noop}
-        onPause={noop}
-        onRescue={noop}
-        onIdentify={noop}
-        onExport={noop}
-        diagnosticsPreview={null}
-        onPreviewDiagnostics={noop}
-        onOpenConfigDir={noop}
-        onOpenDisplays={noop}
-        onExclude={noop}
-        onKeepLayout={noop}
-        onDismissError={noop}
-        onToggleRemote={noop}
-        pendingApps={[]}
-      />,
-    );
-    expect(inactive).toContain("标记为远程会话");
-
-    const active = renderToStaticMarkup(
+  test("overview offers no manual remote-session marker", () => {
+    // Manual gather and restore are the explicit start and end of a session; a
+    // separate switch that had to be flipped first was a second way to say the same
+    // thing, and it also fabricated a detection state the detector had not seen.
+    const html = renderToStaticMarkup(
       <OverviewPage
         status={status}
         settings={{ ...settings, remote_active: true, remote_evidence: message("手动标记") }}
@@ -731,14 +740,14 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
-    // The action must flip: a marker that cannot be cleared would claim a session
-    // forever.
-    expect(active).toContain("结束远程会话标记");
-    expect(active).toContain("手动标记");
+    expect(html).not.toContain("标记为远程会话");
+    expect(html).not.toContain("结束远程会话标记");
+    // The detection row still reports what the detector found; only the action is
+    // gone.
+    expect(html).toContain("手动标记");
   });
 
   test("overview names the application that refused to restore", () => {
@@ -768,12 +777,15 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={["clash-verge.exe"]}
       />,
     );
     expect(html).toContain("clash-verge.exe");
-    expect(html).toContain("排除这些应用");
+    // The failure card names the application and stops there. It offers no
+    // exclusion: a rule changes the next gather and does nothing for a window that
+    // is still out of place, so it must not read as the way out of this failure.
+    expect(html).not.toContain("排除这些应用");
+    expect(html).not.toContain("全部排除");
   });
 
   test("overview offers recovery, not a gather, when the engine is in error", () => {
@@ -800,7 +812,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -835,7 +846,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -845,7 +855,12 @@ describe("pages render", () => {
     expect(html).toContain("恢复本次布局");
   });
 
-  test("overview offers a bulk exclude when several applications refused", () => {
+  test("overview offers no bulk exclude when several applications refused", () => {
+    // The bulk action was the card's main exit and the wrong one: it turned a
+    // report about windows that had not moved into a single click that silently
+    // changed future behaviour for three programs at once, without doing anything
+    // about the windows the user was looking at. Each refusal gets its own quiet
+    // action instead.
     const html = renderToStaticMarkup(
       <OverviewPage
         status={status}
@@ -873,11 +888,11 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
-    expect(html).toContain("全部排除");
+    expect(html).not.toContain("全部排除");
+    expect(html.match(/不再整理此应用/g)?.length).toBe(3);
   });
 
   test("the displays page warns when the saved target is gone", () => {
@@ -917,6 +932,12 @@ describe("pages render", () => {
     );
     expect(html).toContain("使用中");
     expect(html).toContain("无法截取画面");
+    // Two arrangements only: "move into the target" is the default, grid is the
+    // opt-in. The main+side mode was removed from the backend, so offering it here
+    // would be a button that saves a value the engine no longer understands.
+    expect(html).toContain("移到目标屏");
+    expect(html).not.toContain("主次");
+    expect(html).toContain("保留窗口大小和最大化状态");
   });
 
   test("clearing every rule asks first", () => {
@@ -952,6 +973,10 @@ describe("pages render", () => {
     );
     expect(html).toContain("msedge.exe");
     expect(html).toContain("1 条规则");
+    // Exclusions are about later gathers. The old sentence claimed excluded
+    // applications were also skipped on restore, which told users their displaced
+    // windows would not come back - the opposite of what happens.
+    expect(html).toContain("已经整理的窗口仍可恢复");
   });
 
   test("the detection row does not say watching while automation is paused", () => {
@@ -981,7 +1006,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -1016,7 +1040,6 @@ describe("pages render", () => {
         onExclude={noop}
         onKeepLayout={noop}
         onDismissError={noop}
-        onToggleRemote={noop}
         pendingApps={[]}
       />,
     );
@@ -1052,7 +1075,6 @@ describe("pages render", () => {
           onExclude={noop}
           onKeepLayout={noop}
           onDismissError={noop}
-          onToggleRemote={noop}
           pendingApps={[]}
         />,
       );
@@ -1168,6 +1190,11 @@ describe("pages render", () => {
     // target display survives, or nobody will dare use it.
     expect(unconfigured).toContain("恢复默认设置");
     expect(unconfigured).toContain("目标显示器保留");
+    // There is no uploader in this build, so a switch for it recorded a preference
+    // nothing reads. A setting that does nothing is worse than no setting: it
+    // implies a data flow that does not exist.
+    expect(configured).not.toContain("使用统计");
+    expect(unconfigured).not.toContain("使用统计");
   });
 
   test("onboarding at every step", () => {
@@ -1436,7 +1463,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),
@@ -1572,7 +1598,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),
@@ -1603,7 +1628,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),
@@ -1634,7 +1658,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),
@@ -1665,7 +1688,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),
@@ -1696,7 +1718,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),
@@ -1727,7 +1748,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),
@@ -1762,7 +1782,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),
@@ -1793,7 +1812,6 @@ describe("English mode", () => {
             onExclude={noop}
             onKeepLayout={noop}
             onDismissError={noop}
-            onToggleRemote={noop}
             pendingApps={[]}
           />,
         ),

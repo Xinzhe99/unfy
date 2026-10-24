@@ -145,8 +145,8 @@ export function Onboarding({
       title: t("有些窗口不会被移动"),
       body: (
         <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>{t("有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处。这不是失败：Unfy 会把它们的名字列出来，并给一个「排除」按钮。")}</p>
-          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("排除之后，这些应用既不会被移动，也不会被列入每次的未处理项。")}</p>
+          <p>{t("有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处，不是失败：Unfy 会列出它们的名字，你可以逐个选择「不再整理此应用」。")}</p>
+          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("这个选择只影响以后的整理；已经整理过的窗口仍然可以恢复。")}</p>
           <p className="text-xs text-[var(--color-muted)]">{t("全屏应用、最小化的窗口和系统外壳本来就会跳过。")}</p>
         </div>
       ),

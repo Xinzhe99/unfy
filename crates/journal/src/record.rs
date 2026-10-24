@@ -38,6 +38,16 @@ pub enum Record {
         transaction: Uuid,
         result: AppliedResult,
     },
+    /// A window reached a terminal state and owes nothing further.
+    ///
+    /// Without this record a later run could not tell "this window was already
+    /// put back" from "this window was never handled", so it would restore it
+    /// again - overwriting a position the user had chosen in the meantime.
+    Resolved {
+        transaction: Uuid,
+        id: WindowId,
+        resolution: unfy_domain::WindowOutcome,
+    },
     Closed {
         transaction: Uuid,
         closed_unix_ms: u64,
@@ -51,6 +61,7 @@ impl Record {
             Record::Preimage { .. } => 2,
             Record::Intent { .. } => 3,
             Record::Result { .. } => 4,
+            Record::Resolved { .. } => 6,
             Record::Closed { .. } => 5,
         }
     }
@@ -61,6 +72,7 @@ impl Record {
             | Record::Preimage { transaction, .. }
             | Record::Intent { transaction, .. }
             | Record::Result { transaction, .. }
+            | Record::Resolved { transaction, .. }
             | Record::Closed { transaction, .. } => *transaction,
         }
     }
@@ -116,9 +128,9 @@ impl Record {
             return Err("kind byte does not match payload".to_string());
         }
         if let Record::Begin { schema_version, .. } = &record {
-            if *schema_version > SCHEMA_VERSION {
+            if !(1..=SCHEMA_VERSION).contains(schema_version) {
                 return Err(format!(
-                    "journal schema {schema_version} is newer than {SCHEMA_VERSION}"
+                    "journal schema {schema_version} is not supported (max {SCHEMA_VERSION})"
                 ));
             }
         }
@@ -177,6 +189,11 @@ mod tests {
                     outcome: unfy_domain::WindowOutcome::Applied,
                     observed: None,
                 },
+            },
+            Record::Resolved {
+                transaction: tx,
+                id: sample_preimage().id,
+                resolution: unfy_domain::WindowOutcome::Restored,
             },
             Record::Closed {
                 transaction: tx,

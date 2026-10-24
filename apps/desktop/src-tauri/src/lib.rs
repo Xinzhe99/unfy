@@ -20,7 +20,7 @@ pub mod update;
 
 use std::sync::Arc;
 
-use unfy_engine::{Engine, EngineConfig};
+use unfy_engine::Engine;
 use unfy_settings::Settings;
 
 /// Application-wide state shared by commands and the tray.
@@ -40,10 +40,6 @@ pub struct AppState {
     /// Last logged evidence summary, so the monitor logs transitions rather than
     /// every poll.
     pub last_observation: Arc<std::sync::Mutex<Option<String>>>,
-    /// Set while the user has marked the session by hand. In memory only: a
-    /// marker that survived a restart would claim a remote session that ended
-    /// with the previous process.
-    pub manual_remote: Arc<std::sync::atomic::AtomicBool>,
     /// True when the settings file could not be read at startup and the app fell
     /// back to defaults.
     ///
@@ -72,14 +68,6 @@ pub struct AppState {
     pub schedule: Arc<std::sync::Mutex<schedule::Schedule>>,
     /// Append-only history of completed actions, shown on the overview.
     pub activity: Arc<std::sync::Mutex<activity::Activity>>,
-    /// A remote session ended while automation was paused, so its restore was
-    /// never performed.
-    ///
-    /// Without this, pausing during a session loses the cleanup entirely: the
-    /// detector only fires `Deactivated` once, the restore is skipped, and the
-    /// windows stay where the gather put them until the user notices. Resuming
-    /// consumes this flag and restores.
-    pub deferred_restore: Arc<std::sync::atomic::AtomicBool>,
     /// The interface language the tray renders in.
     ///
     /// The webview owns the rule that resolves `system` (it reads
@@ -122,18 +110,10 @@ impl AppState {
             Settings::default()
         });
 
-        let config = EngineConfig {
-            layout: unfy_layout::LayoutConfig {
-                mode: settings.layout_mode.into(),
-                margin: settings.margin,
-                gap: settings.gap,
-                ..Default::default()
-            },
-            journal_dir: unfy_settings::config_dir().join("journal"),
-            restore_delay_secs: settings.restore_delay_secs,
-            excluded_apps: settings.excluded_apps.clone(),
-            ..Default::default()
-        };
+        // One conversion, shared with every later save and reset. Two hardcoded
+        // copies of the defaults is how a reset came to write a different layout
+        // into the live engine than the one it saved to disk.
+        let config = crate::commands::engine_config_from_settings(&settings);
 
         let mut engine = Engine::new(platform::make(), config.clone());
         // A persisted pause must survive a restart: the user paused because they
@@ -166,14 +146,12 @@ impl AppState {
                 unfy_detect::Sensitivity::Off,
             ))),
             last_observation: Arc::new(std::sync::Mutex::new(None)),
-            manual_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             settings_recovered,
             last_auto_gather: Arc::new(std::sync::Mutex::new(None)),
             storage_probe: Arc::new(std::sync::Mutex::new(None)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
             ui_locale: Arc::new(std::sync::Mutex::new(ui_locale)),
             last_error: Arc::new(std::sync::Mutex::new(None)),
-            deferred_restore: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             activity: Arc::new(std::sync::Mutex::new(activity::Activity::load(
                 unfy_settings::config_dir().join("activity.jsonl"),
             ))),
@@ -345,7 +323,6 @@ pub fn run() {
             commands::open_path,
             commands::cycle_target,
             commands::reset_settings,
-            commands::toggle_remote_session,
         ])
         .setup(|app| {
             // A tray failure must not abort startup. Tauri turns a `setup` error

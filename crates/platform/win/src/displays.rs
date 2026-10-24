@@ -129,13 +129,30 @@ impl DisplayProvider for WinDisplays {
     }
 }
 
+/// Resolve a persisted window id to a live handle, refusing a recycled one.
+///
+/// `IsWindow` alone is not an identity check: Windows reuses `HWND` values, so a
+/// stale id can point at a completely different window. Both the pid and the
+/// process creation time must match what the id recorded. A mismatch is reported
+/// as `WindowGone` rather than `Os`, because from the engine's point of view the
+/// window it knew no longer exists - and it must not write to the new one.
 pub(crate) fn hwnd_from_id(id: &WindowId) -> Result<windows::Win32::Foundation::HWND> {
     let hwnd = windows::Win32::Foundation::HWND(id.native_id as *mut core::ffi::c_void);
-    if unsafe { IsWindow(Some(hwnd)) }.as_bool() {
-        Ok(hwnd)
-    } else {
-        Err(PlatformError::WindowGone)
+    if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+        return Err(PlatformError::WindowGone);
     }
+
+    let (pid, start) = process_identity(hwnd);
+    if pid != id.process_id {
+        return Err(PlatformError::WindowGone);
+    }
+    // `process_start == 0` means "unknown", recorded by an older build or by an
+    // unreadable process. It cannot prove a mismatch, so only a known, different
+    // creation time rejects the handle.
+    if id.process_start != 0 && start != 0 && start != id.process_start {
+        return Err(PlatformError::WindowGone);
+    }
+    Ok(hwnd)
 }
 
 struct EnumContext {
@@ -295,12 +312,47 @@ fn monitor_rect(hmon: HMONITOR) -> Option<Rect> {
 }
 
 /// Process id and creation time for a window, used to disambiguate recycled
-/// handles. Creation time is `0` until the task that needs it lands; the pid
-/// alone still catches the common "different app, same HWND value" case.
+/// handles.
+///
+/// A recycled `HWND` that now belongs to another process is caught by the pid. A
+/// recycled `HWND` inside the *same* process is only caught by the creation time,
+/// which is why it is read for real instead of being left as zero: with
+/// `process_start = 0`, a closed editor window and a new one that happened to get
+/// the same handle would compare equal and the engine would write the old
+/// rectangle onto the new window.
+///
+/// Creation time is `0` only when the process cannot be opened, which is the
+/// elevated-window case the engine already treats as a permission failure.
 pub(crate) fn process_identity(hwnd: windows::Win32::Foundation::HWND) -> (u32, u64) {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    (pid, 0)
+    if pid == 0 {
+        return (0, 0);
+    }
+
+    let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
+        return (pid, 0);
+    };
+
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    let ok = unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) };
+    let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
+    if ok.is_err() {
+        return (pid, 0);
+    }
+
+    // 100 ns ticks since 1601-01-01. Kept as the raw value: it only has to be
+    // comparable and stable for the life of the process, not human-readable.
+    let ticks = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    (pid, ticks)
 }
 
 /// The display under a point (used by the tray menu).

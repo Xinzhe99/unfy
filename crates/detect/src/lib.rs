@@ -56,41 +56,36 @@ pub mod platform {
     }
 }
 
-/// How far up the evidence ladder the app may act on its own.
+/// How much evidence the app may act on by itself.
+///
+/// The previous four-level ladder admitted "a known remote tool is running" and
+/// "a virtual display exists" as permission to move every window. Neither proves
+/// that a client is connected to *this* machine: a tool can be idle in the tray,
+/// and a virtual display outlives the session that created it. Automatic actions
+/// are therefore limited to an evidence source that reports an inbound session
+/// lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sensitivity {
     /// Never act automatically. Hotkey, tray and window buttons still work.
-    Off,
-    /// Only a real Terminal Services client session.
-    Conservative,
-    /// Also act when a virtual display appears (`#[default]`).
-    ///
-    /// A virtual monitor appearing is strong evidence: remote tools create one to
-    /// match the client's resolution. The failure mode is a user who installs a
-    /// virtual display driver for an unrelated reason.
     #[default]
-    Balanced,
-    /// Also act when a known remote-control tool is running with its port open.
-    Aggressive,
+    Off,
+    /// Act only on an inbound connection lifecycle reported by a verified source.
+    Verified,
 }
 
 impl Sensitivity {
     pub fn as_str(self) -> &'static str {
         match self {
             Sensitivity::Off => "off",
-            Sensitivity::Conservative => "conservative",
-            Sensitivity::Balanced => "balanced",
-            Sensitivity::Aggressive => "aggressive",
+            Sensitivity::Verified => "verified",
         }
     }
 
-    /// Parse the persisted form. Unknown values fall back to `Off` rather than
-    /// `Balanced`: a corrupt or future value must not make windows move.
+    /// Parse the persisted form. Unknown values fall back to `Off`: a corrupt or
+    /// future value must not make windows move.
     pub fn parse(value: &str) -> Self {
         match value {
-            "conservative" => Sensitivity::Conservative,
-            "balanced" => Sensitivity::Balanced,
-            "aggressive" => Sensitivity::Aggressive,
+            "verified" => Sensitivity::Verified,
             _ => Sensitivity::Off,
         }
     }
@@ -98,7 +93,7 @@ impl Sensitivity {
 
 /// One poll's raw observations. Pure data: no OS calls here, so the decision
 /// table is testable on any machine.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Observation {
     /// The calling process runs inside a Terminal Services client session.
     pub rdp_active: bool,
@@ -107,16 +102,41 @@ pub struct Observation {
     /// Known remote-control executables currently running.
     pub tools_running: Vec<String>,
     /// Known remote-control programs that hold an established TCP connection on
-    /// their own port. Stronger than mere process presence.
+    /// their own port.
     pub tools_connected: Vec<String>,
-    /// The user marked this session by hand.
-    pub manual_marker: bool,
+    /// Whether the probe could answer at all this poll.
+    ///
+    /// A failed query is not "no evidence". Treating the two the same made a
+    /// transient permission or IO error look like the end of a session, which
+    /// restored every window while the user was still working remotely.
+    pub available: bool,
+}
+
+impl Default for Observation {
+    fn default() -> Self {
+        Self {
+            rdp_active: false,
+            virtual_displays: Vec::new(),
+            tools_running: Vec::new(),
+            tools_connected: Vec::new(),
+            // An observation nobody filled in cannot authorise anything, and must
+            // not be read as "the session ended" either.
+            available: false,
+        }
+    }
 }
 
 impl Observation {
+    /// An observation from a probe that ran successfully.
+    pub fn observed() -> Self {
+        Self {
+            available: true,
+            ..Self::default()
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         !self.rdp_active
-            && !self.manual_marker
             && self.virtual_displays.is_empty()
             && self.tools_running.is_empty()
             && self.tools_connected.is_empty()
@@ -126,44 +146,44 @@ impl Observation {
 /// Why the app believes a remote session is happening.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Evidence {
-    /// A Terminal Services client session (RDP).
+    /// A Terminal Services client session (RDP). This is the one source with a
+    /// documented lifecycle: the OS creates and destroys the session.
     RdpSession,
-    /// A virtual display is present, e.g. Parsec's VDD.
-    VirtualDisplay(String),
     /// A known tool holds an established connection on its own port.
+    ///
+    /// Still not proof of *inbound control* - it can be an outbound session where
+    /// this machine is the viewer - so it is reported as a candidate only.
     ToolConnected(String),
     /// A known tool is running, with no stronger evidence.
     ToolRunning(String),
-    /// The user marked the session by hand.
-    ///
-    /// The only universally reliable signal: verification found that no API
-    /// answers "is someone remoting in" for third-party tools, so the honest
-    /// design is to let the user say so and to act on that immediately.
-    ManualMarker,
+    /// A virtual display is present, e.g. Parsec's VDD.
+    VirtualDisplay(String),
 }
 
 impl Evidence {
-    /// Whether this evidence needs to persist across polls before acting.
+    /// Whether this evidence needs to persist across polls before being reported.
     ///
     /// Session-type evidence is instantaneous by nature; process evidence is not,
     /// because services restart, updaters spawn, and tray helpers linger.
     pub fn is_immediate(&self) -> bool {
-        matches!(self, Evidence::RdpSession | Evidence::ManualMarker)
+        matches!(self, Evidence::RdpSession)
+    }
+
+    /// Whether this evidence is strong enough to authorise an automatic action.
+    ///
+    /// Only the OS-reported session lifecycle qualifies. Everything else is shown
+    /// to the user as a reason to consider a manual gather.
+    pub fn authorises_automation(&self) -> bool {
+        matches!(self, Evidence::RdpSession)
     }
 
     /// The sentence describing this evidence, as a catalogue key.
-    ///
-    /// The window renders it from the frontend catalogue and the tray from its own
-    /// table, so what crosses the boundary is the key plus the value, never a
-    /// formatted sentence: a sentence formatted here would be Chinese in an
-    /// English interface.
     pub fn key(&self) -> &'static str {
         match self {
             Evidence::RdpSession => "远程桌面会话",
             Evidence::VirtualDisplay(_) => "虚拟显示器 {name}",
             Evidence::ToolConnected(_) => "{name} 已连接",
             Evidence::ToolRunning(_) => "{name} 正在运行",
-            Evidence::ManualMarker => "手动标记",
         }
     }
 
@@ -173,14 +193,11 @@ impl Evidence {
             Evidence::VirtualDisplay(name)
             | Evidence::ToolConnected(name)
             | Evidence::ToolRunning(name) => Some(name),
-            Evidence::RdpSession | Evidence::ManualMarker => None,
+            Evidence::RdpSession => None,
         }
     }
 
     /// The sentence with its value filled in, in the source language.
-    ///
-    /// For logs and diagnostics only. Anything the user reads goes through
-    /// `key`/`param` so it can be translated.
     pub fn label(&self) -> String {
         match self.param() {
             Some(name) => self.key().replace("{name}", name),
@@ -195,43 +212,56 @@ impl fmt::Display for Evidence {
     }
 }
 
-/// Whether the evidence is allowed at this sensitivity.
-fn admitted(evidence: &Evidence, sensitivity: Sensitivity) -> bool {
-    // The user speaking directly overrides every level, including `Off`. `Off`
-    // exists to stop guesswork, not to ignore an explicit instruction.
-    if matches!(evidence, Evidence::ManualMarker) {
-        return true;
-    }
-    match (sensitivity, evidence) {
-        (Sensitivity::Off, _) => false,
-        (Sensitivity::Conservative, Evidence::RdpSession) => true,
-        (Sensitivity::Conservative, _) => false,
-        (Sensitivity::Balanced, Evidence::RdpSession | Evidence::VirtualDisplay(_)) => true,
-        (Sensitivity::Balanced, _) => false,
-        (Sensitivity::Aggressive, Evidence::ToolRunning(_)) => true,
-        (Sensitivity::Aggressive, _) => true,
-    }
+/// What the detector concluded from one observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// The probe could not answer; keep the previous state and say nothing.
+    Unknown,
+    /// No evidence that anyone is connected.
+    Idle,
+    /// Something is present that may indicate a session, but it does not prove
+    /// inbound control. Shown to the user; never acted on automatically.
+    Candidate(Evidence),
+    /// A verified inbound session is alive.
+    Connected(Evidence),
 }
 
-/// The strongest evidence in an observation that this sensitivity admits.
+/// The strongest evidence in an observation, and whether it can authorise action.
 fn strongest(observation: &Observation, sensitivity: Sensitivity) -> Option<Evidence> {
-    if observation.manual_marker {
-        return Some(Evidence::ManualMarker);
-    }
     let mut candidates: Vec<Evidence> = Vec::new();
     if observation.rdp_active {
         candidates.push(Evidence::RdpSession);
     }
-    for name in &observation.virtual_displays {
-        candidates.push(Evidence::VirtualDisplay(name.clone()));
-    }
     for name in &observation.tools_connected {
         candidates.push(Evidence::ToolConnected(name.clone()));
+    }
+    for name in &observation.virtual_displays {
+        candidates.push(Evidence::VirtualDisplay(name.clone()));
     }
     for name in &observation.tools_running {
         candidates.push(Evidence::ToolRunning(name.clone()));
     }
-    candidates.into_iter().find(|e| admitted(e, sensitivity))
+    candidates.into_iter().find(|evidence| match sensitivity {
+        Sensitivity::Off => false,
+        Sensitivity::Verified => evidence.authorises_automation(),
+    })
+}
+
+/// The strongest evidence present, regardless of whether it may authorise action.
+fn weak_evidence(observation: &Observation) -> Option<Evidence> {
+    if observation.rdp_active {
+        return Some(Evidence::RdpSession);
+    }
+    if let Some(name) = observation.tools_connected.first() {
+        return Some(Evidence::ToolConnected(name.clone()));
+    }
+    if let Some(name) = observation.virtual_displays.first() {
+        return Some(Evidence::VirtualDisplay(name.clone()));
+    }
+    observation
+        .tools_running
+        .first()
+        .map(|name| Evidence::ToolRunning(name.clone()))
 }
 
 /// What the tracker decided.
@@ -239,17 +269,16 @@ fn strongest(observation: &Observation, sensitivity: Sensitivity) -> Option<Evid
 pub enum Transition {
     /// Nothing changed.
     None,
-    /// A remote session just began; act.
+    /// A verified session just began; act.
     Activated(Evidence),
-    /// The evidence is gone; undo.
+    /// The verified evidence is gone; undo.
     Deactivated,
 }
 
-/// Consecutive weak observations required before acting.
+/// Consecutive weak observations required before reporting a candidate.
 ///
 /// Two polls at the default 2 s interval means an idle remote tool that happens
-/// to be running while the user logs in does not move any windows. Four seconds
-/// is below the time it takes a person to notice their desktop did not change.
+/// to be running while the user logs in does not even produce a notice.
 pub const ACTIVATION_STREAK: u32 = 2;
 
 /// Holds the activation state and the streak counter.
@@ -257,6 +286,7 @@ pub const ACTIVATION_STREAK: u32 = 2;
 pub struct Tracker {
     sensitivity: Sensitivity,
     active: Option<Evidence>,
+    candidate: Option<Evidence>,
     streak: u32,
 }
 
@@ -265,6 +295,7 @@ impl Tracker {
         Self {
             sensitivity,
             active: None,
+            candidate: None,
             streak: 0,
         }
     }
@@ -280,6 +311,7 @@ impl Tracker {
         self.sensitivity = sensitivity;
         if sensitivity == Sensitivity::Off {
             self.streak = 0;
+            self.candidate = None;
         }
     }
 
@@ -291,18 +323,51 @@ impl Tracker {
         self.active.as_ref()
     }
 
+    /// The weak evidence currently on display, if any.
+    pub fn candidate(&self) -> Option<&Evidence> {
+        self.candidate.as_ref()
+    }
+
     /// Feed one poll.
     pub fn observe(&mut self, observation: &Observation) -> Transition {
-        let candidate = strongest(observation, self.sensitivity);
+        if !observation.available {
+            // A probe that could not answer says nothing about the session. It
+            // must not be reported as an end: that restored windows in the middle
+            // of a live remote session.
+            return Transition::None;
+        }
 
-        match (&self.active, candidate) {
-            (None, None) => {
-                self.streak = 0;
-                Transition::None
+        let verified = strongest(observation, self.sensitivity);
+
+        // Track the best weak signal separately so the UI can explain what it sees
+        // without ever treating it as permission.
+        let weak = weak_evidence(observation);
+        if verified.is_none() {
+            match &weak {
+                Some(evidence) => {
+                    if self.streak == 0 {
+                        self.streak = 1;
+                    } else {
+                        self.streak = self.streak.saturating_add(1);
+                    }
+                    if self.streak >= ACTIVATION_STREAK || evidence.is_immediate() {
+                        self.candidate = Some(evidence.clone());
+                    }
+                }
+                None => {
+                    self.streak = 0;
+                    self.candidate = None;
+                }
             }
+        } else {
+            self.candidate = None;
+            self.streak = 0;
+        }
+
+        match (&self.active, verified) {
+            (None, None) => Transition::None,
             (None, Some(evidence)) => {
                 if evidence.is_immediate() {
-                    self.streak = 0;
                     self.active = Some(evidence.clone());
                     return Transition::Activated(evidence);
                 }
@@ -317,8 +382,7 @@ impl Tracker {
             }
             (Some(_), Some(_)) => {
                 // Still active. Keep the original evidence: rewriting it every
-                // poll makes the UI line flicker between equivalent reasons, and
-                // hides which evidence actually started the session.
+                // poll makes the UI line flicker between equivalent reasons.
                 self.streak = 0;
                 Transition::None
             }
@@ -330,7 +394,25 @@ impl Tracker {
         }
     }
 
-    /// Force the state, used when the user toggles remote mode by hand.
+    /// What the current observation means, for display.
+    ///
+    /// Derived from the observation that was just taken, not from the last
+    /// candidate: a tool that stopped running must stop being named immediately,
+    /// even before the streak counter decides anything.
+    pub fn verdict(&self, observation: &Observation) -> Verdict {
+        if !observation.available {
+            return Verdict::Unknown;
+        }
+        if let Some(evidence) = &self.active {
+            return Verdict::Connected(evidence.clone());
+        }
+        match weak_evidence(observation) {
+            Some(evidence) => Verdict::Candidate(evidence),
+            None => Verdict::Idle,
+        }
+    }
+
+    /// Force the state, used by tests and by a future verified source.
     pub fn force(&mut self, active: impl Into<Option<Evidence>>) {
         self.active = active.into();
         self.streak = 0;
@@ -436,72 +518,87 @@ mod tests {
 
     fn obs(rdp: bool, virtuals: &[&str], tools: &[&str], connected: &[&str]) -> Observation {
         Observation {
+            available: true,
             rdp_active: rdp,
             virtual_displays: virtuals.iter().map(|s| s.to_string()).collect(),
             tools_running: tools.iter().map(|s| s.to_string()).collect(),
             tools_connected: connected.iter().map(|s| s.to_string()).collect(),
-            manual_marker: false,
         }
+    }
+
+    fn unknown() -> Observation {
+        Observation::default()
     }
 
     #[test]
     fn uu_remote_is_recognised_by_its_process_family() {
-        // The controlled end runs as GameViewerServer.exe; one prefix entry
-        // must cover it and its service siblings.
         assert_eq!(
             is_known_tool("GameViewerServer.exe"),
             Some("gameviewer.exe")
         );
         assert_eq!(is_known_tool("GameViewer.exe"), Some("gameviewer.exe"));
-        // The booster family must not match: it is a different product.
         assert_eq!(is_known_tool("UUBooster.exe"), None);
     }
 
     #[test]
-    fn off_never_activates_even_with_rdo() {
+    fn off_never_activates_even_with_every_signal() {
         let mut tracker = Tracker::new(Sensitivity::Off);
-        let transition = tracker.observe(&obs(true, &["Parsec VDD"], &["anydesk.exe"], &[]));
+        let transition = tracker.observe(&obs(true, &["Parsec VDD"], &["anydesk.exe"], &["anydesk.exe"]));
         assert_eq!(transition, Transition::None);
         assert!(!tracker.is_active());
     }
 
     #[test]
-    fn conservative_ignores_virtual_displays() {
-        let mut tracker = Tracker::new(Sensitivity::Conservative);
-        for _ in 0..ACTIVATION_STREAK + 1 {
-            tracker.observe(&obs(false, &["Parsec VDD"], &[], &[]));
-        }
-        assert!(!tracker.is_active());
-    }
-
-    #[test]
-    fn balanced_activates_on_virtual_display_after_streak() {
-        let mut tracker = Tracker::new(Sensitivity::Balanced);
-        let observation = obs(false, &["Parsec VDD"], &[], &[]);
-
-        assert_eq!(tracker.observe(&observation), Transition::None);
-        assert_eq!(
-            tracker.observe(&observation),
-            Transition::Activated(Evidence::VirtualDisplay("Parsec VDD".into()))
-        );
-        assert!(tracker.is_active());
-    }
-
-    #[test]
-    fn rdp_activates_immediately() {
-        let mut tracker = Tracker::new(Sensitivity::Balanced);
+    fn verified_activates_on_rdp_immediately() {
+        let mut tracker = Tracker::new(Sensitivity::Verified);
         assert_eq!(
             tracker.observe(&obs(true, &[], &[], &[])),
             Transition::Activated(Evidence::RdpSession)
         );
+        assert!(tracker.is_active());
     }
 
     #[test]
-    fn deactivates_when_evidence_disappears() {
-        let mut tracker = Tracker::new(Sensitivity::Balanced);
+    fn verified_never_activates_on_process_or_virtual_display() {
+        // The regression this replaces: a running remote tool, or a virtual
+        // display left behind by an old session, moved every window.
+        let mut tracker = Tracker::new(Sensitivity::Verified);
+        for _ in 0..ACTIVATION_STREAK + 2 {
+            assert_eq!(
+                tracker.observe(&obs(false, &["Parsec VDD"], &["anydesk.exe"], &["anydesk.exe"])),
+                Transition::None
+            );
+        }
+        assert!(!tracker.is_active());
+        // It is still visible as a candidate, which is what the UI shows.
+        assert_eq!(
+            tracker.verdict(&obs(false, &[], &["anydesk.exe"], &[])),
+            Verdict::Candidate(Evidence::ToolRunning("anydesk.exe".into()))
+        );
+        // A connected socket outranks mere presence in the explanation, while
+        // still not being enough to act.
+        assert_eq!(
+            tracker.verdict(&obs(false, &[], &["rustdesk.exe"], &["rustdesk.exe"])),
+            Verdict::Candidate(Evidence::ToolConnected("rustdesk.exe".into()))
+        );
+    }
+
+    #[test]
+    fn a_failed_probe_is_not_a_disconnect() {
+        // A query error used to be indistinguishable from "no evidence", which
+        // restored every window in the middle of a live session.
+        let mut tracker = Tracker::new(Sensitivity::Verified);
         tracker.observe(&obs(true, &[], &[], &[]));
         assert!(tracker.is_active());
+        assert_eq!(tracker.observe(&unknown()), Transition::None);
+        assert!(tracker.is_active());
+        assert_eq!(tracker.verdict(&unknown()), Verdict::Unknown);
+    }
 
+    #[test]
+    fn deactivates_when_rdp_evidence_disappears() {
+        let mut tracker = Tracker::new(Sensitivity::Verified);
+        tracker.observe(&obs(true, &[], &[], &[]));
         assert_eq!(
             tracker.observe(&obs(false, &[], &[], &[])),
             Transition::Deactivated
@@ -510,182 +607,41 @@ mod tests {
     }
 
     #[test]
-    fn weak_tool_evidence_needs_consecutive_polls() {
-        let mut tracker = Tracker::new(Sensitivity::Aggressive);
-        let observation = obs(false, &[], &["anydesk.exe"], &[]);
-
-        assert_eq!(tracker.observe(&observation), Transition::None);
-
-        // A single empty poll resets the streak: a tool that flashes into
-        // existence for one tick must never move windows.
-        assert_eq!(
-            tracker.observe(&obs(false, &[], &[], &[])),
-            Transition::None
-        );
-        assert_eq!(tracker.observe(&observation), Transition::None);
-
-        assert_eq!(
-            tracker.observe(&observation),
-            Transition::Activated(Evidence::ToolRunning("anydesk.exe".into()))
-        );
-    }
-
-    #[test]
-    fn connected_tool_evidence_outranks_running() {
-        let mut tracker = Tracker::new(Sensitivity::Aggressive);
-        let observation = obs(false, &[], &["rustdesk.exe"], &["rustdesk.exe"]);
-
-        tracker.observe(&observation);
-        assert_eq!(
-            tracker.observe(&observation),
-            Transition::Activated(Evidence::ToolConnected("rustdesk.exe".into()))
-        );
-    }
-
-    #[test]
     fn active_session_keeps_its_original_evidence() {
-        let mut tracker = Tracker::new(Sensitivity::Aggressive);
+        let mut tracker = Tracker::new(Sensitivity::Verified);
         tracker.observe(&obs(true, &[], &[], &[]));
-        assert_eq!(tracker.evidence(), Some(&Evidence::RdpSession));
-
-        // A tool appearing mid-session must not rewrite the reason: the UI would
-        // otherwise claim the session started for a reason that appeared later.
         tracker.observe(&obs(true, &[], &["anydesk.exe"], &["anydesk.exe"]));
         assert_eq!(tracker.evidence(), Some(&Evidence::RdpSession));
     }
 
     #[test]
     fn lowering_sensitivity_does_not_cancel_an_active_session() {
-        let mut tracker = Tracker::new(Sensitivity::Balanced);
-        tracker.observe(&obs(false, &["Parsec VDD"], &[], &[]));
-        tracker.observe(&obs(false, &["Parsec VDD"], &[], &[]));
+        let mut tracker = Tracker::new(Sensitivity::Verified);
+        tracker.observe(&obs(true, &[], &[], &[]));
         assert!(tracker.is_active());
-
-        tracker.set_sensitivity(Sensitivity::Conservative);
+        tracker.set_sensitivity(Sensitivity::Off);
         assert!(tracker.is_active());
         // With the evidence still present but no longer admitted, it ends.
         assert_eq!(
-            tracker.observe(&obs(false, &["Parsec VDD"], &[], &[])),
+            tracker.observe(&obs(true, &[], &[], &[])),
             Transition::Deactivated
         );
     }
 
     #[test]
-    fn the_manual_marker_activates_even_when_detection_is_off() {
-        // Turning detection off means "do not guess". It does not mean "ignore my
-        // explicit instruction", so the marker still works.
-        let mut tracker = Tracker::new(Sensitivity::Off);
-        let observation = Observation {
-            manual_marker: true,
-            ..Observation::default()
-        };
-        assert_eq!(
-            tracker.observe(&observation),
-            Transition::Activated(Evidence::ManualMarker)
-        );
-        assert!(tracker.is_active());
-
-        // And clearing it ends the session, even at `Off`.
-        assert_eq!(
-            tracker.observe(&Observation::default()),
-            Transition::Deactivated
-        );
+    fn unknown_values_parse_to_off() {
+        // A value from a newer build must never enable automatic window moves.
+        assert_eq!(Sensitivity::parse("aggressive"), Sensitivity::Off);
+        assert_eq!(Sensitivity::parse("balanced"), Sensitivity::Off);
+        assert_eq!(Sensitivity::parse("verified"), Sensitivity::Verified);
+        assert_eq!(Sensitivity::parse(""), Sensitivity::Off);
     }
 
     #[test]
-    fn unknown_persisted_sensitivity_is_off() {
-        assert_eq!(Sensitivity::parse("whatever"), Sensitivity::Off);
-        assert_eq!(Sensitivity::parse("balanced"), Sensitivity::Balanced);
-    }
-
-    #[test]
-    fn recognises_virtual_displays_but_not_real_ones() {
-        assert!(is_virtual_display(
-            r"\\?\DISPLAY#PARSC000#4&1a2b&0&UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
-        ));
-        assert!(is_virtual_display("RustDesk Virtual Display"));
-        assert!(!is_virtual_display(r"\\.\DISPLAY1"));
-        assert!(!is_virtual_display(
-            r"\\?\DISPLAY#DEL41FF#4&3abf5356&0&UID4147#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
-        ));
-    }
-
-    #[test]
-    fn recognises_tool_executables_case_insensitively() {
-        assert_eq!(is_known_tool("AnyDesk.exe"), Some("anydesk.exe"));
-        assert_eq!(is_known_tool("TEAMVIEWER.EXE"), Some("teamviewer.exe"));
-        assert_eq!(is_known_tool("notepad.exe"), None);
-    }
-}
-
-#[cfg(test)]
-mod resume_tests {
-    //! What a suspend must and must not do.
-    //!
-    //! The first implementation rebuilt the tracker after a suspend. A fresh
-    //! tracker reports no active evidence, so the next poll produced `Deactivated`
-    //! and the app restored every window - even though the user was still connected
-    //! and the machine had merely slept. These tests pin the corrected behaviour:
-    //! the streak resets, the verdict survives.
-
-    use super::*;
-
-    fn obs_rdp() -> Observation {
-        Observation {
-            rdp_active: true,
-            ..Observation::default()
-        }
-    }
-
-    #[test]
-    fn keeping_the_evidence_survives_a_suspend() {
-        let mut tracker = Tracker::new(Sensitivity::Balanced);
-        tracker.observe(&obs_rdp());
-        assert!(tracker.is_active());
-
-        // What `resume_after_sleep` does: reset the streak, keep the verdict.
-        let evidence = tracker.evidence().cloned();
-        tracker.force(evidence);
-
-        assert!(
-            tracker.is_active(),
-            "a session that survived the sleep must not be reported as ended"
-        );
-        assert_eq!(tracker.evidence(), Some(&Evidence::RdpSession));
-    }
-
-    #[test]
-    fn rebuilding_the_tracker_would_fake_an_end() {
-        // Documents the failure mode so a future "reset on resume" change shows up
-        // as a test failure rather than as windows moving on wake.
-        let mut tracker = Tracker::new(Sensitivity::Balanced);
-        tracker.observe(&obs_rdp());
-        assert!(tracker.is_active());
-
-        let mut rebuilt = Tracker::new(Sensitivity::Balanced);
-        assert_eq!(
-            rebuilt.observe(&Observation::default()),
-            Transition::None,
-            "the rebuilt tracker has no evidence to deactivate"
-        );
-        assert!(!rebuilt.is_active());
-        // The difference is the bug: `rebuilt.is_active()` is false, which the
-        // monitor reads as "the session ended".
-        assert_ne!(tracker.is_active(), rebuilt.is_active());
-    }
-
-    #[test]
-    fn a_session_that_ended_during_sleep_is_still_detected() {
-        let mut tracker = Tracker::new(Sensitivity::Balanced);
-        tracker.observe(&obs_rdp());
-
-        // Keep the verdict across the suspend, then observe real evidence: the
-        // session is over, so the normal path must report the transition.
-        let evidence = tracker.evidence().cloned();
-        tracker.force(evidence);
-        assert_eq!(
-            tracker.observe(&Observation::default()),
-            Transition::Deactivated
-        );
+    fn only_rdp_authorises_automation() {
+        assert!(Evidence::RdpSession.authorises_automation());
+        assert!(!Evidence::ToolConnected("anydesk.exe".into()).authorises_automation());
+        assert!(!Evidence::ToolRunning("anydesk.exe".into()).authorises_automation());
+        assert!(!Evidence::VirtualDisplay("Parsec VDD".into()).authorises_automation());
     }
 }

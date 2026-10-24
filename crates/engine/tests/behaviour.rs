@@ -549,13 +549,17 @@ fn second_migration_keeps_the_original_preimage() {
         "a second gather while Active must be refused, got {refused:?}"
     );
 
-    // Restore, then gather again with the new target. The preimage is now the
-    // real original, so the round trip is still correct.
+    // Restore, then gather again with the new target. The windows are already
+    // home, so the move-in default writes nothing; that is the contract, not a
+    // failure. The round trip still returns them to the first baseline.
     engine.restore().expect("restore");
     let second = engine
         .migrate(&primary)
         .expect("second migrate after restore");
-    assert_eq!(second.applied.len(), 3);
+    assert_eq!(
+        second.unchanged, 3,
+        "windows already on the target must not be written to"
+    );
 
     let report = engine.restore().expect("restore");
     assert!(report.is_complete());
@@ -803,17 +807,25 @@ fn exclusion_is_case_insensitive_and_ignores_unknown_names() {
 }
 
 #[test]
-fn superseded_journals_are_removed_on_recovery() {
-    // Without cleanup, every crash leaves a file behind forever and startup
-    // rescans all of them.
-    let dir = journal_dir("stale-journals");
+fn every_unfinished_journal_is_kept_and_the_newest_is_adopted() {
+    // Two crashes can leave two open transactions. Deleting the older one because
+    // a newer file exists would discard the only record of where its windows were.
+    let dir = journal_dir("stale");
+    std::fs::create_dir_all(&dir).unwrap();
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let _ = std::fs::remove_file(entry.path());
+    }
 
-    let make = |name: &str, id_value: u64| {
+    let make = |name: &str, n: u64| {
         let path = dir.join(name);
-        let mut journal = unfy_journal::Journal::begin(&path, "test").unwrap();
+        let mut journal = unfy_journal::Journal::begin(&path, "2 displays").unwrap();
         journal
             .write_preimage(&unfy_journal::Preimage {
-                id: id(id_value),
+                id: WindowId {
+                    native_id: n,
+                    process_id: 1000 + n as u32,
+                    process_start: 1,
+                },
                 display_native_id: "fake-display-a".into(),
                 display_quality: IdentityQuality::Strong,
                 display_work_area: Rect::new(0, 0, 2560, 1400),
@@ -826,7 +838,6 @@ fn superseded_journals_are_removed_on_recovery() {
             })
             .unwrap();
         journal.abandon();
-        // Distinct mtimes: the newest one must be the one adopted.
         std::thread::sleep(std::time::Duration::from_millis(20));
         path
     };
@@ -839,10 +850,11 @@ fn superseded_journals_are_removed_on_recovery() {
     let mut engine = Engine::new(backend, config("stale-engine"));
     let adopted = engine.recover_latest(&dir).expect("recover");
 
-    assert!(adopted.is_some(), "the newest journal must be adopted");
-    assert!(!old_a.exists(), "superseded journal a must be deleted");
-    assert!(!old_b.exists(), "superseded journal b must be deleted");
+    assert!(adopted.is_some(), "an unfinished journal must be adopted");
+    assert!(old_a.exists(), "an older unfinished journal must not be deleted");
+    assert!(old_b.exists(), "an older unfinished journal must not be deleted");
     assert!(newest.exists(), "the adopted journal must be kept");
+    assert_eq!(engine.state(), EngineState::Degraded);
 }
 
 #[test]
@@ -885,7 +897,6 @@ fn retarget_keeps_the_original_preimages() {
     // Gather onto display B, then change the target to display A while the
     // windows are still captured.
     let first = engine.retarget(&target_key()).expect("first retarget");
-    assert_eq!(first.restored, 0, "nothing to restore on a first gather");
     assert_eq!(first.migration.applied_count(), 3);
 
     let display_a = DisplayKey {
@@ -893,7 +904,6 @@ fn retarget_keeps_the_original_preimages() {
         quality: IdentityQuality::Strong,
     };
     let second = engine.retarget(&display_a).expect("second retarget");
-    assert_eq!(second.restored, 3, "the previous layout went home first");
     assert_eq!(second.migration.applied_count(), 3);
     assert_eq!(engine.state(), EngineState::Active);
 
@@ -953,7 +963,6 @@ fn retarget_on_idle_engine_is_a_plain_gather() {
     let mut engine = Engine::new(backend, config("retarget-idle"));
 
     let report = engine.retarget(&target_key()).expect("retarget");
-    assert_eq!(report.restored, 0);
     assert_eq!(report.migration.applied_count(), 3);
 }
 
@@ -1006,14 +1015,14 @@ fn no_progress_hook_installed_is_not_an_error() {
     assert_eq!(report.applied_count(), 3);
 }
 
-/// The focused window must reach the planner.
+/// Focus must reach the planner.
 ///
-/// `EligibleWindow.focused` was hardcoded to `false` while the layout algorithm
-/// uses it to give the focused window the large pane in `PrimarySide`. The layout
-/// had its own unit test with `focused = true` set by hand, so the broken wiring
-/// between the platform snapshot and the planner was invisible.
+/// `EligibleWindow.focused` was hardcoded to `false` while the grid uses it to
+/// order cells. The layout had its own unit test with `focused = true` set by
+/// hand, so the broken wiring between the platform snapshot and the planner was
+/// invisible.
 #[test]
-fn primary_side_puts_the_focused_window_in_the_main_pane() {
+fn focused_window_is_placed_in_the_first_grid_cell() {
     let mut backend = scenario();
     backend.focus(2);
 
@@ -1021,7 +1030,7 @@ fn primary_side_puts_the_focused_window_in_the_main_pane() {
         backend,
         EngineConfig {
             layout: unfy_layout::LayoutConfig {
-                mode: unfy_layout::LayoutMode::PrimarySide,
+                mode: unfy_layout::LayoutMode::Grid,
                 ..Default::default()
             },
             ..config("focus")
@@ -1038,31 +1047,25 @@ fn primary_side_puts_the_focused_window_in_the_main_pane() {
         .unwrap()
         .work_area;
 
-    // The focused window must own the largest rectangle in the plan, and it must
-    // be wider than the others rather than merely first.
     let focused = preview
         .plan
         .placements
         .iter()
         .find(|p| p.id.native_id == 2)
         .expect("the focused window is in the plan");
-    let widest = preview
-        .plan
-        .placements
-        .iter()
-        .map(|p| p.rect.width())
-        .max()
-        .unwrap();
-    assert_eq!(
-        focused.rect.width(),
-        widest,
-        "the focused window should take the main pane, placements: {:?}",
-        preview.plan.placements
-    );
     assert!(
         focused.rect.reachable_in(&work, 64, 32),
-        "the main pane must be inside the work area"
+        "the focused window must be inside the work area"
     );
+    // The first cell is the top-left one; nothing else may be further up-left.
+    for other in &preview.plan.placements {
+        assert!(
+            (focused.rect.top, focused.rect.left) <= (other.rect.top, other.rect.left),
+            "focused window {:?} is not first; {:?} is",
+            focused.rect,
+            other.rect
+        );
+    }
 }
 
 /// A window's own minimum size must reach the planner.

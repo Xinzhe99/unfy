@@ -4,85 +4,119 @@
 //! byte-identical, which is what makes the plan preview trustworthy: the user
 //! sees exactly what will be requested.
 //!
-//! The planner works in **physical pixels** of the target display, because that
-//! is what the platform `apply` call takes. It never resizes a window below its
-//! known minimum, and when the target work area cannot hold every window at a
-//! usable size it falls back to a cascade instead of producing unusable cells.
+//! # The two modes
+//!
+//! * `MoveInto` (the default) does not arrange anything. A window already on the
+//!   target display is left untouched; any other window keeps its logical size and
+//!   is moved to the nearest usable position inside the target work area. Windows
+//!   are allowed to overlap - that is what a taskbar and Alt+Tab are for, and it is
+//!   what the user means by "bring my windows over here".
+//! * `Grid` is an explicit advanced choice that tiles the target display.
+//!
+//! There is deliberately no third mode. A "primary side" arrangement was removed:
+//! it needed its own parameter, behaved badly with fixed-size windows and focus
+//! changes, and added nothing the grid could not do. Keeping it meant maintaining
+//! a second set of semantics for the same user request.
 
-use unfy_domain::{Rect, Size, WindowId};
 use serde::{Deserialize, Serialize};
+use unfy_domain::{Rect, Size, WindowId};
 
 /// How windows are arranged on the target display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LayoutMode {
-    /// Equal cells, best-fit column count.
+    /// Move every other-display window onto the target, preserving its size and
+    /// its window state. This is the product default.
+    MoveInto,
+    /// Equal cells, best-fit column count. Explicitly chosen by the user.
     Grid,
-    /// Focused window takes the main area, the rest tile beside it.
-    PrimarySide,
-    /// The arrangement the windows already have: the source desktop maps onto
-    /// the target work area as a whole, so relative positions and relative
-    /// sizes survive the move. This is the product's default.
-    KeepLayout,
 }
 
 impl LayoutMode {
     pub fn as_str(self) -> &'static str {
         match self {
+            // Serialized as `default` because that is the name the interface has
+            // always used for the primary mode, and an existing settings file must
+            // keep meaning "the normal thing".
+            LayoutMode::MoveInto => "default",
             LayoutMode::Grid => "grid",
-            LayoutMode::PrimarySide => "primary_side",
-            // Serialized as "default" because that is what the interface calls
-            // it; the previous meaning of this slot ("preserve_order") only
-            // kept the slot *order* inside an ordinary grid, which is why it
-            // looked like the setting did nothing.
-            LayoutMode::KeepLayout => "default",
         }
     }
 }
 
+/// How much of a window must be visible to count as reachable.
+pub const MIN_REACHABLE: Size = Size::new(64, 32);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutConfig {
     pub mode: LayoutMode,
-    /// Space between the work area edge and the outermost windows.
+    /// Space between the work area edge and the outermost windows. Grid only.
     pub margin: i32,
-    /// Space between adjacent windows.
+    /// Space between adjacent windows. Grid only.
     pub gap: i32,
     /// Planner floor used when a window's real minimum is unknown.
     pub fallback_min: Size,
     /// Maximum number of grid columns; more than this produces slivers.
     pub max_columns: u8,
-    /// Share of the width given to the focused window in `PrimarySide`.
-    pub primary_share_percent: u8,
-    /// Bounds of the source virtual desktop, used only by `KeepLayout` to map
-    /// the old arrangement onto the target. `None` (or an empty rectangle)
-    /// falls back to the grid: without a source rectangle there is nothing to
-    /// map relative positions against.
+    /// Bounds of the source virtual desktop.
+    ///
+    /// `MoveInto` no longer needs it (it never rescales), but the engine still
+    /// records it so a plan can state which topology it was computed against.
     pub source_bounds: Option<Rect>,
 }
 
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
-            mode: LayoutMode::Grid,
+            mode: LayoutMode::MoveInto,
             margin: 12,
             gap: 8,
             fallback_min: Size::new(320, 200),
             max_columns: 8,
-            primary_share_percent: 60,
             source_bounds: None,
         }
     }
 }
 
 /// One window offered to the planner.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub id: WindowId,
-    /// Current visible rectangle, used for relative ordering.
+    /// Current visible rectangle.
     pub current: Rect,
     /// The window's own minimum size when known.
     pub min_size: Option<Size>,
     /// Whether this window currently has keyboard focus.
     pub focused: bool,
+    /// The work area of the display the window is on right now.
+    pub source_work: Rect,
+    /// Effective scale of the display the window is on. `1.0` when unknown.
+    pub source_scale: f64,
+    /// Whether the window is already reachable on the target display.
+    pub already_on_target: bool,
+    /// Whether the platform says this window may be resized at all.
+    pub can_resize: bool,
+    /// Whether this window may be moved.
+    pub can_move: bool,
+}
+
+impl Candidate {
+    /// A candidate with the fields the planner needs and nothing else known.
+    ///
+    /// Tests and callers that do not have topology details use this; the engine
+    /// fills the real values.
+    pub fn simple(id: WindowId, current: Rect, min_size: Option<Size>) -> Self {
+        Self {
+            id,
+            current,
+            min_size,
+            focused: false,
+            source_work: current,
+            source_scale: 1.0,
+            already_on_target: false,
+            can_resize: true,
+            can_move: true,
+        }
+    }
 }
 
 /// Why a window was not given a slot.
@@ -90,15 +124,20 @@ pub struct Candidate {
 pub enum Unplaced {
     /// The target area cannot hold this many windows at usable sizes.
     NoCapacity,
+    /// The window cannot be moved at all.
+    NotMovable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
     pub id: WindowId,
     pub rect: Rect,
-    /// True when the window was placed at its minimum size because the slot was
-    /// too small, so it may overlap its neighbours.
+    /// True when the window could not keep its size and was placed at a size the
+    /// target work area can hold.
     pub clamped_to_min: bool,
+    /// True when the window is already where it should be and must not be
+    /// written to at all.
+    pub unchanged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +145,7 @@ pub struct Plan {
     pub mode: LayoutMode,
     pub placements: Vec<Placement>,
     pub unplaced: Vec<(WindowId, Unplaced)>,
-    /// True when the planner fell back to a cascade.
+    /// True when the planner had to overlap windows because they do not fit.
     pub cascaded: bool,
 }
 
@@ -118,13 +157,20 @@ impl Plan {
     pub fn is_empty(&self) -> bool {
         self.placements.is_empty()
     }
+
+    /// Placements that require a platform write.
+    pub fn changed(&self) -> impl Iterator<Item = &Placement> {
+        self.placements.iter().filter(|p| !p.unchanged)
+    }
 }
 
-/// Plan a layout. `target_work` is the work area in physical pixels.
-///
-/// `scale` is accepted for callers that want to reason about apparent size, but
-/// does not change the result: tiling is defined in the target's own pixels.
-pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) -> Plan {
+/// Plan a layout. `target_work` is the work area in platform desktop units.
+pub fn plan(
+    candidates: &[Candidate],
+    target_work: Rect,
+    target_scale: f64,
+    config: &LayoutConfig,
+) -> Plan {
     if candidates.is_empty() {
         return Plan {
             mode: config.mode,
@@ -134,27 +180,196 @@ pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) 
         };
     }
 
-    // KeepLayout does not use cells at all, so it bypasses the column/capacity
-    // machinery below and returns before the grid-specific early-outs.
-    if config.mode == LayoutMode::KeepLayout {
-        return keep_layout(candidates, target_work, config);
+    match config.mode {
+        LayoutMode::MoveInto => move_into(candidates, target_work, target_scale, config),
+        LayoutMode::Grid => grid_plan(candidates, target_work, config),
     }
+}
 
-    let mut ordered: Vec<&Candidate> = candidates.iter().collect();
-    if config.max_columns == 0 || ordered.is_empty() {
+/// Whether a window's current rectangle is already usable on the target.
+///
+/// A window whose top-left corner is inside the work area but whose body extends
+/// far outside still counts as "not on target": the user cannot see the parts that
+/// matter. Requiring a full title bar is too strict for oversized windows, so the
+/// test is the same reachability rule the engine uses elsewhere.
+pub fn is_usable_on_target(rect: Rect, work: Rect) -> bool {
+    rect.reachable_in(&work, MIN_REACHABLE.width, MIN_REACHABLE.height)
+        && rect.left >= work.left
+        && rect.top >= work.top
+}
+
+/// The default mode: move windows onto the target without rearranging them.
+///
+/// Rules, in order:
+///
+/// 1. A window already usable on the target is `unchanged` - zero platform writes.
+/// 2. A window that cannot be moved is reported, not silently dropped.
+/// 3. A resizable window keeps its size unless that size cannot fit the target
+///    work area at all; then it is scaled down by one uniform factor and clamped
+///    to its own minimum. Width and height are never scaled independently, because
+///    that is what made windows look squashed.
+/// 4. The window is placed at the same relative position it had inside its own
+///    source work area, mapped onto the target work area, then clamped so its
+///    title bar is reachable. No global desktop-wide compression.
+/// 5. Fixed-size windows are moved, never resized.
+pub fn move_into(
+    candidates: &[Candidate],
+    target_work: Rect,
+    target_scale: f64,
+    config: &LayoutConfig,
+) -> Plan {
+    let mut placements = Vec::with_capacity(candidates.len());
+    let mut unplaced = Vec::new();
+    let mut overlapped = false;
+
+    if target_work.is_empty() {
         return Plan {
-            mode: LayoutMode::Grid,
+            mode: LayoutMode::MoveInto,
             placements: Vec::new(),
-            unplaced: ordered
-                .into_iter()
+            unplaced: candidates
+                .iter()
                 .map(|c| (c.id.clone(), Unplaced::NoCapacity))
                 .collect(),
             cascaded: false,
         };
     }
 
+    for candidate in candidates {
+        if !candidate.can_move {
+            unplaced.push((candidate.id.clone(), Unplaced::NotMovable));
+            continue;
+        }
+
+        if candidate.already_on_target {
+            placements.push(Placement {
+                id: candidate.id.clone(),
+                rect: candidate.current,
+                clamped_to_min: false,
+                unchanged: true,
+            });
+            continue;
+        }
+
+        let (rect, clamped) = move_rect(candidate, target_work, target_scale, config);
+        if rect.intersection_area(&candidate.current) > 0 && !candidate.already_on_target {
+            // Overlap is expected and allowed; record it so the UI can explain why
+            // windows are stacked instead of pretending the result is a tidy layout.
+            overlapped = true;
+        }
+        placements.push(Placement {
+            id: candidate.id.clone(),
+            rect,
+            clamped_to_min: clamped,
+            unchanged: false,
+        });
+    }
+
+    Plan {
+        mode: LayoutMode::MoveInto,
+        placements,
+        unplaced,
+        cascaded: overlapped,
+    }
+}
+
+/// The rectangle one window should be moved to, and whether it had to be resized.
+fn move_rect(
+    candidate: &Candidate,
+    target_work: Rect,
+    target_scale: f64,
+    config: &LayoutConfig,
+) -> (Rect, bool) {
+    let mut width = candidate.current.width().max(1);
+    let mut height = candidate.current.height().max(1);
+    let mut clamped = false;
+
+    // Apparent-size conversion first: a 1200x900 window on a 150 % display is an
+    // 800x600 window at 100 %, and the user expects it to look the same size. This
+    // is a per-window ratio of the two displays' effective scales, never the ratio
+    // of the whole desktop.
+    let source_scale = if candidate.source_scale.is_finite() && candidate.source_scale > 0.0 {
+        candidate.source_scale
+    } else {
+        1.0
+    };
+    let target_scale = if target_scale.is_finite() && target_scale > 0.0 {
+        target_scale
+    } else {
+        1.0
+    };
+    if (source_scale - target_scale).abs() > f64::EPSILON {
+        let ratio = target_scale / source_scale;
+        width = ((f64::from(width) * ratio).round() as i32).max(1);
+        height = ((f64::from(height) * ratio).round() as i32).max(1);
+    }
+
+    let minimum = candidate.min_size.filter(|m| m.width > 0 && m.height > 0);
+
+    if candidate.can_resize && (width > target_work.width() || height > target_work.height()) {
+        // One uniform factor for both axes. Using separate factors is what made a
+        // 1200x900 window become 800x600 on one axis and something else on the
+        // other, which the user reads as "it squashed my window".
+        let factor = (f64::from(target_work.width()) / f64::from(width))
+            .min(f64::from(target_work.height()) / f64::from(height));
+        let scaled_w = (f64::from(width) * factor).floor() as i32;
+        let scaled_h = (f64::from(height) * factor).floor() as i32;
+        width = scaled_w.max(1);
+        height = scaled_h.max(1);
+        clamped = true;
+    }
+
+    if let Some(min) = minimum {
+        // Never go below the window's own minimum. If the minimum itself does not
+        // fit, keep it and let the reachability clamp place it: sending an illegal
+        // size produces a rejection, not a smaller window.
+        if candidate.can_resize && (width < min.width || height < min.height) {
+            width = width.max(min.width);
+            height = height.max(min.height);
+            clamped = true;
+        }
+    } else if candidate.can_resize {
+        // Unknown minimum: an existing small window must not be inflated to the
+        // planner floor. The floor only matters when shrinking.
+        let floor = config.fallback_min;
+        if clamped {
+            width = width.max(floor.width.min(target_work.width()));
+            height = height.max(floor.height.min(target_work.height()));
+        }
+    }
+
+    // Relative position inside the source work area. When the source is the same
+    // as the target this is the identity, so a re-run after a topology change does
+    // not drift.
+    let (fx, fy) = if candidate.source_work.width() > 0 && candidate.source_work.height() > 0 {
+        (
+            f64::from(candidate.current.left - candidate.source_work.left)
+                / f64::from(candidate.source_work.width()),
+            f64::from(candidate.current.top - candidate.source_work.top)
+                / f64::from(candidate.source_work.height()),
+        )
+    } else {
+        (0.0, 0.0)
+    };
+
+    let left = target_work.left + (fx * f64::from(target_work.width())).round() as i32;
+    let top = target_work.top + (fy * f64::from(target_work.height())).round() as i32;
+
+    let rect = Rect::new(left, top, left + width, top + height);
+    // Clamp so the title bar stays reachable without shrinking further. A window
+    // larger than the work area is aligned to its origin rather than pushed across
+    // the neighbouring display.
+    (rect.clamp_into(&target_work), clamped)
+}
+
+fn grid_plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) -> Plan {
+    let mut ordered: Vec<&Candidate> = candidates.iter().collect();
+    let effective_min = |c: &Candidate| -> Size {
+        let m = c.min_size.unwrap_or(config.fallback_min);
+        Size::new(m.width.max(1), m.height.max(1))
+    };
+
     let usable = inset(target_work, config.margin);
-    if usable.is_empty() {
+    if usable.is_empty() || config.max_columns == 0 {
         return Plan {
             mode: LayoutMode::Grid,
             placements: Vec::new(),
@@ -168,27 +383,16 @@ pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) 
 
     // Deterministic order: the original spatial order (top, then left, so a row
     // keeps its left-to-right reading order on every platform), with the id as the
-    // tie-break.
-    //
-    // Whether focus comes into it is what separates two of the modes. `Grid` puts
-    // the focused window in the first cell - the one the eye goes to - while
-    // `PrimarySide` needs focus for its large pane. `KeepLayout` never reaches
-    // this code: it maps positions directly and has no slots to fill.
-    let focus_first = true;
+    // tie-break. Focus does not reorder a grid the user asked for explicitly.
     ordered.sort_by_key(|c| {
         (
-            focus_first && !c.focused,
+            !c.focused,
             c.current.top,
             c.current.left,
             c.id.native_id,
             c.id.process_id,
         )
     });
-
-    let effective_min = |c: &Candidate| -> Size {
-        let m = c.min_size.unwrap_or(config.fallback_min);
-        Size::new(m.width.max(1), m.height.max(1))
-    };
 
     let capacity = capacity(&usable, config, candidates, &effective_min);
     if capacity == 0 || candidates.len() > capacity {
@@ -198,98 +402,13 @@ pub fn plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) 
         // `clamped_to_min`, so it can still produce something usable. Cascade only
         // when even the planner's floor cannot hold everyone, which is what the
         // cascade is for.
-        //
-        // Measured on a real Windows 11 desktop: eight windows, every one reporting
-        // its *current* size as its minimum (Notepad, Terminal, Explorer and the
-        // Calculator all do this through their composition layer), so no grid could
-        // satisfy any of them and a gather piled all eight diagonally - overlapping,
-        // which is the opposite of what "gather onto one screen" is for. A 3x3 grid
-        // squeezes two of those eight and shows all of them.
         let floor = |_: &Candidate| config.fallback_min;
         if crate::capacity(&usable, config, candidates, &floor) < candidates.len() {
             return cascade(&ordered, &usable, config, &effective_min);
         }
     }
 
-    match config.mode {
-        LayoutMode::Grid => grid(&ordered, &usable, config, &effective_min, LayoutMode::Grid),
-        LayoutMode::PrimarySide => primary_side(&ordered, &usable, config, &effective_min),
-        LayoutMode::KeepLayout => unreachable!("handled before the grid machinery"),
-    }
-}
-
-/// Map the windows' current arrangement onto the target work area.
-///
-/// The source desktop and the target work area are treated as two rectangles
-/// and each window is placed where its fraction of the source sits in the
-/// target: a window that covered the left half of the virtual desktop covers
-/// the left half of the target afterwards, on every axis independently. That
-/// is the promise of this mode - relative positions and relative sizes are
-/// the same before and after, so a multi-monitor desktop folds onto the one
-/// remote screen the way the user already had it in mind.
-///
-/// Corners cut, on purpose and in this order:
-///
-/// * Sizes never go below the window's minimum (real when known, planner
-///   floor otherwise). Fidelity loses to usability, exactly as in the grid.
-/// * The result is kept inside the target work area. A window parked partly
-///   on the taskbar would otherwise map below the work area's bottom edge.
-/// * Without a source rectangle the mode degrades to the grid rather than
-///   inventing one; the caller normally supplies the virtual desktop bounds.
-fn keep_layout(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) -> Plan {
-    let Some(src) = config.source_bounds.filter(|r| !r.is_empty()) else {
-        let fallback = LayoutConfig {
-            mode: LayoutMode::Grid,
-            ..*config
-        };
-        return plan(candidates, target_work, &fallback);
-    };
-
-    let sw = (src.right - src.left) as i64;
-    let sh = (src.bottom - src.top) as i64;
-    let tw = (target_work.right - target_work.left) as i64;
-    let th = (target_work.bottom - target_work.top) as i64;
-    // The guard above filters empty rectangles, so these cannot divide by zero
-    // unless a caller hands over bounds that overflow i32 span - not a real
-    // desktop.
-    debug_assert!(sw > 0 && sh > 0 && tw > 0 && th > 0);
-
-    let mut placements = Vec::with_capacity(candidates.len());
-    for c in candidates {
-        let r = c.current;
-        // i64 intermediates: 4k-wide coordinates times each other exceed i32.
-        let left = target_work.left as i64 + (r.left - src.left) as i64 * tw / sw;
-        let top = target_work.top as i64 + (r.top - src.top) as i64 * th / sh;
-        let width = (r.right - r.left) as i64 * tw / sw;
-        let height = (r.bottom - r.top) as i64 * th / sh;
-
-        let min = {
-            let m = c.min_size.unwrap_or(config.fallback_min);
-            (m.width.max(1), m.height.max(1))
-        };
-        // Judged on the mapped size, not the original one: a big window that maps
-        // small needs the lift just as much as a small one.
-        let below_min = width < min.0 as i64 || height < min.1 as i64;
-        let width = (width.max(min.0 as i64)).min(tw) as i32;
-        let height = (height.max(min.1 as i64)).min(th) as i32;
-
-        let left = (left.max(target_work.left as i64)).min((target_work.right - width) as i64) as i32;
-        let top = (top.max(target_work.top as i64)).min((target_work.bottom - height) as i64) as i32;
-
-        placements.push(Placement {
-            id: c.id.clone(),
-            rect: Rect::new(left, top, left + width, top + height),
-            clamped_to_min: below_min,
-        });
-    }
-    placements.sort_by_key(|p| p.id.native_id);
-
-    Plan {
-        mode: LayoutMode::KeepLayout,
-        placements,
-        unplaced: Vec::new(),
-        cascaded: false,
-    }
+    grid(&ordered, &usable, config, &effective_min, LayoutMode::Grid)
 }
 
 /// How many windows fit at the minimum usable size.
@@ -345,28 +464,13 @@ fn grid(
         // A grid that wastes an entire row or column is qualitatively worse than
         // one that merely has a ragged last row: 9 windows in 4x3 leaves a whole
         // column unused and squeezes every cell, while 5 in 3x2 leaves one hole.
-        // Ratio-only scoring cannot tell these apart, which is why 9 windows used
-        // to land in 4 columns.
         let wastes_a_track = empty > 0 && empty >= rows.min(cols) as i64;
 
-        // Rank candidate grids by, in order of importance:
-        //
-        // 1. windows that would be squeezed below their minimum size,
-        // 2. how far each cell's aspect ratio is from the average window's,
-        // 3. empty cells.
-        //
-        // Aspect ratio outranks empty cells deliberately: 5 windows in 3x2 leaves
-        // one cell empty and gives usable ~640x510 cells, while 5x1 has no empty
-        // cells but produces 5 slivers. The earlier weighting (empty cells before
-        // aspect) chose the sliver layout, which the preview made obvious.
         let avg_ratio = average_aspect(ordered);
         let cell_ratio = f64::from(cell_w) / f64::from(cell_h);
         // Two aspect terms, because matching the average ratio alone is not
         // enough: on a 1920x1032 target, five 1-row cells have ratio 1.86, which
-        // is *closer* to a landscape window's 1.5 than a 3x2 cell's 1.23. Ranking
-        // by closeness alone would therefore pick the five-sliver layout, which
-        // is exactly what the preview showed. The second term punishes cells far
-        // outside a normal window's range in absolute terms.
+        // is *closer* to a landscape window's 1.5 than a 3x2 cell's 1.23.
         let ratio_deviation = (cell_ratio / avg_ratio.max(0.1) - 1.0).abs();
         let absolute_squash = if cell_ratio > 2.5 {
             cell_ratio - 2.5
@@ -378,10 +482,6 @@ fn grid(
         let aspect_penalty =
             ((ratio_deviation * 6_000.0) + (absolute_squash * 20_000.0)).min(999_000.0) as i64;
 
-        // Order of importance: squeeze below the minimum size, then unusable cell
-        // shape, then empty cells. The empty-cell weight is high enough to keep
-        // 2x2 for four windows (where 3x2 has only a marginally better aspect but
-        // two holes) and low enough that 5 windows still prefer 3x2 over 1x5.
         let score = violations * 1_000_000_000
             + i64::from(wastes_a_track) * 50_000_000
             + aspect_penalty * 1_000
@@ -420,6 +520,7 @@ fn grid(
             id: candidate.id.clone(),
             rect,
             clamped_to_min: width > cell_w || height > cell_h,
+            unchanged: false,
         });
     }
 
@@ -428,70 +529,6 @@ fn grid(
         placements,
         unplaced: Vec::new(),
         cascaded: false,
-    }
-}
-
-fn primary_side(
-    ordered: &[&Candidate],
-    usable: &Rect,
-    config: &LayoutConfig,
-    min_of: &impl Fn(&Candidate) -> Size,
-) -> Plan {
-    let Some((primary, rest)) = ordered.split_first() else {
-        return Plan {
-            mode: LayoutMode::PrimarySide,
-            placements: Vec::new(),
-            unplaced: Vec::new(),
-            cascaded: false,
-        };
-    };
-
-    if rest.is_empty() {
-        return Plan {
-            mode: LayoutMode::PrimarySide,
-            placements: vec![Placement {
-                id: primary.id.clone(),
-                rect: *usable,
-                clamped_to_min: false,
-            }],
-            unplaced: Vec::new(),
-            cascaded: false,
-        };
-    }
-
-    let share = i32::from(config.primary_share_percent.clamp(30, 80));
-    let main_width = (usable.width() - config.gap) * share / 100;
-    let side_left = usable.left + main_width + config.gap;
-    let side_width = usable.right - side_left;
-
-    let min_side = min_of(rest[0]).width;
-    // Not enough room for a side column: fall back to a plain grid rather than
-    // producing a 40 px column.
-    if side_width < min_side {
-        return grid(ordered, usable, config, min_of, LayoutMode::Grid);
-    }
-
-    let mut placements = vec![Placement {
-        id: primary.id.clone(),
-        rect: Rect::new(
-            usable.left,
-            usable.top,
-            usable.left + main_width,
-            usable.bottom,
-        ),
-        clamped_to_min: false,
-    }];
-
-    let side_area = Rect::new(side_left, usable.top, usable.right, usable.bottom);
-    let side_plan = grid(rest, &side_area, config, min_of, LayoutMode::PrimarySide);
-    placements.extend(side_plan.placements);
-    placements[0].clamped_to_min = side_plan.cascaded;
-
-    Plan {
-        mode: LayoutMode::PrimarySide,
-        placements,
-        unplaced: side_plan.unplaced,
-        cascaded: side_plan.cascaded,
     }
 }
 
@@ -507,8 +544,6 @@ fn cascade(
     let mut placements = Vec::new();
     let mut unplaced = Vec::new();
 
-    // How many cascaded windows can be reached before the offsets push the last
-    // one out of the work area.
     let max_visible = ((usable.width() - config.fallback_min.width) / step).max(0) + 1;
     let max_visible = usize::try_from(max_visible).unwrap_or(0).max(1);
 
@@ -523,11 +558,11 @@ fn cascade(
         let offset = index as i32 * step;
         let left = usable.left + offset;
         let top = usable.top + offset;
-        let rect = Rect::new(left, top, left + width, top + height).clamp_into(usable);
         placements.push(Placement {
             id: candidate.id.clone(),
-            rect,
-            clamped_to_min: true,
+            rect: Rect::new(left, top, left + width, top + height).clamp_into(usable),
+            clamped_to_min: false,
+            unchanged: false,
         });
     }
 
@@ -536,21 +571,6 @@ fn cascade(
         placements,
         unplaced,
         cascaded: true,
-    }
-}
-
-fn inset(rect: Rect, by: i32) -> Rect {
-    let by = by.max(0);
-    let candidate = Rect::new(
-        rect.left + by,
-        rect.top + by,
-        rect.right - by,
-        rect.bottom - by,
-    );
-    if candidate.is_empty() {
-        rect
-    } else {
-        candidate
     }
 }
 
@@ -570,11 +590,27 @@ fn average_aspect(windows: &[&Candidate]) -> f64 {
     }
 }
 
+fn inset(area: Rect, margin: i32) -> Rect {
+    let margin = margin.max(0);
+    let inset = Rect::new(
+        area.left + margin,
+        area.top + margin,
+        area.right - margin,
+        area.bottom - margin,
+    );
+    if inset.is_empty() {
+        area
+    } else {
+        inset
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const WORK: Rect = Rect::new(0, 0, 1920, 1040);
+    const OTHER: Rect = Rect::new(1920, 0, 3840, 1040);
 
     fn id(n: u64) -> WindowId {
         WindowId {
@@ -590,115 +626,221 @@ mod tests {
             current: rect,
             min_size: None,
             focused: false,
+            source_work: OTHER,
+            source_scale: 1.0,
+            already_on_target: false,
+            can_resize: true,
+            can_move: true,
         }
     }
 
     fn candidates(count: usize) -> Vec<Candidate> {
         (0..count)
-            .map(|i| candidate(i as u64, Rect::new(0, i as i32 * 40, 800, 600)))
+            .map(|i| candidate(i as u64, Rect::new(1920, i as i32 * 40, 2720, i as i32 * 40 + 600)))
             .collect()
+    }
+
+    fn on_target(count: usize) -> Vec<Candidate> {
+        (0..count)
+            .map(|i| {
+                let mut c = candidate(i as u64, Rect::new(100, 100 + i as i32 * 40, 900, 700));
+                c.already_on_target = true;
+                c.source_work = WORK;
+                c
+            })
+            .collect()
+    }
+
+    fn grid_config() -> LayoutConfig {
+        LayoutConfig {
+            mode: LayoutMode::Grid,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn default_mode_is_move_into() {
+        assert_eq!(LayoutConfig::default().mode, LayoutMode::MoveInto);
+        assert_eq!(LayoutMode::MoveInto.as_str(), "default");
     }
 
     #[test]
     fn empty_input_produces_empty_plan() {
-        let plan = plan(&[], WORK, &LayoutConfig::default());
+        let plan = plan(&[], WORK, 1.0, &LayoutConfig::default());
         assert!(plan.is_empty());
         assert!(!plan.cascaded);
     }
 
     #[test]
-    fn single_window_fills_work_area_minus_margin() {
-        let plan = plan(&candidates(1), WORK, &LayoutConfig::default());
+    fn windows_already_on_target_are_not_touched() {
+        // The defect this replaces: the old default rescaled the entire virtual
+        // desktop, so windows the user could already see were shrunk and moved.
+        let input = on_target(3);
+        let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
+        assert_eq!(plan.placements.len(), 3);
+        for placement in &plan.placements {
+            assert!(placement.unchanged, "must not request a write");
+        }
+        assert_eq!(plan.changed().count(), 0);
+    }
+
+    #[test]
+    fn other_display_window_keeps_its_size() {
+        let input = vec![candidate(1, Rect::new(2000, 100, 3200, 1000))];
+        let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
+        let placed = &plan.placements[0];
+        assert_eq!(placed.rect.width(), 1200);
+        assert_eq!(placed.rect.height(), 900);
+        assert!(!placed.unchanged);
+        assert!(placed.rect.reachable_in(&WORK, MIN_REACHABLE.width, MIN_REACHABLE.height));
+    }
+
+    #[test]
+    fn adding_an_unrelated_display_does_not_change_the_result() {
+        // Sizes are never derived from the whole desktop, so the presence of a
+        // third screen cannot affect a window moving between two others.
+        let input = vec![candidate(1, Rect::new(2000, 100, 3200, 1000))];
+        let a = plan(&input, WORK, 1.0, &LayoutConfig::default());
+
+        let mut wide = LayoutConfig::default();
+        wide.source_bounds = Some(Rect::new(-1920, 0, 5760, 1080));
+        let b = plan(&input, WORK, 1.0, &wide);
+        assert_eq!(a.placements, b.placements);
+    }
+
+    #[test]
+    fn oversized_window_is_scaled_by_one_factor() {
+        let mut input = vec![candidate(1, Rect::new(0, 0, 4000, 1000))];
+        input[0].source_work = Rect::new(0, 0, 4000, 1000);
+        let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
         let rect = plan.placements[0].rect;
-        assert_eq!(rect, inset(WORK, 12));
+        assert!(rect.width() <= WORK.width());
+        assert!(rect.height() <= WORK.height());
+        // Uniform scaling: original ratio 4:1 must be preserved within rounding.
+        let ratio = f64::from(rect.width()) / f64::from(rect.height());
+        assert!((ratio - 4.0).abs() < 0.05, "ratio {ratio} is not uniform");
+    }
+
+    #[test]
+    fn small_window_is_not_inflated() {
+        let input = vec![candidate(1, Rect::new(2000, 100, 2180, 220))];
+        let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
+        assert_eq!(plan.placements[0].rect.width(), 180);
+        assert_eq!(plan.placements[0].rect.height(), 120);
+        assert!(!plan.placements[0].clamped_to_min);
+    }
+
+    #[test]
+    fn minimum_size_is_never_violated() {
+        let mut input = vec![candidate(1, Rect::new(0, 0, 4000, 1000))];
+        input[0].source_work = Rect::new(0, 0, 4000, 1000);
+        input[0].min_size = Some(Size::new(900, 700));
+        let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
+        let rect = plan.placements[0].rect;
+        assert!(rect.width() >= 900);
+        assert!(rect.height() >= 700);
+    }
+
+    #[test]
+    fn fixed_size_window_is_only_moved() {
+        let mut input = vec![candidate(1, Rect::new(0, 0, 4000, 1000))];
+        input[0].source_work = Rect::new(0, 0, 4000, 1000);
+        input[0].can_resize = false;
+        let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
+        let rect = plan.placements[0].rect;
+        assert_eq!(rect.width(), 4000);
+        assert_eq!(rect.height(), 1000);
+        assert!(rect.reachable_in(&WORK, MIN_REACHABLE.width, MIN_REACHABLE.height));
+    }
+
+    #[test]
+    fn immovable_window_is_reported_not_dropped() {
+        let mut input = vec![candidate(1, Rect::new(2000, 100, 2400, 400))];
+        input[0].can_move = false;
+        let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
+        assert!(plan.placements.is_empty());
+        assert_eq!(plan.unplaced, vec![(id(1), Unplaced::NotMovable)]);
+    }
+
+    #[test]
+    fn overlapping_is_allowed_and_reported() {
+        let input = vec![
+            candidate(1, Rect::new(2000, 100, 2600, 500)),
+            candidate(2, Rect::new(2000, 100, 2600, 500)),
+        ];
+        let plan = plan(&input, WORK, 1.0, &LayoutConfig::default());
+        assert_eq!(plan.placements.len(), 2);
+        assert_eq!(
+            plan.placements[0].rect.intersection_area(&plan.placements[1].rect),
+            600 * 400,
+            "the two windows are expected to overlap, not to be tiled"
+        );
+    }
+
+    #[test]
+    fn negative_and_portrait_work_areas_keep_windows_reachable() {
+        for work in [
+            Rect::new(-1920, -100, 0, 940),
+            Rect::new(0, 0, 1080, 1920),
+            Rect::new(0, -1080, 1920, 0),
+        ] {
+            let input = vec![candidate(1, Rect::new(2000, 100, 2600, 500))];
+            let plan = plan(&input, work, 1.0, &LayoutConfig::default());
+            let rect = plan.placements[0].rect;
+            assert!(
+                rect.reachable_in(&work, MIN_REACHABLE.width, MIN_REACHABLE.height),
+                "{rect:?} escaped {work:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn grid_still_tiles_on_request() {
+        let plan = plan(&candidates(4), WORK, 1.0, &grid_config());
+        assert_eq!(plan.mode, LayoutMode::Grid);
+        assert_eq!(plan.placements.len(), 4);
+        for (i, a) in plan.placements.iter().enumerate() {
+            for b in plan.placements.iter().skip(i + 1) {
+                assert_eq!(a.rect.intersection_area(&b.rect), 0);
+            }
+        }
     }
 
     #[test]
     fn four_windows_form_a_2x2_grid() {
-        let plan = plan(&candidates(4), WORK, &LayoutConfig::default());
-        assert_eq!(plan.placements.len(), 4);
-        let rects: Vec<Rect> = plan.placements.iter().map(|p| p.rect).collect();
-        // Two distinct columns and two distinct rows.
-        let mut lefts: Vec<i32> = rects.iter().map(|r| r.left).collect();
+        let plan = plan(&candidates(4), WORK, 1.0, &grid_config());
+        let mut lefts: Vec<i32> = plan.placements.iter().map(|p| p.rect.left).collect();
         lefts.sort_unstable();
         lefts.dedup();
         assert_eq!(lefts.len(), 2);
-        let mut tops: Vec<i32> = rects.iter().map(|r| r.top).collect();
-        tops.sort_unstable();
-        tops.dedup();
-        assert_eq!(tops.len(), 2);
     }
 
     #[test]
-    fn placements_never_overlap_in_grid_mode() {
-        for count in 1..=9 {
-            let plan = plan(&candidates(count), WORK, &LayoutConfig::default());
-            assert!(!plan.cascaded, "{count} windows should tile");
-            for (i, a) in plan.placements.iter().enumerate() {
-                for b in plan.placements.iter().skip(i + 1) {
-                    assert_eq!(
-                        a.rect.intersection_area(&b.rect),
-                        0,
-                        "windows {} and {} overlap: {:?} vs {:?}",
-                        a.id.native_id,
-                        b.id.native_id,
-                        a.rect,
-                        b.rect
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn all_placements_stay_inside_work_area() {
+    fn grid_placements_stay_inside_work_area() {
         for count in [1usize, 3, 7, 20] {
-            let plan = plan(&candidates(count), WORK, &LayoutConfig::default());
+            let plan = plan(&candidates(count), WORK, 1.0, &grid_config());
             for p in &plan.placements {
-                assert!(
-                    p.rect.reachable_in(&WORK, 64, 32),
-                    "placement {:?} escaped the work area",
-                    p.rect
-                );
+                assert!(p.rect.reachable_in(&WORK, 64, 32));
             }
         }
     }
 
     #[test]
-    fn focus_wins_the_main_area_in_primary_side() {
+    fn grid_respects_minimum_size() {
         let mut input = candidates(4);
-        input[3].focused = true;
-        let config = LayoutConfig {
-            mode: LayoutMode::PrimarySide,
-            ..Default::default()
-        };
-        let plan = plan(&input, WORK, &config);
-        let main = plan
-            .placements
-            .iter()
-            .find(|p| p.id == id(3))
-            .expect("focused window placed");
-        let others: Vec<&Placement> = plan.placements.iter().filter(|p| p.id != id(3)).collect();
-        assert!(main.rect.width() > others[0].rect.width());
-    }
-
-    #[test]
-    fn primary_side_degrades_to_grid_when_side_is_too_narrow() {
-        let narrow = Rect::new(0, 0, 700, 1040);
-        let mut input = candidates(3);
-        input[0].min_size = Some(Size::new(600, 300));
-        let config = LayoutConfig {
-            mode: LayoutMode::PrimarySide,
-            ..Default::default()
-        };
-        let plan = plan(&input, narrow, &config);
-        assert_eq!(plan.mode, LayoutMode::Grid);
-        assert_eq!(plan.placements.len(), 3);
+        for c in &mut input {
+            c.min_size = Some(Size::new(700, 500));
+        }
+        let plan = plan(&input, WORK, 1.0, &grid_config());
+        for p in &plan.placements {
+            assert!(p.rect.width() >= 700);
+            assert!(p.rect.height() >= 500);
+        }
     }
 
     #[test]
     fn too_many_windows_cascades_instead_of_shrinking() {
-        let plan = plan(&candidates(200), WORK, &LayoutConfig::default());
+        let plan = plan(&candidates(200), WORK, 1.0, &grid_config());
         assert!(plan.cascaded);
         assert!(!plan.placements.is_empty());
         for p in &plan.placements {
@@ -709,236 +851,20 @@ mod tests {
     }
 
     #[test]
-    fn minimum_size_is_respected_even_when_the_cell_is_smaller() {
-        let mut input = candidates(4);
-        for c in &mut input {
-            c.min_size = Some(Size::new(700, 500));
-        }
-        let plan = plan(&input, WORK, &LayoutConfig::default());
-        for p in &plan.placements {
-            assert!(p.rect.width() >= 700);
-            assert!(p.rect.height() >= 500);
-        }
-    }
-
-    #[test]
-    fn keep_layout_maps_relative_positions_and_sizes() {
-        // Two 1920x1080 side by side, folding onto one 1920x1040 work area. A
-        // window on the left screen's top quarter and one on the right screen's
-        // bottom quarter must land on the target's top-left and bottom-right
-        // quarters respectively, at their fractional sizes.
-        let src = Rect::new(0, 0, 3840, 2160);
-        let input = vec![
-            candidate(1, Rect::new(0, 0, 960, 540)),
-            candidate(2, Rect::new(2880, 1080, 3840, 2160)),
-        ];
-        let config = LayoutConfig {
-            source_bounds: Some(src),
-            ..Default::default()
-        };
-        // The mode default is now KeepLayout; spell it out anyway so the test
-        // survives a future default change.
-        let config = LayoutConfig {
-            mode: LayoutMode::KeepLayout,
-            ..config
-        };
-        let plan = plan(&input, WORK, &config);
-        assert_eq!(plan.mode, LayoutMode::KeepLayout);
-        assert_eq!(plan.placements.len(), 2);
-
-        let a = plan.placement_for(&candidate(1, WORK).id).unwrap();
-        // x: (0-0)*1920/3840 = 0, w: 960*1920/3840 = 480
-        // y: (0-0)*1040/2160 = 0, h: 540*1040/2160 = 260
-        assert_eq!(a.rect, Rect::new(0, 0, 480, 260));
-
-        let b = plan.placement_for(&candidate(2, WORK).id).unwrap();
-        // x: 2880*1920/3840 = 1440; y: 1080*1040/2160 = 520. The window is the
-        // bottom half of the right screen, so its mapped height is half the
-        // target's: 520, reaching the work area's bottom edge.
-        assert_eq!(b.rect, Rect::new(1440, 520, 1920, 1040));
-    }
-
-    #[test]
-    fn keep_layout_is_identity_when_source_equals_target() {
-        // Gathering with the target already filling the desktop must move
-        // nothing: the mapping is the identity.
-        let input = vec![
-            candidate(1, Rect::new(100, 200, 700, 600)),
-            candidate(2, Rect::new(900, 50, 1500, 400)),
-        ];
-        let config = LayoutConfig {
-            mode: LayoutMode::KeepLayout,
-            source_bounds: Some(WORK),
-            ..Default::default()
-        };
-        let plan = plan(&input, WORK, &config);
-        assert_eq!(plan.placements[0].rect, input[0].current);
-        assert_eq!(plan.placements[1].rect, input[1].current);
-    }
-
-    #[test]
-    fn keep_layout_lifts_windows_below_their_minimum() {
-        // A small window maps smaller still when two screens fold onto one.
-        // Usability wins over fidelity: it is raised to its minimum and marked,
-        // the same contract as the grid's clamped_to_min.
-        let src = Rect::new(0, 0, 3840, 2160);
-        let mut input = vec![candidate(1, Rect::new(0, 0, 960, 540))];
-        input[0].min_size = Some(Size::new(700, 500));
-        let config = LayoutConfig {
-            mode: LayoutMode::KeepLayout,
-            source_bounds: Some(src),
-            ..Default::default()
-        };
-        let plan = plan(&input, WORK, &config);
-        let p = &plan.placements[0];
-        assert_eq!(
-            (p.rect.width(), p.rect.height()),
-            (700, 500),
-            "mapped size 480x260 must be raised to the minimum"
-        );
-        assert!(p.clamped_to_min);
-        assert!(p.rect.reachable_in(&WORK, 64, 32), "must stay on screen");
-    }
-
-    #[test]
-    fn keep_layout_without_source_bounds_falls_back_to_the_grid() {
-        // Nothing to map against, so the honest answer is the default
-        // arrangement rather than an invented one.
-        let input = candidates(4);
-        let config = LayoutConfig {
-            mode: LayoutMode::KeepLayout,
-            source_bounds: None,
-            ..Default::default()
-        };
-        let mapped = plan(&input, WORK, &config);
-        let plain = plan(&input, WORK, &LayoutConfig::default());
-        assert_eq!(mapped.mode, LayoutMode::Grid);
-        assert_eq!(mapped.placements, plain.placements);
-    }
-
-    #[test]
-    fn grid_puts_the_focused_window_first() {
-        // The other half of the distinction: in grid mode the focused window takes
-        // the first cell, which is the visible difference between the two modes.
-        let mut input = vec![
-            candidate(1, Rect::new(0, 400, 800, 600)),
-            candidate(2, Rect::new(0, 0, 800, 200)),
-            candidate(3, Rect::new(0, 200, 800, 400)),
-        ];
-        input[0].focused = true;
-        let config = LayoutConfig {
-            mode: LayoutMode::Grid,
-            ..Default::default()
-        };
-        let order: Vec<u64> = plan(&input, WORK, &config)
-            .placements
-            .iter()
-            .map(|p| p.id.native_id)
-            .collect();
-        assert_eq!(
-            order,
-            vec![1, 2, 3],
-            "the focused window goes to the first cell"
-        );
-    }
-
-    /// The minimum sizes measured on a real Windows 11 desktop, in physical pixels.
-    ///
-    /// Every one of them equals the window's current size, which is what a
-    /// composition-based window reports when asked: `WM_GETMINMAXINFO` comes back
-    /// with "I am this big now" rather than a limit the application enforces.
-    fn desktop_of_eight() -> Vec<Candidate> {
-        let sizes: [(Rect, Size); 8] = [
-            (Rect::new(180, 180, 660, 283), Size::new(480, 103)),
-            (Rect::new(152, 152, 484, 354), Size::new(332, 202)),
-            (Rect::new(124, 124, 456, 326), Size::new(332, 202)),
-            (Rect::new(40, 40, 376, 580), Size::new(336, 540)),
-            (Rect::new(208, 208, 540, 410), Size::new(332, 202)),
-            (Rect::new(68, 68, 400, 270), Size::new(332, 202)),
-            (Rect::new(96, 96, 257, 339), Size::new(161, 243)),
-            (Rect::new(12, 12, 628, 420), Size::new(616, 408)),
-        ];
-        sizes
-            .into_iter()
-            .enumerate()
-            .map(|(index, (rect, min))| Candidate {
-                id: id(index as u64),
-                current: rect,
-                min_size: Some(min),
-                focused: false,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn minimums_that_equal_the_current_size_do_not_force_a_cascade() {
-        // The bug: `plan` declined to lay anything out because no grid could satisfy
-        // every window's self-reported minimum, and piled all eight diagonally
-        // instead. A cascade overlaps - each window covers the previous one - so
-        // gathering eight windows showed the user one.
-        let plan = plan(&desktop_of_eight(), WORK, &LayoutConfig::default());
-        assert!(
-            !plan.cascaded,
-            "a usable arrangement exists and must be used instead of a pile",
-        );
-        assert_eq!(plan.placements.len(), 8);
-        assert!(plan.unplaced.is_empty());
-
-        // Only the two genuinely large windows are squeezed; the rest keep their
-        // own minimum.
-        let squeezed = plan.placements.iter().filter(|p| p.clamped_to_min).count();
-        assert!(squeezed <= 3, "squeezed {squeezed} of eight windows");
-    }
-
-    #[test]
-    fn a_desktop_with_more_windows_than_the_floor_can_hold_still_cascades() {
-        // The cascade keeps its purpose: when the work area cannot hold this many
-        // windows even at the planner floor, placing them at their own sizes and
-        // letting the user sort it out beats pretending they fit.
-        let many = candidates(40);
-        let plan = plan(&many, WORK, &LayoutConfig::default());
-        assert!(
-            plan.cascaded,
-            "40 windows cannot tile a 1920x1040 work area"
-        );
-    }
-
-    #[test]
-    fn plan_is_deterministic() {
-        let input = candidates(11);
-        let a = plan(&input, WORK, &LayoutConfig::default());
-        let b = plan(&input, WORK, &LayoutConfig::default());
-        assert_eq!(a.placements, b.placements);
-        assert_eq!(a.mode, b.mode);
-    }
-
-    #[test]
     fn degenerate_work_area_yields_no_placements() {
         let zero = Rect::new(0, 0, 0, 0);
-        let plan = plan(&candidates(3), zero, &LayoutConfig::default());
+        let plan = plan(&candidates(3), zero, 1.0, &LayoutConfig::default());
         assert!(plan.placements.is_empty());
         assert_eq!(plan.unplaced.len(), 3);
     }
 
     #[test]
-    fn negative_coordinates_are_handled() {
-        let work = Rect::new(-1920, -100, 0, 940);
-        let plan = plan(&candidates(4), work, &LayoutConfig::default());
-        for p in &plan.placements {
-            assert!(p.rect.reachable_in(&work, 64, 32));
-            assert!(p.rect.left >= work.left);
-            assert!(p.rect.right <= work.right);
-        }
-    }
-
-    #[test]
-    fn portrait_work_area_still_tiles() {
-        let portrait = Rect::new(0, 0, 1080, 1920);
-        let plan = plan(&candidates(6), portrait, &LayoutConfig::default());
-        assert!(!plan.cascaded);
-        for p in &plan.placements {
-            assert!(p.rect.reachable_in(&portrait, 64, 32));
-        }
+    fn plan_is_deterministic() {
+        let input = candidates(11);
+        let a = plan(&input, WORK, 1.0, &grid_config());
+        let b = plan(&input, WORK, 1.0, &grid_config());
+        assert_eq!(a.placements, b.placements);
+        assert_eq!(a.mode, b.mode);
     }
 }
 
@@ -947,7 +873,7 @@ mod column_choice_tests {
     //! The preview exposed a real defect: 5 windows in a 1920x1032 area were laid
     //! out as 5 vertical slivers because "zero empty cells" outranked "usable
     //! aspect ratio". These cases pin the intuitive result for the small counts
-    //! users actually hit.
+    //! users actually hit in the explicit grid mode.
 
     use super::*;
 
@@ -961,12 +887,23 @@ mod column_choice_tests {
                     process_id: 1,
                     process_start: 1,
                 },
-                // A typical desktop window is landscape.
                 current: Rect::new(0, 0, 1200, 800),
                 min_size: None,
                 focused: false,
+                source_work: Rect::new(0, 0, 1200, 800),
+                source_scale: 1.0,
+                already_on_target: false,
+                can_resize: true,
+                can_move: true,
             })
             .collect()
+    }
+
+    fn config() -> LayoutConfig {
+        LayoutConfig {
+            mode: LayoutMode::Grid,
+            ..Default::default()
+        }
     }
 
     fn columns(plan: &Plan) -> usize {
@@ -978,7 +915,7 @@ mod column_choice_tests {
 
     #[test]
     fn five_windows_use_three_columns_not_five() {
-        let plan = plan(&windows(5), WORK, &LayoutConfig::default());
+        let plan = plan(&windows(5), WORK, 1.0, &config());
         assert_eq!(columns(&plan), 3, "5 windows should tile 3x2, not 5x1");
         for p in &plan.placements {
             assert!(
@@ -991,19 +928,16 @@ mod column_choice_tests {
 
     #[test]
     fn four_windows_stay_two_by_two() {
-        let plan = plan(&windows(4), WORK, &LayoutConfig::default());
-        assert_eq!(columns(&plan), 2);
+        assert_eq!(columns(&plan(&windows(4), WORK, 1.0, &config())), 2);
     }
 
     #[test]
     fn six_windows_use_three_columns() {
-        let plan = plan(&windows(6), WORK, &LayoutConfig::default());
-        assert_eq!(columns(&plan), 3);
+        assert_eq!(columns(&plan(&windows(6), WORK, 1.0, &config())), 3);
     }
 
     #[test]
     fn nine_windows_use_three_columns() {
-        let plan = plan(&windows(9), WORK, &LayoutConfig::default());
-        assert_eq!(columns(&plan), 3);
+        assert_eq!(columns(&plan(&windows(9), WORK, 1.0, &config())), 3);
     }
 }

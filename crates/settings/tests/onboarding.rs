@@ -131,14 +131,14 @@ fn resetting_keeps_the_target_and_clears_everything_else() {
         autostart: true,
         auto_gather: true,
         auto_restore: true,
-        auto_detect: "aggressive".into(),
+        auto_detect: "verified".into(),
         restore_delay_secs: 30,
         theme: unfy_settings::ThemeName::Dark,
         onboarding_done: true,
         onboarding_step: 3,
         ..Default::default()
     };
-    settings.layout_mode = unfy_settings::LayoutModeName::PrimarySide;
+    settings.layout_mode = unfy_settings::LayoutModeName::Grid;
     settings.margin = 40;
     settings.save(&path).expect("save");
 
@@ -162,7 +162,7 @@ fn resetting_keeps_the_target_and_clears_everything_else() {
     assert!(!fresh.autostart);
     assert!(!fresh.auto_gather);
     assert!(!fresh.auto_restore);
-    assert_eq!(fresh.auto_detect, "balanced");
+    assert_eq!(fresh.auto_detect, "off", "reset must not enable automation");
     // Assert against the shipped default rather than a literal: the point is
     // "reset restores defaults", not "the default is zero".
     assert_eq!(
@@ -170,9 +170,9 @@ fn resetting_keeps_the_target_and_clears_everything_else() {
         unfy_settings::Settings::default().restore_delay_secs
     );
     // Layout mode has a literal here on purpose: "reset restores the default"
-    // must mean the arrangement-preserving mode, and silently drifting to a
-    // grid-on-reset regression is what this line is for.
-    assert_eq!(fresh.layout_mode, unfy_settings::LayoutModeName::KeepLayout);
+    // must mean the move-into mode, and silently drifting to a grid-on-reset
+    // regression is what this line is for.
+    assert_eq!(fresh.layout_mode, unfy_settings::LayoutModeName::MoveInto);
     assert_eq!(fresh.margin, 12);
     assert!(fresh.onboarding_done, "the guide must not reappear");
 }

@@ -231,6 +231,7 @@ fn recovered_transaction_helper_behaviour() {
             outcome: WindowOutcome::Rejected,
             observed: None,
         }],
+        resolved: Vec::new(),
         truncated_bytes: 0,
     };
     assert!(!tx.may_have_moved_windows());

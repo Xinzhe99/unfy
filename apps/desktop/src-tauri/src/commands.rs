@@ -7,7 +7,9 @@
 use std::sync::Arc;
 
 use unfy_domain::{DisplaySnapshot, Rect, WindowId};
-use unfy_engine::{EngineState, MigrationReport, PendingWork, Preview, RestoreReport};
+use unfy_engine::{
+    EngineConfig, EngineState, MigrationReport, PendingWork, Preview, RestoreReport,
+};
 use unfy_platform::{DisplayProvider, WindowBackend};
 use unfy_settings::{Settings, TargetDisplay};
 use serde::{Deserialize, Serialize};
@@ -127,6 +129,10 @@ pub struct MigrationDto {
     pub gone: usize,
     pub skipped: usize,
     pub unplaced: usize,
+    /// Windows already usable on the target; zero platform writes.
+    pub unchanged: usize,
+    /// Windows whose preimage could not be captured; zero platform writes.
+    pub not_attempted: usize,
     pub cascaded: bool,
     pub state: &'static str,
     /// Names of the applications that refused to move. A pid means nothing to a
@@ -142,6 +148,8 @@ pub struct RestoreDto {
     pub fallback_visible: usize,
     pub rejected: usize,
     pub pending: usize,
+    /// Safe but still owing their original position, because their display is gone.
+    pub awaiting_original: usize,
     pub state: &'static str,
     /// Applications whose windows could not be restored, for the same reason.
     pub pending_apps: Vec<String>,
@@ -159,7 +167,6 @@ pub struct SaveSettingsRequest {
     pub hotkey_restore: Option<String>,
     pub restore_delay_secs: Option<u32>,
     pub auto_update: Option<bool>,
-    pub telemetry: Option<bool>,
     pub excluded_apps: Option<Vec<String>>,
     pub onboarding_done: Option<bool>,
     pub onboarding_step: Option<u8>,
@@ -338,7 +345,7 @@ pub fn list_displays(app: State<'_, AppState>) -> Result<Vec<DisplayDto>, String
 
 #[tauri::command]
 pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
-    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+    let engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
     let target = engine
@@ -474,8 +481,6 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
     );
 
     let activity = app.activity.clone();
-    let settings_for_refused = app.settings.clone();
-    let settings_path = app.settings_path.clone();
     let progress_emitter = emitter.clone();
     let emit: Arc<dyn Fn(usize, usize) + Send + Sync> = Arc::new(move |done, total| {
         let _ = tauri::Emitter::emit(
@@ -486,19 +491,7 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
     });
 
     let result = tokio::task::spawn_blocking(move || {
-        let report = migrate_blocking(engine_state, settings, activity, emit, trigger)?;
-        // Remember which applications refused, so the overview can offer to
-        // exclude them without the user typing a file name from a toast that has
-        // already disappeared.
-        if let Ok(mut stored) = settings_for_refused.lock() {
-            if stored.last_refused_apps != report.refused_apps {
-                stored.last_refused_apps = report.refused_apps.clone();
-                if let Err(e) = stored.save(&settings_path) {
-                    tracing::warn!(error = %e, "could not persist refused apps");
-                }
-            }
-        }
-        Ok::<_, String>(report)
+        migrate_blocking(engine_state, settings, activity, emit, trigger)
     })
     .await
     .map_err(|e| format!("migration task failed: {e}"))?;
@@ -557,8 +550,8 @@ fn migrate_blocking(
         }
         other => other.to_string(),
     })?;
-    let restored_first = retarget.restored;
     let report: MigrationReport = retarget.migration;
+    let restored_first = 0usize;
 
     // Record before returning: the user's question ("what did it just do?") is
     // asked immediately after the action, not after a later poll.
@@ -567,7 +560,7 @@ fn migrate_blocking(
             at: crate::activity::now(),
             kind: crate::activity::Kind::Gather,
             affected: report.applied_count(),
-            unsettled: report.failed_count() + report.unplaced.len(),
+            unsettled: report.unfinished() + report.unplaced.len(),
             note: if restored_first > 0 {
                 Some(Message::one(
                     "先恢复了 {count} 个窗口",
@@ -591,6 +584,8 @@ fn migrate_blocking(
             .count(),
         skipped: report.skipped.len(),
         unplaced: report.unplaced.len(),
+        unchanged: report.unchanged,
+        not_attempted: report.not_attempted.len(),
         cascaded: report.cascaded,
         state: state_name(engine.state()),
         refused_apps: {
@@ -739,6 +734,7 @@ fn restore_blocking(
     let mut pending_apps: Vec<String> = report
         .pending
         .iter()
+        .chain(report.awaiting_original.iter())
         .filter_map(|id| names.get(&id.process_id).cloned())
         .filter(|name| !name.is_empty())
         .collect();
@@ -766,7 +762,7 @@ fn restore_blocking(
             kind: crate::activity::Kind::Restore,
             affected: report.count(unfy_domain::WindowOutcome::Restored)
                 + report.count(unfy_domain::WindowOutcome::FallbackVisible),
-            unsettled: report.pending.len(),
+            unsettled: report.outstanding(),
             note: None,
             trigger: trigger.into(),
         });
@@ -778,6 +774,7 @@ fn restore_blocking(
         fallback_visible: report.count(unfy_domain::WindowOutcome::FallbackVisible),
         rejected: report.count(unfy_domain::WindowOutcome::Rejected),
         pending: report.pending.len(),
+        awaiting_original: report.awaiting_original.len(),
         state,
         pending_apps,
     })
@@ -874,7 +871,6 @@ pub struct SettingsDto {
     pub hotkey_restore: Option<String>,
     pub restore_delay_secs: u32,
     pub auto_update: bool,
-    pub telemetry: bool,
     pub excluded_apps: Vec<String>,
     pub onboarding_done: bool,
     pub onboarding_step: u8,
@@ -884,7 +880,6 @@ pub struct SettingsDto {
     /// `single` or `all`: what the remote client can display.
     pub remote_screens: String,
     /// Applications that refused the last gather, for the "exclude" shortcut.
-    pub last_refused_apps: Vec<String>,
     pub target: Option<TargetDto>,
     /// What the detector currently believes, and why. Independent of whether
     /// automation is enabled: the overview shows the evidence either way.
@@ -897,8 +892,7 @@ impl From<&Settings> for SettingsDto {
         Self {
             layout_mode: match s.layout_mode {
                 unfy_settings::LayoutModeName::Grid => "grid",
-                unfy_settings::LayoutModeName::PrimarySide => "primary_side",
-                unfy_settings::LayoutModeName::KeepLayout => "default",
+                unfy_settings::LayoutModeName::MoveInto => "default",
             }
             .into(),
             margin: s.margin,
@@ -920,7 +914,6 @@ impl From<&Settings> for SettingsDto {
             hotkey_restore: s.hotkey_restore.clone(),
             restore_delay_secs: s.restore_delay_secs,
             auto_update: s.auto_update,
-            telemetry: s.telemetry,
             excluded_apps: s.excluded_apps.clone(),
             auto_detect: s.auto_detect.clone(),
             auto_gather: s.auto_gather,
@@ -929,7 +922,6 @@ impl From<&Settings> for SettingsDto {
                 unfy_settings::RemoteScreens::Single => "single".into(),
                 unfy_settings::RemoteScreens::All => "all".into(),
             },
-            last_refused_apps: s.last_refused_apps.clone(),
             // Filled in by `settings_dto`, which has access to the detector.
             remote_active: false,
             remote_evidence: None,
@@ -949,6 +941,47 @@ impl From<&Settings> for SettingsDto {
     }
 }
 
+/// Convert the persisted settings into the engine configuration.
+///
+/// This is the only place that decides what the engine reads. Startup, a save and
+/// a reset all call it, so the three can never disagree - which they did: a reset
+/// wrote "grid, margin 12, delay 0" into the live engine while the saved file said
+/// "default, delay 15", and the next launch silently changed behaviour.
+pub fn engine_config_from_settings(settings: &Settings) -> EngineConfig {
+    let mut layout = unfy_layout::LayoutConfig {
+        mode: settings.layout_mode.into(),
+        margin: settings.margin,
+        gap: settings.gap,
+        ..Default::default()
+    };
+    // The move-in mode ignores these two, but keeping them in the config lets the
+    // explicit grid honour the same document.
+    layout.source_bounds = None;
+    EngineConfig {
+        layout,
+        journal_dir: unfy_settings::config_dir().join("journal"),
+        restore_delay_secs: settings.restore_delay_secs,
+        excluded_apps: settings.excluded_apps.clone(),
+        ..Default::default()
+    }
+}
+
+/// Apply the persisted settings to a running engine.
+///
+/// Returns the engine's refusal (an open transaction) instead of swallowing it:
+/// the caller has to tell the user that the new values start with the next
+/// gather, not now.
+fn publish_settings_to_engine(
+    app: &State<'_, AppState>,
+    settings: &Settings,
+) -> Result<(), String> {
+    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+    let mut config = engine_config_from_settings(settings);
+    // Keep the live progress hook: it belongs to the caller, not to the document.
+    config.on_progress = engine.config().on_progress.clone();
+    engine.update_config(config).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn save_settings(
     handle: tauri::AppHandle,
@@ -966,29 +999,35 @@ pub fn save_settings(
 
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
 
+    // Merge into a copy. A rejected value must leave the live settings - and the
+    // file - exactly as they were; mutating in place and returning an error
+    // halfway through would keep the fields that happened to be applied first.
+    let mut candidate = settings.clone();
+
     if let Some(mode) = request.layout_mode {
-        settings.layout_mode = match mode.as_str() {
+        candidate.layout_mode = match mode.as_str() {
             "grid" => unfy_settings::LayoutModeName::Grid,
-            "primary_side" => unfy_settings::LayoutModeName::PrimarySide,
-            "default" => unfy_settings::LayoutModeName::KeepLayout,
-            // Accept the old name from a stale frontend or a hand-edited file.
-            "preserve_order" => unfy_settings::LayoutModeName::KeepLayout,
+            // The interface's name for the default mode, plus the two historical
+            // spellings a stale window or a hand-edited file may still send.
+            "default" | "preserve_order" | "primary_side" => {
+                unfy_settings::LayoutModeName::MoveInto
+            }
             other => return Err(format!("unknown layout mode: {other}")),
         };
     }
     if let Some(margin) = request.margin {
-        settings.margin = margin;
+        candidate.margin = margin;
     }
     if let Some(gap) = request.gap {
-        settings.gap = gap;
+        candidate.gap = gap;
     }
     if let Some(autostart) = request.autostart {
-        settings.autostart = autostart;
+        candidate.autostart = autostart;
     }
     let autostart_changed = request.autostart;
     let hotkeys_changed = request.hotkey_gather.is_some() || request.hotkey_restore.is_some();
     if let Some(language) = request.language {
-        settings.language = match language.as_str() {
+        candidate.language = match language.as_str() {
             "system" => unfy_settings::LanguageName::System,
             "zh" => unfy_settings::LanguageName::Zh,
             "en" => unfy_settings::LanguageName::En,
@@ -996,7 +1035,7 @@ pub fn save_settings(
         };
     }
     if let Some(theme) = request.theme {
-        settings.theme = match theme.as_str() {
+        candidate.theme = match theme.as_str() {
             "system" => unfy_settings::ThemeName::System,
             "light" => unfy_settings::ThemeName::Light,
             "dark" => unfy_settings::ThemeName::Dark,
@@ -1004,144 +1043,90 @@ pub fn save_settings(
         };
     }
     if let Some(hotkey) = request.hotkey_gather {
-        settings.hotkey_gather = if hotkey.is_empty() {
+        candidate.hotkey_gather = if hotkey.is_empty() {
             None
         } else {
             Some(hotkey)
         };
     }
     if let Some(hotkey) = request.hotkey_restore {
-        settings.hotkey_restore = if hotkey.is_empty() {
+        candidate.hotkey_restore = if hotkey.is_empty() {
             None
         } else {
             Some(hotkey)
         };
     }
     if let Some(delay) = request.restore_delay_secs {
-        settings.restore_delay_secs = delay;
+        candidate.restore_delay_secs = delay;
     }
     if let Some(auto_update) = request.auto_update {
-        settings.auto_update = auto_update;
-    }
-    if let Some(telemetry) = request.telemetry {
-        settings.telemetry = telemetry;
+        candidate.auto_update = auto_update;
     }
     if let Some(level) = request.auto_detect {
-        if !matches!(
-            level.as_str(),
-            "off" | "conservative" | "balanced" | "aggressive"
-        ) {
+        if !matches!(level.as_str(), "off" | "verified") {
             return Err(format!("unknown detection level: {level}"));
         }
-        settings.auto_detect = level;
+        candidate.auto_detect = level;
     }
-    // Spec P0-11-B: turning automation off while a layout is active restores
-    // first. The user is saying "stop managing my windows"; leaving them gathered
-    // means the feature keeps having an effect after it was switched off, and the
-    // next gather would have no baseline to return to.
-    let restore_because_disabled =
-        request.auto_gather == Some(false) && settings.auto_gather && engine_has_open_transaction;
+    // Turning automatic gathering off does not move anything. The old code ran a
+    // restore here, which meant flipping a preference could rearrange the user's
+    // desktop; the spec is explicit that stopping automation only stops future
+    // automatic actions.
+    let _ = engine_has_open_transaction;
     if let Some(auto_gather) = request.auto_gather {
-        settings.auto_gather = auto_gather;
+        candidate.auto_gather = auto_gather;
     }
     if let Some(auto_restore) = request.auto_restore {
-        settings.auto_restore = auto_restore;
+        candidate.auto_restore = auto_restore;
     }
     if let Some(screens) = request.remote_screens {
-        settings.remote_screens = match screens.as_str() {
+        candidate.remote_screens = match screens.as_str() {
             "single" => unfy_settings::RemoteScreens::Single,
             "all" => unfy_settings::RemoteScreens::All,
             other => return Err(format!("unknown remote_screens: {other}")),
         };
     }
     if let Some(excluded_apps) = request.excluded_apps {
-        settings.excluded_apps = excluded_apps;
+        candidate.excluded_apps = excluded_apps;
     }
     if let Some(onboarding_done) = request.onboarding_done {
-        settings.onboarding_done = onboarding_done;
+        candidate.onboarding_done = onboarding_done;
     }
     if let Some(onboarding_step) = request.onboarding_step {
-        settings.onboarding_step = onboarding_step.min(4);
+        candidate.onboarding_step = onboarding_step.min(4);
     }
 
-    settings.validate().map_err(|e| e.to_string())?;
-    settings
+    // Validate and persist the candidate before it becomes live.
+    candidate.validate().map_err(|e| e.to_string())?;
+    candidate
         .save(&app.settings_path)
         .map_err(|e| e.to_string())?;
-
+    *settings = candidate;
     let dto = SettingsDto::from(&*settings);
-
-    // Drop the settings lock *before* touching the OS registration. The
-    // registration path does not read settings, but keeping the guard out of the
-    // call makes that independence explicit and prevents a future edit from
-    // reintroducing a self-deadlock.
+    let snapshot = settings.clone();
     drop(settings);
 
+    // OS side effects happen after the document is committed. A registration
+    // failure is reported, not turned into "settings not saved".
     if autostart_changed.is_some() {
         crate::session::set_autostart(&handle, dto.autostart);
     }
     if hotkeys_changed {
-        // Re-register so the new combination takes effect immediately, and so a
-        // conflict is reported while the user is still looking at the field.
         crate::session::install(&handle);
     }
 
-    // Layout and timing settings live in the engine's config, which is otherwise
-    // only read at startup. Without this the next gather would keep using the
-    // old margin/gap/layout, and the settings UI would be lying.
-    if let Ok(mut engine) = app.engine.lock() {
-        let mut config = engine.config().clone();
-        config.layout.mode = match dto.layout_mode.as_str() {
-            "primary_side" => unfy_layout::LayoutMode::PrimarySide,
-            "default" | "preserve_order" => unfy_layout::LayoutMode::KeepLayout,
-            _ => unfy_layout::LayoutMode::Grid,
-        };
-        config.layout.margin = dto.margin;
-        config.layout.gap = dto.gap;
-        config.restore_delay_secs = dto.restore_delay_secs;
-        config.excluded_apps = dto.excluded_apps.clone();
-        if let Err(e) = engine.update_config(config) {
-            // The file has the new values but the live engine does not, which
-            // shows up as "I changed the layout and the next gather ignored it".
-            // The engine refuses mid-transaction on purpose (the current plan was
-            // built with the old settings), so say so rather than hiding it in the
-            // log: the values apply from the next gather, not from now.
-            tracing::warn!(error = %e, "settings saved but not applied to the live engine");
-            note_result(
-                &app,
-                Some(Message::new(
-                    "设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。",
-                )),
-            );
-        }
+    if let Err(e) = publish_settings_to_engine(&app, &snapshot) {
+        tracing::warn!(error = %e, "settings saved but not applied to the live engine");
+        note_result(
+            &app,
+            Some(Message::new(
+                "设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。",
+            )),
+        );
     }
 
-    // Apply the new detection level to the running tracker: without this the
-    // change would only take effect at the next launch, and the settings screen
-    // would look like it did nothing.
     crate::monitor::apply_sensitivity(&handle);
-
-    if restore_because_disabled {
-        // `save_settings` is synchronous; drive the async restore to completion.
-        // Ignoring the outcome would hide a failed restore, but failing the whole
-        // save would be worse: the setting is already on disk and the user meant
-        // it. The error goes to the overview like any other.
-        match tauri::async_runtime::block_on(restore_after_delay(&handle, &app, false)) {
-            Ok(_) => tracing::info!("automation disabled; layout restored"),
-            Err(e) => {
-                tracing::warn!(error = %e, "automation disabled but the restore failed");
-                note_result(
-                    &app,
-                    Some(Message::one(
-                        "已关闭自动整理，但恢复没有完成：{error}。可以在概览页重试。",
-                        "error",
-                        e.to_string(),
-                    )),
-                );
-            }
-        }
-    }
-
+    sync_tray(&handle);
     Ok(dto)
 }
 
@@ -1744,22 +1729,14 @@ pub fn reset_settings(
         ..Default::default()
     };
     fresh.save(&app.settings_path).map_err(|e| e.to_string())?;
-    *settings = fresh;
+    *settings = fresh.clone();
     drop(settings);
 
     // The engine reads layout and exclusions from its own config, and the
     // detector reads its level from settings; without these the reset would only
     // take effect at the next launch.
-    if let Ok(mut engine) = app.engine.lock() {
-        let mut config = engine.config().clone();
-        config.layout.mode = unfy_layout::LayoutMode::Grid;
-        config.layout.margin = 12;
-        config.layout.gap = 8;
-        config.restore_delay_secs = 0;
-        config.excluded_apps.clear();
-        if let Err(e) = engine.update_config(config) {
-            tracing::warn!(error = %e, "reset could not be applied to the live engine");
-        }
+    if let Err(e) = publish_settings_to_engine(&app, &fresh) {
+        tracing::warn!(error = %e, "reset could not be applied to the live engine");
     }
     crate::monitor::apply_sensitivity(&handle);
     crate::session::install(&handle);
@@ -1934,27 +1911,6 @@ pub fn set_ui_locale(
     Ok(())
 }
 
-/// Declare, or end, a remote session by hand.
-///
-/// The tray item is the primary entry, but a tray icon can be hidden by the
-/// shell and there is no keyboard route to a menu. Exposing the same action as a
-/// command lets the overview offer a button, and gives verification a way to
-/// drive the path without clicking a tray icon it cannot address.
-#[tauri::command]
-pub fn toggle_remote_session(handle: tauri::AppHandle, app: State<'_, AppState>) -> bool {
-    let now_active = !app
-        .detector
-        .lock()
-        .map(|tracker| tracker.is_active())
-        .unwrap_or(false);
-    app.manual_remote
-        .store(now_active, std::sync::atomic::Ordering::SeqCst);
-    // Run a poll immediately so the transition (and any automation it triggers)
-    // happens now rather than up to two seconds later.
-    crate::monitor::tick(&handle);
-    now_active
-}
-
 #[derive(Debug, Serialize)]
 pub struct PauseDto {
     pub paused: bool,
@@ -1973,44 +1929,54 @@ pub fn set_paused(
     app: State<'_, AppState>,
     paused: bool,
 ) -> Result<PauseDto, String> {
+    set_paused_inner(&handle, &app, paused)
+}
+
+/// The implementation behind the command, callable from the tray with any runtime.
+pub fn set_paused_for<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    app: State<'_, AppState>,
+    paused: bool,
+) -> Result<PauseDto, String> {
+    set_paused_inner(handle, &app, paused)
+}
+
+fn set_paused_inner<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    app: &State<'_, AppState>,
+    paused: bool,
+) -> Result<PauseDto, String> {
+    // One implementation for the window, the tray and the shortcut. Pausing used
+    // to be applied by the engine in one path and by a settings flag in another,
+    // which produced "the UI says paused, the engine keeps gathering".
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
     if paused {
         engine.pause().map_err(|e| e.to_string())?;
     } else {
         engine.resume().map_err(|e| e.to_string())?;
     }
+    let paused = engine.is_paused();
     let state = state_name(engine.state());
     drop(engine);
 
-    let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
-    settings.paused = paused;
-    settings
-        .save(&app.settings_path)
-        .map_err(|e| e.to_string())?;
-    drop(settings);
-
-    // Resuming while a remote session ended during the pause owes the user a
-    // restore. The detector only reports the end once, so this is the only chance
-    // to run it; silently resuming would leave the windows gathered.
-    let mut restored_deferred = false;
-    if !paused
-        && app
-            .deferred_restore
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
+    // Persist the same value that is now live. A failure is reported: silently
+    // keeping a preference that the next launch will not honour is worse than an
+    // error the user can see.
     {
-        // `set_paused` is a synchronous command, so the async restore path is
-        // driven to completion here rather than awaited.
-        match tauri::async_runtime::block_on(restore_after_delay(&handle, &app, false)) {
-            Ok(_) => restored_deferred = true,
-            Err(e) => tracing::warn!(error = %e, "deferred restore failed on resume"),
+        let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
+        let previous = settings.paused;
+        settings.paused = paused;
+        if let Err(e) = settings.save(&app.settings_path) {
+            settings.paused = previous;
+            return Err(format!("could not save the paused preference: {e}"));
         }
     }
 
-    sync_tray(&handle);
+    sync_tray(handle);
     Ok(PauseDto {
         paused,
         state,
-        restored_deferred,
+        restored_deferred: false,
     })
 }
 
@@ -2029,18 +1995,20 @@ pub fn keep_current_layout(app: State<'_, AppState>) -> Result<(), String> {
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
     let before = engine.captured_window_count();
     engine.keep_current_layout().map_err(|e| e.to_string())?;
+    // The engine already cleared its pause; mirror that rather than clearing a
+    // separate flag and hoping the two agree.
+    let paused = engine.is_paused();
+    let state = state_name(engine.state());
     drop(engine);
 
     if let Ok(mut settings) = app.settings.lock() {
-        // A paused engine has nothing left to pause once the transaction is gone.
-        settings.paused = false;
-        let _ = settings.save(&app.settings_path);
+        settings.paused = paused;
+        if let Err(e) = settings.save(&app.settings_path) {
+            tracing::warn!(error = %e, "kept the layout but could not persist the pause flag");
+        }
     }
-    // Drop any restore that is still counting down. Accepting the current layout is
-    // the same decision as cancelling the pending undo - the whole point is that the
-    // windows stay where they are - and the button is offered precisely during the
-    // wait, when the countdown offers nothing else to press. Waking the timer here
-    // is also what makes the countdown's wording true.
+    // Accepting the current layout is the same decision as cancelling a pending
+    // automatic restore: the windows stay where they are.
     if let Ok(mut schedule) = app.schedule.lock() {
         schedule.cancel();
     }
@@ -2057,6 +2025,7 @@ pub fn keep_current_layout(app: State<'_, AppState>) -> Result<(), String> {
     if let Ok(mut slot) = app.last_error.lock() {
         *slot = None;
     }
+    tracing::info!(state, "kept the current layout; recovery records closed");
     Ok(())
 }
 

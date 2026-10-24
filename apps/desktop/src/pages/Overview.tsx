@@ -47,7 +47,6 @@ export function OverviewPage({
   onExclude,
   onKeepLayout,
   onDismissError,
-  onToggleRemote,
   pendingApps,
 }: {
   status: StatusDto | null;
@@ -86,8 +85,6 @@ export function OverviewPage({
   onKeepLayout: () => void;
   /** Clear the "last operation failed" line. */
   onDismissError: () => void;
-  /** Declare or end a remote session by hand. */
-  onToggleRemote: () => void;
 }) {
   // The full history is reference material; three rows answer "what just happened".
   const [expanded, setExpanded] = useState(false);
@@ -107,6 +104,12 @@ export function OverviewPage({
   // Anything with pending work must offer restore first.
   const hasWork =
     state === "active" || state === "degraded" || state === "restoring";
+  // The journal is the authority on whether there is anything to restore, not the
+  // state name: an engine that adopted a transaction from a previous run (or one
+  // whose journal is open but which reports `idle`) still has displaced windows.
+  // Deriving this from `pending_windows` means a degraded or failed engine with an
+  // open transaction always shows the restore entry.
+  const restorable = hasWork || pending > 0;
   const busyState = state === "migrating" || state === "restoring";
   const needsAttention = state === "degraded" || state === "error";
   // In `Error` the engine refuses every new gather by design: the journal is not
@@ -241,7 +244,11 @@ export function OverviewPage({
             </p>
             {/* Naming the application is the difference between an explanation and a
                 puzzle: "a window did not come back" leaves the user hunting through
-                the taskbar, and the backend already knows which one it was. */}
+                the taskbar, and the backend already knows which one it was.
+                No exclusion offer here: excluding an application only changes what
+                the *next* gather touches, and it does nothing for windows that are
+                still out of place. Offering it as the main way out of a failure
+                implied it was the fix. */}
             {pendingApps.length > 0 ? (
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 <span className="text-[var(--color-muted)]">
@@ -255,18 +262,6 @@ export function OverviewPage({
                     {name}
                   </span>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => onExclude(pendingApps)}
-                  disabled={busy}
-                  // No opacity change when `busy`: muted text on the card measures 5.03:1, and
-                  // any fade drops it under the 4.5:1 floor (0.9 alone gives 4.34:1).
-                  // The button is disabled for a few milliseconds to stop a double
-                  // submit, not to signal that the action is unavailable.
-                  className="text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-fg)]"
-                >
-                  {t("排除这些应用")}
-                </button>
               </div>
             ) : null}
           </div>
@@ -274,7 +269,7 @@ export function OverviewPage({
 
         {!settings?.hotkey_gather &&
         settings?.auto_detect === "off" &&
-        !hasWork ? (
+        !restorable ? (
           <p className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-border-strong)] px-3 py-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">{t("现在只能从本窗口或托盘触发整理。设置一个快捷键、或打开远程检测，之后就不必先切回这个窗口。")}</p>
         ) : null}
 
@@ -291,7 +286,7 @@ export function OverviewPage({
                 disabled={busy}
               >{t("导出诊断包")}</Button>
             </>
-          ) : hasWork ? (
+          ) : restorable ? (
             <>
               <Button
                 variant="primary"
@@ -335,7 +330,7 @@ export function OverviewPage({
               the only way to see where the windows would land, and hiding it while a
               layout is active left the user with no way to look before acting. */}
           <Button
-            variant={blocked || hasWork ? "primary" : "secondary"}
+            variant={blocked || restorable ? "primary" : "secondary"}
             size="sm"
             onClick={onPreview}
             disabled={busy || !supported}
@@ -347,24 +342,12 @@ export function OverviewPage({
             onClick={onIdentify}
             disabled={busy}
           >{t("识别屏幕编号")}</Button>
-          {/* A tray icon can be hidden by the shell and there is no keyboard route
-              into a tray menu, so this is the only way to tell the app a session
-              started. It used to be a text link under the status rows, which read as
-              a footnote to a control nobody could find. */}
-          <Button
-            variant="quiet"
-            size="sm"
-            onClick={onToggleRemote}
-            disabled={busy}
-          >
-            {t(settings?.remote_active ? "结束远程会话标记" : "标记为远程会话")}
-          </Button>
         </div>
         {/* Directly under the controls it explains. The gather button is disabled
             with one display, and the sentence that says why used to sit between two
             detail rows above - easy to miss, and easy to read as part of the layout
             description rather than as the reason the button does nothing. */}
-        {singleDisplay && !hasWork ? (
+        {singleDisplay && !restorable ? (
           <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
             {t("当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。")}
           </p>
@@ -397,18 +380,14 @@ export function OverviewPage({
           // an application that snaps its own windows back, and a window whose
           // minimum size is larger than the cell it was given. The second is common
           // in terminals and IDEs, and telling those users "it corrects itself" is
-          // simply wrong. Both lead to the same offer: a rule stops the retry.
-          description={t("这些窗口没有接受新的位置：有的会自己纠正，有的大到放不进格子。排除它们可以避免每次都重试。")}
-          aside={
-            lastRefused.length > 1 ? (
-              <Button
-                size="sm"
-                variant="quiet"
-                disabled={busy}
-                onClick={() => onExclude(lastRefused)}
-              >{t("全部排除")}</Button>
-            ) : null
-          }
+          // simply wrong.
+          //
+          // Exclusion is described for what it does - it changes the next gather -
+          // because it does not undo anything. A rule added here leaves the windows
+          // that already moved exactly where they are, and they can still be
+          // restored; saying otherwise would turn a housekeeping rule into a false
+          // promise about the user's windows.
+          description={t("这些窗口没有接受新的位置：有的会自己纠正，有的大到放不进格子。以后整理时跳过某个应用可以避免每次都重试；这只影响之后的整理，已经整理的窗口仍然可以恢复。")}
         >
           <ul className="space-y-1">
             {lastRefused.map((app) => (
@@ -419,12 +398,16 @@ export function OverviewPage({
                 <span className="min-w-0 truncate font-mono text-xs">
                   {app}
                 </span>
+                {/* Per application only, and as a quiet secondary action: the user
+                    names the one program they want left alone. There is no bulk
+                    version, because "exclude everything that failed" was being
+                    offered as the way out of a failure it cannot fix. */}
                 <Button
                   size="sm"
                   variant="quiet"
                   disabled={busy}
                   onClick={() => onExclude([app])}
-                >{t("排除")}</Button>
+                >{t("不再整理此应用")}</Button>
               </li>
             ))}
           </ul>
@@ -641,12 +624,12 @@ function detectStatusLabel(settings: SettingsDto | null, paused: boolean): strin
 }
 
 function layoutLabel(mode: SettingsDto["layout_mode"] | undefined): string {
+  // The default is not called "默认": that named a setting rather than describing
+  // what happens to the windows. It moves the arrangement onto the target screen.
   switch (mode) {
-    case "primary_side":
-      return t("主次");
     case "grid":
       return t("网格");
     default:
-      return t("默认");
+      return t("移到目标屏");
   }
 }

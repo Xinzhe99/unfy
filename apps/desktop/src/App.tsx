@@ -961,17 +961,6 @@ export default function App() {
                   )
                 }
                 onOpenDisplays={() => setPage("displays")}
-                onToggleRemote={() =>
-                  void run(
-                    () => api.toggleRemoteSession(),
-                    (nowActive) => ({
-                      tone: "neutral",
-                      text: nowActive
-                        ? t("已标记为远程会话。开启了自动整理的话，窗口会按设置收拢。")
-                        : t("已结束远程会话标记。"),
-                    }),
-                  )
-                }
                 onDismissError={() =>
                   void run(() => api.dismissLastError())
                 }

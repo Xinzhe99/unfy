@@ -124,7 +124,7 @@ export interface RestoreDto {
 }
 
 export interface SettingsDto {
-  layout_mode: "default" | "grid" | "primary_side";
+  layout_mode: "default" | "grid";
   margin: number;
   gap: number;
   autostart: boolean;
@@ -135,7 +135,6 @@ export interface SettingsDto {
   hotkey_restore: string | null;
   restore_delay_secs: number;
   auto_update: boolean;
-  telemetry: boolean;
   excluded_apps: string[];
   onboarding_done: boolean;
   onboarding_step: number;
@@ -299,8 +298,6 @@ export const api = {
   clearActivity: () => invoke<void>("clear_activity"),
   /** Exactly what an export would contain, without writing it. */
   previewDiagnostics: () => invoke<string>("preview_diagnostics"),
-  /** Declare or end a remote session by hand; returns the new active state. */
-  toggleRemoteSession: () => invoke<boolean>("toggle_remote_session"),
 };
 
 /**

@@ -23,8 +23,9 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
     GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, SetWindowPlacement, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE, GW_OWNER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE, WINDOWPLACEMENT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE, WINDOWPLACEMENT, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_THICKFRAME,
 };
 
 /// Foreground window handle for the enumeration currently in progress.
@@ -198,12 +199,20 @@ fn window_rects(hwnd: HWND) -> Option<(Rect, Rect)> {
     ))
 }
 
-/// A cheap fullscreen heuristic: the visible rectangle equals the outer
-/// rectangle and is at least 720p, which is what a borderless fullscreen window
-/// looks like. The engine treats `Fullscreen` as "skip", so a false positive is
-/// harmless.
+/// A cheap fullscreen heuristic: no resize border and a large rectangle.
+///
+/// The previous version compared the window against 1280x720, which is both too
+/// small (a 1024x768 fullscreen window was treated as normal and got moved) and
+/// too eager (any borderless 1600x900 window was treated as fullscreen and
+/// skipped, so a normal window could never be gathered). The reliable signal is
+/// "this window has no frame at all", combined with a size that a user would not
+/// call a small window.
+///
+/// The engine treats `Fullscreen` as "skip", so a false positive is safe: the
+/// window stays where it is and the result explains why.
 fn is_fullscreen_guess(visible: &Rect, outer: &Rect) -> bool {
-    visible == outer && visible.width() >= 1280 && visible.height() >= 720
+    let no_frame = visible == outer;
+    no_frame && visible.width() >= 640 && visible.height() >= 480
 }
 
 impl WindowBackend for WinWindows {
@@ -233,9 +242,18 @@ impl WindowBackend for WinWindows {
             return Capabilities::default();
         };
         let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        // A window with no resize border cannot be resized; asking anyway produces
+        // a request the application silently corrects, which the engine would then
+        // report as a refusal. Reporting the capability honestly lets the planner
+        // choose "move only" instead.
+        let has_thick_frame = style & WS_THICKFRAME.0 != 0;
+        let maximized = unsafe { IsZoomed(hwnd) }.as_bool();
         Capabilities {
             can_move: true,
-            can_resize: true,
+            // A maximized window can be resized (it must be restored first), so the
+            // frame bit alone decides for normal windows.
+            can_resize: has_thick_frame || maximized,
             can_read_state: true,
             can_restore_native: ex_style & WS_EX_TOOLWINDOW.0 == 0,
             // Asked here, not during enumeration: the engine calls `capabilities`
