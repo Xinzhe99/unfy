@@ -83,6 +83,13 @@ pub struct AppState {
     /// them is an `EngineError`. The overview shows this so a problem does not
     /// live only in the log.
     pub last_error: Arc<std::sync::Mutex<Option<crate::message::Message>>>,
+    /// Set while the process is shutting down or about to install an update.
+    ///
+    /// Every write entry point checks it *after* taking the engine lock, so a
+    /// request that was already queued cannot start moving windows while the
+    /// recovery pass is running. Without this, a hotkey pressed during the exit
+    /// restore could begin a new gather behind it.
+    pub maintenance: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for AppState {
@@ -152,6 +159,7 @@ impl AppState {
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
             ui_locale: Arc::new(std::sync::Mutex::new(ui_locale)),
             last_error: Arc::new(std::sync::Mutex::new(None)),
+            maintenance: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             activity: Arc::new(std::sync::Mutex::new(activity::Activity::load(
                 unfy_settings::config_dir().join("activity.jsonl"),
             ))),

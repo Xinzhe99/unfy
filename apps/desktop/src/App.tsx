@@ -478,11 +478,13 @@ export default function App() {
         if (event.payload.outcome === "deferred") {
           flash({
             tone: "neutral",
-            // "已下载" was wrong on both counts: the barrier is checked *before* the
-            // download, so nothing was fetched, and nothing installs when the windows
-            // come back either - the check simply runs again on the next launch.
-            text: t("新版本 {version} 可用，但当前有未完成的整理，这次没有安装。下次启动时会重新检查。", { version: event.payload.version ?? "" }),
+            // The download already happened; the install is what waits. Say that,
+            // and keep the restore entry the user needs to unblock it.
+            text: t("新版本 {version} 已下载，但当前有未完成的整理，尚未安装。恢复完成后可以再试。", { version: event.payload.version ?? "" }),
           });
+        }
+        if (event.payload.outcome === "downloaded") {
+          flash({ tone: "neutral", text: t("新版本 {version} 已下载并验签，准备安装。", { version: event.payload.version ?? "" }) });
         }
         if (event.payload.outcome === "installed") {
           flash({ tone: "neutral", text: t("更新已安装，应用即将重启。") });
@@ -927,12 +929,7 @@ export default function App() {
                       tone: "neutral",
                       text: result.paused
                         ? t("已暂停自动整理，当前布局保留。")
-                        : result.restored_deferred
-                          ? // The session ended while paused, so resuming also
-                            // finished the cleanup. Saying only "resumed" would
-                            // leave the user wondering why their windows moved.
-                            t("已恢复自动整理，并补做了暂停期间欠下的恢复。")
-                          : t("已恢复自动整理。"),
+                        : t("已恢复自动整理。"),
                     }),
                   )
                 }
@@ -1130,7 +1127,7 @@ export default function App() {
                         result.outcome === "up_to_date"
                           ? t("当前已是最新版本。")
                           : result.outcome === "deferred"
-                            ? t("有新版本，但当前有未完成的整理，这次没有安装。下次启动时会重新检查。")
+                            ? t("新版本已下载，但当前有未完成的整理，尚未安装。恢复完成后可以再试。")
                             : result.outcome === "installed"
                               ? t("更新已安装，应用即将重启。")
                               : t("检查更新失败：{detail}", { detail: result.detail || t("未知原因") }),

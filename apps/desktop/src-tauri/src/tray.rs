@@ -414,9 +414,19 @@ fn toggle_settings<R: Runtime>(app: &AppHandle<R>) {
 /// A failure to restore must not silently drop windows, so the process stays
 /// alive and the error is surfaced. The user can retry from the tray.
 fn quit<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AppState>();
+    // Close admission *before* anything else. A hotkey or a queued command that
+    // starts a gather during the restore below would create new recovery work the
+    // process is about to abandon.
+    state
+        .maintenance
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    // Stop the detector before the restore: an automatic action must not fire
+    // while the exit pass runs.
+    crate::monitor::stop();
     // A pending delayed restore is irrelevant now: the user is quitting, and the
     // exit restore below runs immediately.
-    if let Ok(mut schedule) = app.state::<AppState>().schedule.lock() {
+    if let Ok(mut schedule) = state.schedule.lock() {
         schedule.cancel();
     }
 
@@ -436,6 +446,12 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
     };
 
     if blocked {
+        // The user must be able to act on the failure, so admission is reopened:
+        // leaving it closed would make every retry from the window fail with
+        // "maintenance" and turn one bad window into an unquittable app.
+        state
+            .maintenance
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         let _ = app.emit(
             "unfy://exit-blocked",
             serde_json::json!({ "reason": "restore_incomplete" }),
@@ -443,10 +459,6 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
         show_settings(app);
         return;
     }
-    // Stop the detector loop before the process tears down: it holds no lock
-    // across `exit`, but a sleeping thread that wakes during shutdown would emit
-    // events into a dying runtime and log a spurious error.
-    crate::monitor::stop();
     app.exit(0);
 }
 

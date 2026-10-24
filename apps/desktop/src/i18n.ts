@@ -226,6 +226,8 @@ const EN: Record<string, string> = {
     "Rescue moves windows stranded at coordinates that no longer exist back into view. The diagnostics bundle contains the version, display resolutions and settings only - never window titles, file paths or screen contents.",
   "诊断包已写入 {path}（{size}）。": "Diagnostics written to {path} ({size}).",
   "无法打开配置目录。": "Could not open the config folder.",
+  "开机自启未能设置：{error}":
+    "Autostart could not be set: {error}",
   "已在文件管理器中打开配置目录。": "Opened the config folder.",
 
   // ---- displays --------------------------------------------------------
@@ -353,8 +355,12 @@ const EN: Record<string, string> = {
     "This build has no signing key or endpoint, so checking for updates cannot succeed. Release builds have both.",
   "检查更新": "Check for updates",
   "当前已是最新版本。": "Already up to date.",
-  "有新版本，但当前有未完成的整理，这次没有安装。下次启动时会重新检查。":
-    "An update is available, but a gather is unfinished. Nothing was installed this time; the check runs again next launch.",
+  "新版本 {version} 已下载，但当前有未完成的整理，尚未安装。恢复完成后可以再试。":
+    "Version {version} is downloaded, but a gather is unfinished, so it is not installed yet. Retry once the restore is done.",
+  "新版本 {version} 已下载并验签，准备安装。":
+    "Version {version} is downloaded and verified; ready to install.",
+  "新版本已下载，但当前有未完成的整理，尚未安装。恢复完成后可以再试。":
+    "The update is downloaded, but a gather is unfinished, so it is not installed yet. Retry once the restore is done.",
   "更新已安装，应用即将重启。": "Update installed; the app will restart.",
   "检查更新失败：{detail}": "Update check failed: {detail}",
   "已是最新": "Up to date",
@@ -420,19 +426,14 @@ const EN: Record<string, string> = {
   "下面的画面就是每块屏现在的真实内容。如果分不清是哪一块，先在屏幕上显示编号，再对照远程画面。":
     "These are live images of each screen. If you cannot tell them apart, show the numbers on the screens and compare them against the remote view.",
   "让它自动开始和结束": "Let it start and stop by itself",
-  "Unfy 能识别一部分远程会话，在开始时整理、结束时恢复。检测依靠可验证的信号，级别越高覆盖越多，但也越容易误判。":
-    "Unfy recognises some remote sessions: it gathers when one starts and restores when it ends. Detection relies on verifiable signals, so higher levels cover more tools but can misfire.",
   "手动": "Manual",
   "只用快捷键与托盘，检测保持关闭":
     "Shortcuts and tray only; detection stays off",
-  "自动（推荐）": "Automatic (recommended)",
   "Unfy 可以在可验证的远程会话开始时整理、结束时恢复。目前只有远程桌面（RDP）会话能提供这种可验证的生命周期；其他远控软件即使正在运行，也不会自动搬动窗口。":
     "Unfy can gather when a verifiable remote session starts and restore when it ends. Only a Remote Desktop (RDP) session currently provides that verifiable lifecycle; other remote tools never move windows automatically, even while running.",
   "远程桌面会话时自动": "Automatically on Remote Desktop sessions",
   "仅在确认的远程桌面（RDP）会话开始和结束时自动整理、恢复":
     "Gathers and restores only when a confirmed Remote Desktop (RDP) session starts and ends",
-  "识别远程桌面会话与虚拟显示器，开始时整理、结束时恢复":
-    "Recognises Remote Desktop sessions and virtual displays; gathers when one starts, restores when it ends",
   "随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。":
     "Change this any time in Settings → Remote-session detection. Nothing moves automatically before you do.",
   "有些窗口不会被移动": "Some windows will not move",
@@ -477,8 +478,11 @@ const EN: Record<string, string> = {
   "还有窗口没有恢复，已取消退出。在概览页可以再试一次恢复，或点「保留当前布局」。":
     "Some windows were not restored, so quitting was cancelled. Retry from the overview, or press Keep current layout.",
   "已整理 {count} 个窗口": "Gathered {count} windows",
+  "，{count} 个已在目标屏": ", {count} already on the target",
   "，{count} 个已关闭": ", {count} closed",
   "，{count} 个放不下留在原位": ", {count} did not fit and stayed put",
+  "，{count} 个未能读取原位置，未移动":
+    ", {count} had no readable original position and were not moved",
   "，跳过 {count} 个": ", skipped {count}",
   "；{apps} 没有接受位置调整": "; {apps} refused to move",
   "已恢复 {count} 个窗口": "Restored {count} windows",
@@ -486,11 +490,11 @@ const EN: Record<string, string> = {
   "原屏不可用，回退到可见区域 {count} 个":
     "original display gone, {count} placed in a visible area",
   "{count} 个没有接受恢复位置": "{count} refused the restored position",
+  "{count} 个原屏仍未恢复，暂放在可见区域":
+    "{count} still owe their original screen and are kept in a visible area",
   "仍有 {count} 个待处理": "{count} still pending",
   "已暂停自动整理，当前布局保留。":
     "Automation paused; the current layout is kept.",
-  "已恢复自动整理，并补做了暂停期间欠下的恢复。":
-    "Automation resumed, and the restore owed from the pause was completed.",
   "已恢复自动整理。": "Automation resumed.",
   "没有发现越界窗口。": "No off-screen windows found.",
   "已把 {count} 个窗口移回可见区域。":
@@ -517,8 +521,6 @@ const EN: Record<string, string> = {
     "Walks through five steps: what this tool does, which screen the remote client sees, and how to correct it",
   "设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。":
     "Settings saved, but a gather is still running; the new layout applies from the next gather.",
-  "已关闭自动整理，但恢复没有完成：{error}。可以在概览页重试。":
-    "Automatic gathering is off, but the restore did not finish: {error}. You can retry from the overview.",
   "无效的组合键：{error}": "Not a valid shortcut: {error}",
   "{name} 已连接": "{name} connected",
   "虚拟显示器 {name}": "Virtual display {name}",
@@ -560,6 +562,12 @@ const EN: Record<string, string> = {
     "The target display is unavailable. Choose one on the Displays page.",
   "没有可用的显示器": "No display available",
   "没有检测到显示器": "No displays detected",
+  "正在退出或安装更新，暂时不能整理。请等它完成。":
+    "Quitting or installing an update, so gathering is unavailable right now. Wait for it to finish.",
+  "还没有选择目标显示器。请先在「显示器」页选择远程画面中能看到的那块屏。":
+    "No target display chosen yet. Pick the screen the remote client can see on the Displays page.",
+  "保存的目标显示器当前不在桌面上。请重新选择，或先接回那块屏。":
+    "The saved target display is not on the desktop right now. Choose again, or plug that screen back in.",
   "自动整理已暂停": "Automatic gathering is paused",
   "还有未完成的整理，请先恢复":
     "A previous gather has not been restored yet",
@@ -602,8 +610,6 @@ const EN: Record<string, string> = {
     "Restoring in {seconds}s. Choose Keep current layout to cancel.",
   "显示器连接发生变化，已把 {count} 个窗口移回可见区域。":
     "Displays changed; {count} windows were moved back into view.",
-  "新版本 {version} 可用，但当前有未完成的整理，这次没有安装。下次启动时会重新检查。":
-    "Version {version} is available, but a gather is unfinished. Nothing was installed this time; the check runs again next launch.",
   "未知原因": "unknown reason",
 
   "当前平台尚未实现窗口控制": "Window control is not implemented on this platform",

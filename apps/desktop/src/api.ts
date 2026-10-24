@@ -375,6 +375,8 @@ export function humanError(raw: string): string {
       return t("还有未完成的整理，请先恢复");
     case "paused":
       return t("自动整理已暂停");
+    case "maintenance":
+      return t("正在退出或安装更新，暂时不能整理。请等它完成。");
     case "no_target":
       return t("还没有选择目标显示器。请先在「显示器」页选择远程画面中能看到的那块屏。");
     case "target_missing":

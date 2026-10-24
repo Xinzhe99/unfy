@@ -139,6 +139,8 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
     let version = update.version.clone();
 
     // Recovery barrier: an open transaction must be resolved before we restart.
+    // The count includes journals the engine did not adopt, so an unreadable or
+    // foreign record blocks the update instead of being silently ignored.
     let pending = pending_windows(&app);
     if pending > 0 {
         let _ = app.emit(
@@ -160,41 +162,156 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
         serde_json::json!({ "outcome": "downloading", "version": version }),
     );
 
-    match update
-        .download_and_install(
-            |chunk, total| {
-                let _ = (chunk, total);
-            },
-            || {},
-        )
-        .await
-    {
+    // Download first. The barrier is re-taken *after* the download, immediately
+    // before the installer runs: the download can take minutes, and a gather that
+    // started while it ran must be seen before the process is replaced.
+    let bytes = match update.download(|_, _| {}, || {}).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return UpdateOutcome::Failed {
+                message: format!("download failed: {e}"),
+            };
+        }
+    };
+
+    let _ = app.emit(
+        "unfy://update",
+        serde_json::json!({ "outcome": "downloaded", "version": version }),
+    );
+
+    if let Err(outcome) = acquire_install_barrier(&app, &version).await {
+        return outcome;
+    }
+
+    match update.install(bytes) {
         Ok(()) => {
             let _ = app.emit(
                 "unfy://update",
                 serde_json::json!({ "outcome": "installed", "version": version }),
             );
-            // Give the event a moment to reach the UI before restarting.
             tokio::time::sleep(Duration::from_millis(400)).await;
             app.restart();
         }
-        Err(e) => UpdateOutcome::Failed {
-            message: format!("install failed: {e}"),
-        },
+        Err(e) => {
+            release_install_barrier(&app);
+            UpdateOutcome::Failed {
+                message: format!("install failed: {e}"),
+            }
+        }
     }
 }
 
-/// How many windows are currently captured by an open transaction.
+/// Close admission, restore every window, and verify there is nothing left.
+///
+/// Returns `Err(outcome)` when the update must not proceed. Admission is reopened
+/// on every failure path, because a deferred update must leave a working app.
+async fn acquire_install_barrier(app: &AppHandle, version: &str) -> Result<(), UpdateOutcome> {
+    let state = app.state::<AppState>();
+    state
+        .maintenance
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    // Invalidate timers before the restore so a delayed automatic action cannot
+    // start behind it.
+    if let Ok(mut schedule) = state.schedule.lock() {
+        schedule.cancel();
+    }
+
+    let report = {
+        let engine = state.engine.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut engine = engine.lock().map_err(|e| e.to_string())?;
+            engine.restore().map_err(|e| e.to_string())
+        })
+        .await
+    };
+
+    match report {
+        Ok(Ok(report)) if report.is_complete() => {
+            // Re-count from disk: the restore only resolved what the engine knew.
+            let pending = pending_windows(app);
+            if pending == 0 {
+                Ok(())
+            } else {
+                release_install_barrier(app);
+                Err(UpdateOutcome::Deferred {
+                    version: version.to_string(),
+                    pending_windows: pending,
+                })
+            }
+        }
+        Ok(Ok(report)) => {
+            release_install_barrier(app);
+            Err(UpdateOutcome::Deferred {
+                version: version.to_string(),
+                pending_windows: report.outstanding(),
+            })
+        }
+        Ok(Err(e)) => {
+            release_install_barrier(app);
+            Err(UpdateOutcome::Failed {
+                message: format!("restore before install failed: {e}"),
+            })
+        }
+        Err(e) => {
+            release_install_barrier(app);
+            Err(UpdateOutcome::Failed {
+                message: format!("restore task failed: {e}"),
+            })
+        }
+    }
+}
+
+fn release_install_barrier(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state
+            .maintenance
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// How many windows still owe a restore.
+///
+/// Counts unresolved windows in the engine *and* unfinished transactions on disk
+/// that the engine does not own. An unreadable journal is treated as pending: the
+/// old count only looked at memory, so a crash-adopted file that could not be
+/// read let the updater restart the app over an unknown recovery obligation.
 fn pending_windows(app: &AppHandle) -> usize {
     let state = app.state::<AppState>();
-    let engine = state.engine.lock();
-    match engine {
-        Ok(engine) => engine.captured_window_count(),
+    let (owned, in_memory) = match state.engine.lock() {
+        Ok(engine) => (
+            engine.current_transaction(),
+            engine.unresolved_window_count(),
+        ),
         // A poisoned lock means another thread panicked while holding it. Treat
-        // that as "unknown, assume unsafe": deferring an update is harmless,
-        // restarting over a live transaction is not.
-        Err(_) => 1,
+        // that as "unknown, assume unsafe".
+        Err(_) => return 1,
+    };
+
+    let mut pending = in_memory;
+    let dir = unfy_settings::config_dir().join("journal");
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "journal") {
+                continue;
+            }
+            match unfy_journal::recover(&path) {
+                Ok(unfy_journal::Recovered::Unfinished(tx)) => {
+                    if Some(tx.transaction) == owned {
+                        continue;
+                    }
+                    pending += tx.touched_windows().len();
+                }
+                Ok(unfy_journal::Recovered::Clean) => {}
+                Err(_) => {
+                    // Unreadable is not zero. Blocking the update is recoverable;
+                    // restarting over it is not.
+                    pending += 1;
+                }
+            }
+        }
     }
+    pending
 }
 
 /// Spawn a background check at startup. Failures are only logged: an offline

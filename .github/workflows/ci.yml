@@ -139,33 +139,33 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          node -e "
-          const fs = require('node:fs');
-          const configPath = 'apps/desktop/src-tauri/tauri.conf.json';
-          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          node -e '
+          const fs = require("node:fs");
+          const configPath = "apps/desktop/src-tauri/tauri.conf.json";
+          const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
           const updater = (config.plugins && config.plugins.updater) || {};
           const bundle = config.bundle || {};
           const missing = [];
           if (!updater.pubkey) {
-            missing.push(configPath + ': plugins.updater.pubkey is empty, so no signature could be verified by clients');
+            missing.push(configPath + ": plugins.updater.pubkey is empty, so a client cannot verify any signature");
           }
           if (!Array.isArray(updater.endpoints) || updater.endpoints.length === 0) {
-            missing.push(configPath + ': plugins.updater.endpoints is empty, so no client could find this release');
+            missing.push(configPath + ": plugins.updater.endpoints is empty, so a client cannot find this release");
           }
           if (!bundle.createUpdaterArtifacts) {
-            missing.push(configPath + ': bundle.createUpdaterArtifacts is not set, so no .sig or .app.tar.gz is generated');
+            missing.push(configPath + ": bundle.createUpdaterArtifacts is not set, so no .sig or .app.tar.gz is generated");
           }
           if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
-            missing.push('repository secret TAURI_SIGNING_PRIVATE_KEY is not set, so no artifact can be signed');
+            missing.push("repository secret TAURI_SIGNING_PRIVATE_KEY is not set, so nothing can be signed");
           }
           if (missing.length > 0) {
-            console.error('Refusing to build release ' + (process.env.GITHUB_REF_NAME || '') + ': the updater is not configured.');
-            for (const item of missing) console.error('  missing: ' + item);
-            console.error('This release would claim auto-update support it cannot deliver, so it is not built.');
+            console.error("Refusing to build release " + (process.env.GITHUB_REF_NAME || "") + ": the updater is not configured.");
+            for (const item of missing) console.error("  missing: " + item);
+            console.error("This release would claim auto-update support it cannot deliver, so it is not built.");
             process.exit(1);
           }
-          console.log('Updater configuration is present.');
-          "
+          console.log("Updater configuration is present.");
+          '
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -208,12 +208,12 @@ jobs:
       # of being published with a hole in it.
       - name: Verify release artifacts
         env:
-          MATRIX_OS: ${{ matrix.os }}
+          RUNNER_OS_NAME: ${{ runner.os }}
           IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
-          node -e "
-          const fs = require('node:fs');
-          const path = require('node:path');
+          node -e '
+          const fs = require("node:fs");
+          const path = require("node:path");
           const files = [];
           (function walk(dir) {
             let entries;
@@ -221,38 +221,43 @@ jobs:
             for (const entry of entries) {
               const full = path.join(dir, entry.name);
               if (entry.isDirectory()) walk(full);
-              else if (entry.isFile()) files.push(full.split(path.sep).join('/'));
+              else if (entry.isFile()) files.push(full.split(path.sep).join("/"));
             }
-          })('target');
+          })("target");
           const count = (re) => files.filter((f) => re.test(f)).length;
-          const os = process.env.MATRIX_OS;
-          const isRelease = process.env.IS_RELEASE === 'true';
+          const os = process.env.RUNNER_OS_NAME;
+          const isRelease = process.env.IS_RELEASE === "true";
           const fail = (message) => { console.error(message); process.exit(1); };
 
-          const installers = os === 'macos-14'
-            ? count(/\/release\/bundle\/dmg\/[^/]+\.dmg$/)
-            : count(/\/release\/bundle\/(nsis\/[^/]+\.exe|msi\/[^/]+\.msi)$/);
-          if (installers === 0) {
-            fail('No installer was produced for ' + os + ', so this bundle job has nothing to publish.');
+          let installers;
+          if (os === "macOS") {
+            installers = count(/\/release\/bundle\/dmg\/[^/]+\.dmg$/);
+          } else if (os === "Windows") {
+            installers = count(/\/release\/bundle\/(nsis\/[^/]+\.exe|msi\/[^/]+\.msi)$/);
+          } else {
+            fail("No release artifact rules exist for " + os + "; extend this check before adding the platform.");
           }
-          console.log('Installers: ' + installers);
+          if (installers === 0) {
+            fail("No installer was produced for " + os + ", so this bundle job has nothing to publish.");
+          }
+          console.log("Installers: " + installers);
 
           if (!isRelease) {
-            console.log('Not a release tag; updater artifacts are optional for this build.');
+            console.log("Not a release tag; updater artifacts are optional for this build.");
             process.exit(0);
           }
 
           const signatures = count(/\/release\/bundle\/.*\.sig$/);
           if (signatures === 0) {
-            fail('Release ' + (process.env.GITHUB_REF_NAME || '') + ' produced no updater signature (.sig). '
-              + 'Configure plugins.updater.pubkey and endpoints plus bundle.createUpdaterArtifacts, and set TAURI_SIGNING_PRIVATE_KEY.');
+            fail("Release " + (process.env.GITHUB_REF_NAME || "") + " produced no updater signature (.sig). "
+              + "Configure plugins.updater.pubkey and endpoints plus bundle.createUpdaterArtifacts, and set TAURI_SIGNING_PRIVATE_KEY.");
           }
-          console.log('Updater signatures: ' + signatures);
+          console.log("Updater signatures: " + signatures);
 
-          if (os === 'macos-14' && count(/\/release\/bundle\/macos\/[^/]+\.tar\.gz$/) === 0) {
-            fail('No macOS updater bundle (.app.tar.gz) was produced, so the darwin update key would point at nothing.');
+          if (os === "macOS" && count(/\/release\/bundle\/macos\/[^/]+\.tar\.gz$/) === 0) {
+            fail("No macOS updater bundle (.app.tar.gz) was produced, so the darwin update key would point at nothing.");
           }
-          "
+          '
 
       - name: Upload installers
         uses: actions/upload-artifact@v4

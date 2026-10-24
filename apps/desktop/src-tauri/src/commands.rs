@@ -345,6 +345,9 @@ pub fn list_displays(app: State<'_, AppState>) -> Result<Vec<DisplayDto>, String
 
 #[tauri::command]
 pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
+    if in_maintenance(&app) {
+        return Err("maintenance".to_string());
+    }
     let engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
@@ -453,6 +456,9 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
     // guarantee.
     // A gather supersedes a pending delayed restore: the user just asked for the
     // windows to be gathered, so a timer that would scatter them again must die.
+    if in_maintenance(app) {
+        return Err("maintenance".to_string());
+    }
     if let Ok(mut schedule) = app.schedule.lock() {
         schedule.cancel();
     }
@@ -768,6 +774,9 @@ fn restore_blocking(
 
 #[tauri::command]
 pub fn rescue_offscreen(app: State<'_, AppState>) -> Result<usize, String> {
+    if in_maintenance(&app) {
+        return Err("maintenance".to_string());
+    }
     let rescued = {
         let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
         engine.rescue_offscreen().map_err(|e| e.to_string())?
@@ -925,6 +934,15 @@ impl From<&Settings> for SettingsDto {
             }),
         }
     }
+}
+
+/// Whether new window work is currently forbidden.
+///
+/// The flag is set before exit and before installing an update. It is checked by
+/// every entry point that can start a write, because "the user asked to quit" and
+/// "a hotkey fired a millisecond later" must not both run.
+pub fn in_maintenance(app: &AppState) -> bool {
+    app.maintenance.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Resolve the display the user confirmed, or explain what is missing.
