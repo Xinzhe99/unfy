@@ -1326,6 +1326,20 @@ impl<B: Backend> Engine<B> {
     }
 
     fn restore_one(&self, preimage: &Preimage, displays: &[DisplaySnapshot]) -> WindowOutcome {
+        // A preimage written before process creation time was recorded cannot
+        // prove that the handle it names still belongs to the same window. Windows
+        // recycles `HWND` values, so writing the old rectangle could land on a
+        // completely different application. The record is kept and reported, and
+        // the user can explicitly discard it; silently "restoring" it is the one
+        // outcome that can destroy data.
+        if preimage.id.process_start == 0 {
+            tracing::warn!(
+                window = ?preimage.id,
+                "cannot prove window identity from this record; not writing"
+            );
+            return WindowOutcome::Unknown;
+        }
+
         let current = match self.backend.read_back(&preimage.id) {
             Ok(observed) => observed,
             Err(PlatformError::WindowGone) => return WindowOutcome::Gone,

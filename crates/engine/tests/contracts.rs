@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use unfy_domain::{
-    DisplayKey, EngineState, IdentityQuality, Rect, WindowId, WindowMode, WindowOutcome,
+    DisplayKey, EngineState, IdentityQuality, Rect, Scale, WindowId, WindowMode, WindowOutcome,
 };
 use unfy_engine::{Engine, EngineConfig};
 use unfy_platform::fake::{FakeBackend, FakeBehaviour};
@@ -348,4 +348,77 @@ fn a_window_from_a_missing_display_keeps_its_obligation() {
         .filter(|e| e.path().extension().is_some_and(|x| x == "journal"))
         .count();
     assert_eq!(journals, 0, "a completed restore must remove its journal");
+}
+
+/// A preimage recorded before identity was provable must not be written.
+///
+/// Windows recycles `HWND` values. A record from an older build carries
+/// `process_start = 0`, which cannot prove the handle still belongs to the same
+/// window; writing its rectangle could move an unrelated application. The record
+/// must stay pending and be reported, not silently "restored".
+#[test]
+fn a_record_without_process_identity_is_never_written() {
+    let dir = journal_dir("legacy-identity");
+    let path = dir.join("legacy.journal");
+
+    let backend = scenario();
+    // The record names the real window but cannot prove it: this is what a file
+    // written by a build without creation-time support looks like.
+    let id = WindowId {
+        native_id: 1,
+        process_id: 1001,
+        process_start: 0,
+    };
+    let original = Rect::new(100, 100, 900, 700);
+
+    {
+        let mut journal = unfy_journal::Journal::begin(&path, "legacy").unwrap();
+        journal
+            .write_preimage(&unfy_journal::Preimage {
+                id: id.clone(),
+                display_native_id: "fake-display-a".into(),
+                display_quality: IdentityQuality::Strong,
+                display_work_area: Rect::new(0, 0, 2560, 1400),
+                display_scale: Scale { x: 1.5, y: 1.5 },
+                visible_rect: original,
+                outer_rect: original,
+                mode: WindowMode::Normal,
+                topmost: false,
+                native_placement: None,
+            })
+            .unwrap();
+        journal.durable().unwrap();
+        journal.abandon();
+    }
+
+    let mut engine = Engine::new(backend, config("legacy-identity"));
+    engine.recover(&path).expect("adopt the legacy record");
+    assert_eq!(engine.state(), EngineState::Degraded);
+
+    let report = engine.restore().expect("restore must not fail outright");
+    assert_eq!(
+        report.outcomes.get(&id),
+        Some(&WindowOutcome::Unknown),
+        "an unprovable identity must be reported, not treated as restored"
+    );
+    assert!(
+        report.pending.contains(&id),
+        "the obligation must stay open so the user can decide"
+    );
+    assert_eq!(engine.state(), EngineState::Degraded);
+
+    // And nothing was moved.
+    let window = engine
+        .backend()
+        .enumerate()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id.native_id == id.native_id)
+        .unwrap();
+    assert_eq!(window.visible_rect, original);
+
+    // The explicit "keep current layout" path is how the user discards it.
+    engine.keep_current_layout().expect("discard explicitly");
+    assert_eq!(engine.state(), EngineState::Idle);
+    assert_eq!(engine.unresolved_window_count(), 0);
 }
