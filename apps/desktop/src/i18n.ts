@@ -175,6 +175,9 @@ const EN: Record<string, string> = {
   "暂停": "Pause",
   "取消暂停": "Resume",
   "保留当前布局": "Keep current layout",
+  "这次整理的恢复位置将被放弃，之后不能用本次记录恢复。":
+    "The recovery positions from this gather will be discarded; this record cannot restore them afterwards.",
+  "放弃恢复记录": "Discard the recovery record",
   "识别屏幕编号": "Show display numbers",
   "识别编号会在每块屏幕中央短暂显示数字，用来对照远程画面确认是哪一块。":
     "Shows a number briefly in the centre of each screen, so you can match it against the remote view.",

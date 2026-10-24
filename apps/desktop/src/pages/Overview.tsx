@@ -134,6 +134,11 @@ export function OverviewPage({
   // still be outside the work area after a resolution change. The copy explains
   // what will happen; the button stays available so rescue is reachable.
   const singleDisplay = (status?.display_count ?? 0) < 2;
+  // "Keep current layout" discards the recovery record. It is the one action on
+  // this page that destroys the ability to undo, so it takes two clicks: the same
+  // in-page pattern the settings reset uses, because the native dialog does not
+  // render reliably inside the Tauri webview.
+  const [keepArmed, setKeepArmed] = useState(false);
   // Applications that refused the last gather, minus those already excluded.
   // Showing an application whose rule already exists would offer an action that
   // does nothing.
@@ -318,13 +323,36 @@ export function OverviewPage({
               </Button>
               {/* The only way out when restoring is impossible: the user decides
                   the current arrangement is good enough. Without it the exit
-                  barrier refuses to quit, forever. */}
-              <Button
-                variant="quiet"
-                size="sm"
-                onClick={onKeepLayout}
-                disabled={busy || busyState}
-              >{t("保留当前布局")}</Button>
+                  barrier refuses to quit, forever. It discards the recovery
+                  record, so it asks once, in place, and names what is lost. */}
+              {keepArmed ? (
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
+                    {t("这次整理的恢复位置将被放弃，之后不能用本次记录恢复。")}
+                  </span>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => {
+                      setKeepArmed(false);
+                      onKeepLayout();
+                    }}
+                    disabled={busy || busyState}
+                  >{t("放弃恢复记录")}</Button>
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    onClick={() => setKeepArmed(false)}
+                  >{t("取消")}</Button>
+                </span>
+              ) : (
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  onClick={() => setKeepArmed(true)}
+                  disabled={busy || busyState}
+                >{t("保留当前布局")}</Button>
+              )}
             </>
           ) : (
             <Button

@@ -314,6 +314,10 @@ describe("pages render", () => {
     );
     // A degraded state must offer restore, not a gather that can only fail.
     expect(html).toContain("恢复本次布局");
+    // "Keep current layout" destroys the recovery record, so it must ask first and
+    // say what is lost. One click used to discard the record silently.
+    expect(html).toContain("保留当前布局");
+    expect(html).not.toContain("这次整理的恢复位置将被放弃");
     expect(html).toContain("已断开");
     expect(html).toContain("AnyDesk 已连接");
   });
