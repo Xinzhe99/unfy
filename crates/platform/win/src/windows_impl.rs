@@ -136,7 +136,7 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
             WindowMode::Minimized
         } else if flags.zoomed {
             WindowMode::Maximized
-        } else if is_fullscreen_guess(&visible_rect, &outer_rect) {
+        } else if is_fullscreen_guess(hwnd, &visible_rect, &outer_rect) {
             WindowMode::Fullscreen
         } else {
             WindowMode::Normal
@@ -199,20 +199,48 @@ fn window_rects(hwnd: HWND) -> Option<(Rect, Rect)> {
     ))
 }
 
-/// A cheap fullscreen heuristic: no resize border and a large rectangle.
+/// Whether a window looks like it is covering a whole display.
 ///
-/// The previous version compared the window against 1280x720, which is both too
-/// small (a 1024x768 fullscreen window was treated as normal and got moved) and
-/// too eager (any borderless 1600x900 window was treated as fullscreen and
-/// skipped, so a normal window could never be gathered). The reliable signal is
-/// "this window has no frame at all", combined with a size that a user would not
-/// call a small window.
+/// The previous versions used size alone, first "at least 1280x720" (so a
+/// 1024x768 fullscreen window was treated as normal and moved) and then "no frame
+/// and at least 640x480" (so every borderless 1600x900 utility window was skipped
+/// and could never be gathered). Size is not the signal; covering a display is.
 ///
-/// The engine treats `Fullscreen` as "skip", so a false positive is safe: the
-/// window stays where it is and the result explains why.
-fn is_fullscreen_guess(visible: &Rect, outer: &Rect) -> bool {
-    let no_frame = visible == outer;
-    no_frame && visible.width() >= 640 && visible.height() >= 480
+/// This asks the window manager which monitor the window is on and compares the
+/// window's outer rectangle with that monitor's bounds. A borderless window that
+/// does not fill a display is ordinary and must be moved.
+///
+/// The engine treats `Fullscreen` as "skip", so a false positive is still safe -
+/// the window stays put and the result says why - but a false positive here is
+/// also a window the product cannot help with.
+fn is_fullscreen_guess(hwnd: HWND, visible: &Rect, outer: &Rect) -> bool {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+
+    // Only a window with no frame can be fullscreen; a framed window that happens
+    // to fill the screen is just maximized.
+    if visible != outer {
+        return false;
+    }
+
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_invalid() {
+        return false;
+    }
+    let mut info = MONITORINFO {
+        cbSize: core::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return false;
+    }
+    let bounds = info.rcMonitor;
+    let tolerance = 2;
+    (outer.left - bounds.left).abs() <= tolerance
+        && (outer.top - bounds.top).abs() <= tolerance
+        && (outer.right - bounds.right).abs() <= tolerance
+        && (outer.bottom - bounds.bottom).abs() <= tolerance
 }
 
 impl WindowBackend for WinWindows {

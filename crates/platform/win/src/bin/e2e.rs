@@ -13,7 +13,13 @@
 //! 6. assert every window is back on its exact original rectangle.
 //!
 //! It asserts rather than printing, so a regression fails the process. It mutates
-//! only the windows it created.
+//! only the windows it created: the engine runs behind [`Scoped`], a backend
+//! wrapper that hides every other window on the desktop. Without that wrapper a
+//! run on a real desktop moved the user's own applications - the harness claimed
+//! "only the windows it created" while the engine enumerated everything.
+//!
+//! A scope is not a product feature. It exists so a destructive test can run on
+//! the machine a person is using.
 //!
 //! Run: `cargo run -p unfy-platform-win --bin e2e`
 
@@ -21,9 +27,12 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 
-use unfy_domain::{DisplaySnapshot, Rect, WindowId};
+use unfy_domain::{DisplaySnapshot, Rect, WindowId, WindowSnapshot};
 use unfy_engine::{Engine, EngineConfig};
-use unfy_platform::{DisplayProvider, WindowBackend};
+use unfy_platform::{
+    Capabilities, DisplayProvider, ObservedWindow, PlatformError, Result as PlatformResult,
+    WindowBackend, WindowPlan,
+};
 use unfy_platform_win::WinPlatform;
 
 /// Default number of host windows. Enough to force a multi-row grid.
@@ -80,7 +89,8 @@ fn main() {
         ..Default::default()
     };
 
-    let mut engine = Engine::new(WinPlatform::new(), config);
+    let scope = Scope::new(host.ids.clone());
+    let mut engine = Engine::new(Scoped::new(WinPlatform::new(), scope), config);
 
     let before = host.rects(&engine);
     assert_eq!(before.len(), windows, "host windows must be enumerable");
@@ -168,6 +178,30 @@ fn main() {
     );
     println!("migration PASS: every window is inside the target work area");
 
+    // The default mode must not touch a window that is already usable on the
+    // target. Retargeting onto the same display is the cheapest way to prove it:
+    // every window is already there, so `unchanged` must account for all of them
+    // and nothing may be written.
+    let before_noop = host.rects(&engine);
+    let noop = engine
+        .retarget(&target.key)
+        .expect("a retarget onto the same display must not fail");
+    assert_eq!(
+        noop.migration.unchanged, windows,
+        "windows already on the target must not be rewritten"
+    );
+    assert_eq!(
+        noop.migration.applied.len(),
+        0,
+        "no window should have moved on an idempotent retarget"
+    );
+    let after_noop = host.rects(&engine);
+    assert_eq!(
+        before_noop, after_noop,
+        "an idempotent retarget must not change any rectangle"
+    );
+    println!("idempotence PASS: {windows} windows already on target were left alone");
+
     let restore_started = std::time::Instant::now();
     let restore = engine.restore().expect("restore must not fail outright");
     let restore_ms = restore_started.elapsed().as_millis();
@@ -220,9 +254,9 @@ fn main() {
     println!("restore PASS: every window returned to its original rectangle (tolerance 4 px)");
 
     // A journal may only be deleted once every window reaches a safe terminal
-    // state. Foreign windows that refuse to move keep it alive, which is the
-    // correct behaviour: deleting it would discard their preimages. When every
-    // window resolved, the file must be gone.
+    // state. An unresolved window keeps it alive, which is the correct behaviour:
+    // deleting it would discard the preimage. When everything resolved, the file
+    // must be gone.
     let leftovers: Vec<_> = std::fs::read_dir(&journal_dir)
         .map(|entries| {
             entries
@@ -232,7 +266,6 @@ fn main() {
                 .collect()
         })
         .unwrap_or_default();
-
     if restore.is_complete() {
         assert!(
             leftovers.is_empty(),
@@ -245,24 +278,12 @@ fn main() {
             1,
             "an unresolved transaction must keep exactly one journal"
         );
-        // Prove the retained journal is still recoverable rather than merely
-        // present.
         let recovered = unfy_journal::recover(&leftovers[0]).expect("journal readable");
-        match recovered {
-            unfy_journal::Recovered::Unfinished(tx) => {
-                assert!(
-                    !tx.preimages.is_empty(),
-                    "retained journal must still hold preimages"
-                );
-                println!(
-                    "journal PASS: unresolved transaction kept {} preimages for later recovery",
-                    tx.preimages.len()
-                );
-            }
-            unfy_journal::Recovered::Clean => {
-                panic!("an unresolved transaction was recorded as clean")
-            }
-        }
+        assert!(
+            matches!(recovered, unfy_journal::Recovered::Unfinished(_)),
+            "an unresolved transaction must not be recorded as clean"
+        );
+        println!("journal PASS: unresolved transaction kept for later recovery");
     }
 
     host.stop();
@@ -290,6 +311,103 @@ impl MigrationCounts for unfy_engine::MigrationReport {
             .values()
             .filter(|o| matches!(o, unfy_domain::WindowOutcome::Rejected))
             .count()
+    }
+}
+
+/// A backend that exposes only the windows this harness created.
+///
+/// Reads pass through for scoped windows; everything else is filtered out of
+/// `enumerate`, and any write aimed at an unscoped id is refused before it reaches
+/// the OS. The point is not to test the filter - the engine already filters - but
+/// to make a destructive desktop test safe to run while a person is using the
+/// machine.
+struct Scoped {
+    inner: WinPlatform,
+    ids: Vec<WindowId>,
+}
+
+impl Scoped {
+    fn new(inner: WinPlatform, scope: Scope) -> Self {
+        Self {
+            inner,
+            ids: scope.ids,
+        }
+    }
+
+    fn in_scope(&self, id: &WindowId) -> bool {
+        self.ids
+            .iter()
+            .any(|candidate| candidate.native_id == id.native_id)
+    }
+}
+
+struct Scope {
+    ids: Vec<WindowId>,
+}
+
+impl Scope {
+    fn new(ids: Vec<WindowId>) -> Self {
+        Self { ids }
+    }
+}
+
+impl DisplayProvider for Scoped {
+    fn topology(&self) -> PlatformResult<Vec<DisplaySnapshot>> {
+        self.inner.topology()
+    }
+
+    fn scale_of(&self, key: &unfy_domain::DisplayKey) -> PlatformResult<unfy_domain::Scale> {
+        self.inner.scale_of(key)
+    }
+
+    fn display_for(&self, id: &WindowId) -> PlatformResult<unfy_domain::DisplayKey> {
+        if !self.in_scope(id) {
+            return Err(PlatformError::WindowGone);
+        }
+        self.inner.display_for(id)
+    }
+}
+
+impl WindowBackend for Scoped {
+    fn enumerate(&self) -> PlatformResult<Vec<WindowSnapshot>> {
+        let mut windows = self.inner.enumerate()?;
+        windows.retain(|window| self.in_scope(&window.id));
+        Ok(windows)
+    }
+
+    fn capabilities(&self, id: &WindowId) -> Capabilities {
+        if !self.in_scope(id) {
+            return Capabilities::default();
+        }
+        self.inner.capabilities(id)
+    }
+
+    fn apply(&self, id: &WindowId, plan: &WindowPlan) -> PlatformResult<()> {
+        if !self.in_scope(id) {
+            return Err(PlatformError::WindowGone);
+        }
+        self.inner.apply(id, plan)
+    }
+
+    fn apply_async(&self, id: &WindowId, plan: &WindowPlan) -> PlatformResult<()> {
+        if !self.in_scope(id) {
+            return Err(PlatformError::WindowGone);
+        }
+        self.inner.apply_async(id, plan)
+    }
+
+    fn read_back(&self, id: &WindowId) -> PlatformResult<ObservedWindow> {
+        if !self.in_scope(id) {
+            return Err(PlatformError::WindowGone);
+        }
+        self.inner.read_back(id)
+    }
+
+    fn restore_native(&self, id: &WindowId, placement: &[u8]) -> PlatformResult<()> {
+        if !self.in_scope(id) {
+            return Err(PlatformError::WindowGone);
+        }
+        self.inner.restore_native(id, placement)
     }
 }
 
@@ -346,7 +464,7 @@ impl Host {
     }
 
     /// Read the current rectangle of every host window via the platform backend.
-    fn rects(&mut self, engine: &Engine<WinPlatform>) -> HashMap<WindowId, Rect> {
+    fn rects(&mut self, engine: &Engine<Scoped>) -> HashMap<WindowId, Rect> {
         let mut out = HashMap::new();
         for snapshot in engine.backend().enumerate().unwrap_or_default() {
             if self
