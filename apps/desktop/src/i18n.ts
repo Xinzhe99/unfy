@@ -264,8 +264,6 @@ const EN: Record<string, string> = {
   "已在每块屏幕上显示编号。": "Numbers are showing on every screen.",
   "无法显示编号，请检查屏幕状态。":
     "Could not show the numbers; check the display state.",
-  "已切换到显示器 {number}，原有位置记录已保留。":
-    "Switched to display {number}; the original position record is preserved.",
 
   // ---- exclusions ------------------------------------------------------
   // (duplicate removed: 排除的应用)

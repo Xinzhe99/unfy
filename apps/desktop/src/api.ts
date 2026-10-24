@@ -301,7 +301,6 @@ export const api = {
    */
   setUiLocale: (locale: string) => invoke<void>("set_ui_locale", { locale }),
   /** Move the target to the next display and re-gather onto it. */
-  cycleTarget: () => invoke<TargetDto>("cycle_target"),
   /** Forget the activity history (spec P0-15). */
   clearActivity: () => invoke<void>("clear_activity"),
   /** Exactly what an export would contain, without writing it. */

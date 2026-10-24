@@ -329,7 +329,6 @@ pub fn run() {
             commands::keep_current_layout,
             commands::dismiss_last_error,
             commands::open_app_folder,
-            commands::cycle_target,
             commands::reset_settings,
         ])
         .setup(|app| {
