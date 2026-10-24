@@ -300,7 +300,7 @@ const EN: Record<string, string> = {
   "浅色": "Light",
   "深色": "Dark",
   "远程会话检测": "Remote-session detection",
-  "自动检测能识别到的远程会话，并按你的选择收拢或恢复窗口。":
+  "远程桌面（RDP）会话建立时整理、结束时恢复。其他远控软件需要手动整理。":
     "Acts on remote sessions it can identify, gathering or restoring windows as you choose.",
   "远程端能看到": "Remote client sees",
   "一块屏": "One screen",
@@ -312,7 +312,7 @@ const EN: Record<string, string> = {
   "关闭": "Off",
   "只在可验证的远程桌面（RDP）会话开始和结束时自动整理、恢复。远控软件在后台运行、或存在虚拟显示器，都不算连接。":
     "Gathers and restores only when a verified Remote Desktop (RDP) session starts and ends. A remote tool running in the background, or a virtual display appearing, does not count as a connection.",
-  "没有任何系统接口能查询「谁正在远程这台电脑」。这里只在有可验证的连接证据时才自动动手：远程桌面会话，或远程端实际投送出来的虚拟显示器。远控工具只是在运行，只作为信息显示，不会触发移动。":
+  "没有任何系统接口能查询「谁正在远程这台电脑」。这里只在远程桌面（RDP）会话真正建立和结束时自动动手；远控工具在后台运行、端口已连接、或存在虚拟显示器，都只作为信息显示，不会触发移动。":
     "No system API can answer \"who is remoting into this machine\". This only acts on verifiable connection evidence: a Remote Desktop session, or a virtual display the remote client actually presents. A remote tool merely running is shown as information and never triggers a move.",
   "检测到远程时自动整理": "Gather when a session starts",
   "关闭时会先把窗口恢复原位，再停止自动整理":

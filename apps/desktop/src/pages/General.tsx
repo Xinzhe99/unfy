@@ -96,7 +96,7 @@ export function GeneralPage({
 
       <Card
         title={t("远程会话检测")}
-        description={t("自动检测能识别到的远程会话，并按你的选择收拢或恢复窗口。")}
+        description={t("远程桌面（RDP）会话建立时整理、结束时恢复。其他远控软件需要手动整理。")}
         aside={
           settings.remote_active ? (
             <Status tone="accent">
@@ -178,7 +178,7 @@ export function GeneralPage({
         </SettingRow>
 
         <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">
-          {t("没有任何系统接口能查询「谁正在远程这台电脑」。这里只在有可验证的连接证据时才自动动手：远程桌面会话，或远程端实际投送出来的虚拟显示器。远控工具只是在运行，只作为信息显示，不会触发移动。")}
+          {t("没有任何系统接口能查询「谁正在远程这台电脑」。这里只在远程桌面（RDP）会话真正建立和结束时自动动手；远控工具在后台运行、端口已连接、或存在虚拟显示器，都只作为信息显示，不会触发移动。")}
         </p>
       </Card>
 
