@@ -202,6 +202,8 @@ const EN: Record<string, string> = {
   "没有可整理的窗口": "Nothing to gather",
   "将移动 {count} 个窗口": "Will move {count} windows",
   "空间不足，窗口将叠放": "Not enough room; windows will overlap",
+  "窗口按原大小移入，允许叠放；用任务栏或窗口切换访问。":
+    "Windows keep their size and may overlap; use the taskbar or the window switcher to reach them.",
   "{count} 个窗口放不下，保持原位": "{count} windows do not fit and stay put",
   "已跳过 {count} 个窗口": "Skipped {count} windows",
   "这份预览的目标显示器已经不可用，请重新选择后再整理。":

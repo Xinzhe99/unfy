@@ -90,6 +90,8 @@ export interface SkipDto {
 }
 
 export interface PreviewDto {
+  /** Which arrangement produced this plan. */
+  mode: "default" | "grid";
   target_present: boolean;
   placements: PlacementDto[];
   unplaced: string[];

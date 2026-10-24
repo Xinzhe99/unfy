@@ -213,7 +213,12 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
         <span>
           {t("将移动 {count} 个窗口", { count: placed })}
         </span>
-        {preview.cascaded ? (
+        {preview.cascaded && preview.mode === "default" ? (
+          <span>
+            {t("窗口按原大小移入，允许叠放；用任务栏或窗口切换访问。")}
+          </span>
+        ) : null}
+        {preview.cascaded && preview.mode === "grid" ? (
           <span className="text-[var(--color-warning)]">
             {t("空间不足，窗口将叠放")}
           </span>
@@ -223,7 +228,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
             {t("{count} 个窗口放不下，保持原位", { count: preview.unplaced.length })}
           </span>
         ) : null}
-        {squeezed > 0 ? (
+        {squeezed > 0 && preview.mode === "grid" ? (
           <span>
             {/* Dashed cells already meant this; without a legend the drawing just
                 looked wrong. The count matters: "one of eight will overlap" is a

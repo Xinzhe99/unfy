@@ -100,6 +100,10 @@ pub struct PlacementDto {
 
 #[derive(Debug, Serialize)]
 pub struct PreviewDto {
+    /// The layout mode the plan was computed with. The notes under the drawing
+    /// mean different things in each mode: overlap is the normal result of moving
+    /// windows over, and a "cell" only exists in the grid.
+    pub mode: &'static str,
     /// True when the plan targets the display the user configured. False means
     /// the configured display is gone and the plan fell back to the primary one -
     /// the user must see that before pressing "gather", not after.
@@ -390,6 +394,10 @@ pub fn preview(app: State<'_, AppState>) -> Result<PreviewDto, String> {
     let target_present = true;
 
     Ok(PreviewDto {
+        mode: match preview.plan.mode {
+            unfy_layout::LayoutMode::Grid => "grid",
+            unfy_layout::LayoutMode::MoveInto => "default",
+        },
         target_present,
         placements: preview
             .plan

@@ -111,6 +111,7 @@ const status: StatusDto = {
 };
 
 const preview: PreviewDto = {
+  mode: "default",
   target_present: true,
   placements: [
     {
@@ -1286,6 +1287,22 @@ describe("pages render", () => {
     // fallback to the primary display either: a gather refuses instead.
     expect(html).toContain("目标显示器已经不可用");
     expect(html).not.toContain("会整理到主显示器");
+  });
+
+  test("plan preview describes overlap differently in each mode", () => {
+    // Overlap is the normal outcome of moving windows over; it is only a
+    // limitation in the grid. The same word for both told the user their default
+    // gather had run out of room.
+    const moved = renderToStaticMarkup(
+      <PlanPreview preview={{ ...preview, mode: "default", cascaded: true }} />,
+    );
+    expect(moved).toContain("按原大小移入");
+    expect(moved).not.toContain("空间不足");
+
+    const tiled = renderToStaticMarkup(
+      <PlanPreview preview={{ ...preview, mode: "grid", cascaded: true }} />,
+    );
+    expect(tiled).toContain("空间不足");
   });
 
   test("plan preview names the applications instead of only numbering them", () => {
