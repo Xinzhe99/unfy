@@ -956,6 +956,27 @@ describe("pages render", () => {
     expect(html).toContain("移到目标屏");
     expect(html).not.toContain("主次");
     expect(html).toContain("保留窗口大小和最大化状态");
+    // Margin and gap only affect the grid. In the default mode they must not be
+    // offered: two settings that change nothing read as a broken feature.
+    expect(html).not.toContain("窗口间距");
+  });
+
+  test("grid spacing appears only when the grid is selected", () => {
+    const html = renderToStaticMarkup(
+      <DisplaysPage
+        displays={displays}
+        settings={{ ...settings, layout_mode: "grid" }}
+        target={status.target}
+        thumbnails={{}}
+        busy={false}
+        onSelect={noop}
+        onIdentify={noop}
+        onCycle={noop}
+        onSave={noop}
+      />,
+    );
+    expect(html).toContain("窗口间距");
+    expect(html).toContain("边距");
   });
 
   test("clearing every rule asks first", () => {

@@ -93,31 +93,37 @@ export function DisplaysPage({
           />
         </SettingRow>
 
-        <div className="border-t border-[var(--color-border)]" />
+        {/* Margin and gap only exist for the explicit grid. Showing them in the
+            default mode offered two settings that changed nothing. */}
+        {settings.layout_mode === "grid" ? (
+          <>
+            <div className="border-t border-[var(--color-border)]" />
 
-        <SettingRow label={t("边距")} hint={t("窗口与屏幕边缘的距离")}>
-          <NumberInput
-            value={settings.margin}
-            min={0}
-            max={200}
-            suffix={t("像素")}
-            disabled={busy}
-            onCommit={(margin) => onSave({ margin })}
-          />
-        </SettingRow>
+            <SettingRow label={t("边距")} hint={t("窗口与屏幕边缘的距离")}>
+              <NumberInput
+                value={settings.margin}
+                min={0}
+                max={200}
+                suffix={t("像素")}
+                disabled={busy}
+                onCommit={(margin) => onSave({ margin })}
+              />
+            </SettingRow>
 
-        <div className="border-t border-[var(--color-border)]" />
+            <div className="border-t border-[var(--color-border)]" />
 
-        <SettingRow label={t("窗口间距")} hint={t("相邻窗口之间的距离")}>
-          <NumberInput
-            value={settings.gap}
-            min={0}
-            max={200}
-            suffix={t("像素")}
-            disabled={busy}
-            onCommit={(gap) => onSave({ gap })}
-          />
-        </SettingRow>
+            <SettingRow label={t("窗口间距")} hint={t("相邻窗口之间的距离")}>
+              <NumberInput
+                value={settings.gap}
+                min={0}
+                max={200}
+                suffix={t("像素")}
+                disabled={busy}
+                onCommit={(gap) => onSave({ gap })}
+              />
+            </SettingRow>
+          </>
+        ) : null}
       </Card>
     </>
   );
