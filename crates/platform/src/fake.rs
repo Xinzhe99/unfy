@@ -51,7 +51,9 @@ struct FakeWindow {
 /// A deterministic, thread-local fake platform.
 #[derive(Debug, Default)]
 pub struct FakeBackend {
-    displays: Vec<DisplaySnapshot>,
+    /// Interior mutability so tests can model a hot-plug while the engine holds
+    /// the backend by value. Production backends read the OS; this one is told.
+    displays: RefCell<Vec<DisplaySnapshot>>,
     windows: RefCell<HashMap<u64, FakeWindow>>,
     /// Rectangles that `SelfCorrecting` windows return to.
     home: HashMap<u64, Rect>,
@@ -64,8 +66,8 @@ impl FakeBackend {
 
     /// Two displays with different scale factors, arranged side by side.
     pub fn with_two_displays() -> Self {
-        let mut backend = Self::new();
-        backend.displays = vec![
+        let backend = Self::new();
+        *backend.displays.borrow_mut() = vec![
             DisplaySnapshot {
                 key: DisplayKey {
                     native_id: "fake-display-a".into(),
@@ -101,12 +103,11 @@ impl FakeBackend {
         }
     }
 
-    /// Add a window. `rect` is its visible rectangle in physical pixels.
     /// Mark a window as focused, as the real backend does for the foreground one.
     ///
-    /// Tests that exercise `PrimarySide` need this: without a focused candidate
-    /// that layout silently degenerates into a grid, which is exactly the bug this
-    /// setter exists to make testable.
+    /// The grid places the focused window in the first cell; without a way to set
+    /// this, the wiring between the platform snapshot and the planner was
+    /// untestable.
     pub fn focus(&mut self, id: u64) {
         for window in self.windows.borrow_mut().values_mut() {
             window.snapshot.focused = window.snapshot.id.native_id == id;
@@ -120,6 +121,7 @@ impl FakeBackend {
         }
     }
 
+    /// Add a window. `rect` is its visible rectangle in physical pixels.
     pub fn add_window(
         &mut self,
         id: u64,
@@ -166,18 +168,44 @@ impl FakeBackend {
         }
     }
 
-    pub fn display(&self, native_id: &str) -> Option<&DisplaySnapshot> {
-        self.displays.iter().find(|d| d.key.native_id == native_id)
+    pub fn display(&self, native_id: &str) -> Option<DisplaySnapshot> {
+        self.displays
+            .borrow()
+            .iter()
+            .find(|d| d.key.native_id == native_id)
+            .cloned()
+    }
+
+    /// Replace the whole topology, modelling a monitor being unplugged or added.
+    pub fn set_displays(&self, displays: Vec<DisplaySnapshot>) {
+        *self.displays.borrow_mut() = displays;
+    }
+
+    /// The current topology, for a test that needs to restore it later.
+    pub fn displays(&self) -> Vec<DisplaySnapshot> {
+        self.displays.borrow().clone()
+    }
+
+    /// Change a window's presentation mode without moving it.
+    ///
+    /// Used to model the user maximizing or minimizing a window after a gather:
+    /// the rectangle can stay identical, so the mode is the only evidence that
+    /// anything changed.
+    pub fn set_mode(&self, id: &WindowId, mode: WindowMode) {
+        if let Some(window) = self.windows.borrow_mut().get_mut(&id.native_id) {
+            window.snapshot.mode = mode;
+        }
     }
 }
 
 impl DisplayProvider for FakeBackend {
     fn topology(&self) -> Result<Vec<DisplaySnapshot>> {
-        Ok(self.displays.clone())
+        Ok(self.displays.borrow().clone())
     }
 
     fn scale_of(&self, key: &DisplayKey) -> Result<Scale> {
         self.displays
+            .borrow()
             .iter()
             .find(|d| d.key == *key)
             .map(|d| d.scale)
