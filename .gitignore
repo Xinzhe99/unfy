@@ -6,6 +6,7 @@ dist/
 *.png
 !apps/desktop/src-tauri/icons/*.png
 !apps/desktop/app-icon.png
+!docs/*.png
 
 # Throwaway verification scripts run in the workspace root.
 /shot.ps1

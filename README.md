@@ -1,134 +1,175 @@
+<div align="center">
+
+<img src="apps/desktop/src-tauri/icons/128x128@2x.png" width="96" alt="Unfy">
+
 # Unfy
 
-把多显示器主机上的窗口，一键收拢到你指定的那一块屏；结束后按快照复原。
+**把多显示器主机的窗口，收拢到远程客户端能看到的那一块屏。**
 
-用于这种场景：主机有三块屏，你用只有一块屏的笔记本通过远程软件连回来，只能看到其中一块，其他屏上的窗口全在视野之外。
+用单屏笔记本远程连回多屏主机时，其他屏幕上的窗口都在视野之外。<br>
+Unfy 把它们移到你能看见的屏幕上，并在结束后按快照放回原位。
 
-## 安装
+[![CI](https://github.com/Xinzhe99/unfy/actions/workflows/ci.yml/badge.svg)](https://github.com/Xinzhe99/unfy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Xinzhe99/unfy)](https://github.com/Xinzhe99/unfy/releases)
+[![Downloads](https://img.shields.io/github/downloads/Xinzhe99/unfy/total)](https://github.com/Xinzhe99/unfy/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#平台支持)
 
-从 [Releases](https://github.com/Xinzhe99/unfy/releases) 下载 `unfy_0.1.0_x64-setup.exe`（Windows，每用户安装，无需管理员）。
+[下载](#下载) · [功能](#功能) · [工作原理](#工作原理) · [常见问题](#常见问题) · [开发](#开发)
 
-**未签名构建。** Windows SmartScreen 会拦截首次运行：点「更多信息 → 仍要运行」。自动更新已配置签名密钥，但 Windows 安装包本身没有 Authenticode 证书，因此系统不校验发布者身份。
+</div>
 
-macOS 与 Linux 尚无可用安装包：macOS 后端只有交叉类型检查，Linux 窗口后端未实现。
+![Unfy 显示器选择界面](docs/screenshot-displays.png)
 
-## 状态
+## 它解决什么问题
 
-**可用性修订已实施。** 默认整理改为逐窗移入（保留大小与最大化状态），恢复记录、窗口身份、检测授权、设置迁移与托盘行为按规格重写；Windows 已在真实桌面通过端到端与界面验证。macOS 只有交叉类型检查，Linux 窗口后端未实现。
+主机接了三块屏。你用只有一块屏的笔记本，通过远程软件连回来，画面里只有其中一块。另外两块屏上的浏览器、编辑器、聊天窗口，你既看不见也点不到，只能断开重连或者盲猜快捷键。
 
-规格见 [可用性审查](docs/spec/usability-review/README.md)，问题索引见 [审查记录](docs/spec/usability-review/audit.md)，本轮实际改动与验证结果见 [实施记录](docs/spec/usability-review/07-implementation-log.md)。早期产品决策见 [docs/plan.md](docs/plan.md)，发布与签名见 [docs/release.md](docs/release.md)。
+远程软件自己提供的「切换显示器」按钮能缓解，但要每次手动切。Unfy 的做法是：**把窗口搬到你能看见的那块屏上，用完再搬回去。**
 
-## 本轮验证
+## 功能
 
-| 项 | 结果 |
+### 一键收拢，保留窗口原状
+
+选择远程画面里能看到的那块屏，点一下整理。窗口按原有大小和相对位置移过去，最大化窗口仍然是最大化。目标屏上已有的窗口不会被重排。
+
+### 恢复记录：随时可以反悔
+
+整理前，每个窗口的位置、尺寸、显示状态和所在的显示器都会被写入一份追加式日志。整理完成后：
+
+- 点「恢复本次布局」回到整理前的位置
+- 中途崩溃或断电，重启后仍能恢复
+- 你手动调整过的窗口会被识别出来并保留你的改动
+
+日志在写入磁盘后才开始移动窗口，所以不存在「窗口移走了但原始位置丢了」的窗口期。
+
+### 两种排列方式
+
+| 方式 | 行为 |
 |---|---|
-| `cargo test --workspace` / `clippy -D warnings` / `fmt --check` | 通过 |
-| 前端 `npm run build`（tsc + bun test + vite） | 137 项测试通过 |
-| 真实桌面 e2e（作用域内 6 窗口） | 移入 6/6、恢复 0 px 偏差、日志清理、重复整理零写入 |
-| 真实应用界面 | 整理 1 个、4 个已在目标屏、跳过 7 个；恢复 1 个；旧身份记录被拒绝写入 |
+| **移到目标屏**（默认） | 保留窗口大小，按相对位置搬过去。窗口之间允许重叠。 |
+| **网格** | 把目标屏切成等分格子，每个窗口占一格。适合需要一眼看全所有窗口的场合。 |
 
-细节见 [实施记录](docs/spec/usability-review/07-implementation-log.md)。
+### 排除不想被移动的应用
 
-## 历史验证记录
+按进程名排除。规则在「排除的应用」页从正在运行的程序里勾选，不用手输文件名。
 
-以下记录来自此前 Windows 验证，仅证明记录当时的场景，不代表当前实现。
+## 平台支持
 
-| 项 | 结果 |
+| 平台 | 状态 |
 |---|---|
-| 跨进程移动窗口 | 0 px 偏差（移动另一个进程的窗口跨两块屏再移回） |
-| 端到端迁移 + 恢复 | `e2e` 二进制：6 个自建窗口迁移到目标屏全部可达，恢复全部回到原始矩形（容差 4 px） |
-| 崩溃恢复 | 迁移中途强杀进程 → 重启后 UI 显示"上次整理未完成" → 点击恢复 → 窗口回到原始位置，journal 被清理 |
-| journal 耐久性 | 写入后强杀子进程 4 次（5/15/40/120 ms），恢复出的记录始终是完整前缀 |
-| NSIS 安装包 | release 3.40 MiB / debug 4.56 MiB；静默安装 → 运行 → 静默卸载，无残留进程 |
-| 显示身份 | `monitorDevicePath` 解析成功并持久化到设置 |
-| 跨 DPI 换算 | 100%↔150% 往返误差 ≤1 px（单元测试） |
-| 100 窗口性能 | 迁移 181–200 ms、恢复 94–125 ms（目标 300 ms / 1 s） |
-| 用户改动保护 | 远程期间用户拖动的窗口，恢复时保留新位置 |
-| 全局热键 | `Ctrl+Alt+G` 移动 3 个窗口；`Ctrl+Alt+Shift+G` 让 11/11 个窗口精确回到原位 |
-| 识别屏幕编号 | 每块屏显示大号数字 4 秒后自动消失（双屏实测） |
-| 显示器选择器 | 每块屏的真实截图 + 与屏幕编号一致的角标（双屏实测，1920×1080 各一张） |
-| 界面全流程 | 引导 4 步 → 整理 3 个窗口 → 恢复 3 个窗口（精确 3 / 待处理 0），浅色与深色各截图核对 |
-| 无人值守渲染 | 全部页面在两套主题下用无头浏览器渲染截图核对（锁屏状态下真实窗口无法截图，见 verification.md） |
-| 布局预览 | 矩形内显示真实应用名（Orca / msedge / explorer #4 …），同应用多窗口追加序号 |
-| 拒绝应用 → 排除 | 4 个拒绝应用点一次「全部排除」写入 4 条规则，无覆盖 |
-| 窗口几何 | 调整后重启回到 200,120 1040×800 |
-| 整理进度 | 每提交一个窗口回调一次，最后一个事件到达总数 |
-| 显示器排布 | 卡片按真实坐标绝对定位，编号与屏幕上的标识牌同序（左侧屏为 1） |
-| 崩溃恢复 | 整理中途强杀 → 重启显示"部分受限 / 待恢复窗口" → 恢复后回到"就绪"，journal 清空 |
-| 保留当前布局 | journal 从 1 个文件变为 0，状态回到"就绪"，之后整理以当前布局为基准 |
-| 自动更新检查 | 本地清单 + 一次性 minisign 密钥：清单被读取、签名被校验、失败原因显示在界面 |
-| 排除的应用 | 从正在运行的应用中勾选，实测 `msedge.exe` 在整理后位置未变 |
+| **Windows 10 / 11** | 完整支持。窗口移动、显示器识别、恢复记录、全局热键、托盘、开机自启均已验证。 |
+| **macOS** | 后端已实现（Accessibility API），只有交叉编译类型检查，**没有真机验证**，不提供安装包。 |
+| **Linux** | 窗口后端未实现。 |
 
-此前记录为 Rust 测试 **134** 个、前端测试 **46** 个（`bun test`，含渲染、色板、对比度、可访问性、显示器排布），当时 `cargo clippy --workspace --all-targets -- -D warnings` 通过。当前修订需按新的行为验收重新验证，不能以历史测试数量判定完成。
+## 下载
 
-完整记录（含未验证项与复现命令）见 [docs/verification.md](docs/verification.md)。
+从 [Releases](https://github.com/Xinzhe99/unfy/releases) 下载最新版 `Unfy_x.y.z_x64-setup.exe`。
 
-## 未验证的部分
+**安装包未做 Authenticode 签名**，Windows SmartScreen 会拦截首次运行：点「更多信息 → 仍要运行」。自动更新包的签名（minisign）是完整的，客户端会校验每一次更新。
 
-- **macOS**：AX 后端、TCC 授权流程和显示器身份已有代码，本轮修复了引用计数、坐标单位、工作区刷新与类型读取，但**仍只有交叉类型检查，没有真机运行证据**。
-- **签名、公证、自动更新的实际安装**：本机无证书、更新端点为未配置的空数组。tag 构建现在会因 updater 未配置而**故意失败**，流程见 [docs/release.md](docs/release.md)。
-- **其他应用的回弹率**：实测桌面窗口迁移时约有 1/3 拒绝移动（Chrome/Electron 系）。拒绝会如实报告并显示进程号，但未做大规模统计。
-- **托盘菜单点击**：托盘图标无法被 UI 自动化识别，菜单项走的是与热键相同的引擎路径（已测），但点击本身只做了代码审查。
+静默安装（部署到多台机器时）：
 
-## 结构
-
-```
-crates/domain/          # 几何、身份、状态机；无 OS 依赖
-crates/layout/          # 纯函数布局：网格 / 主次 / 保持顺序 / 容量不足级联
-crates/journal/         # 追加式事务日志，CRC + 崩溃重放
-crates/engine/          # 单写者状态机：预览、迁移、回读重试、恢复、救援、排除规则
-crates/settings/        # 原子写入的设置，拒绝未知字段
-crates/platform/        # trait + Fake 实现
-crates/platform/win/    # windows-rs 后端 + probe/e2e 二进制
-crates/platform/mac/    # AX 后端（未真机验证）
-apps/desktop/           # Tauri 2 + React 19 + Tailwind 4
+```powershell
+Unfy_0.1.0_x64-setup.exe /S
 ```
 
-## 运行
+每用户安装，不需要管理员权限，卸载后在「应用和功能」里没有残留。
 
-```bash
-cargo test --workspace
-cargo run -p unfy-platform-win --bin e2e      # 只操作自建窗口：后端作用域会隐藏其他应用
-cargo run -p unfy-platform-win --bin probe    # 只读：打印显示器与候选窗口
+## 工作原理
 
-cd apps/desktop
-npm install
-npm run tauri dev
-npm test          # 前端纯逻辑单测（Bun）
+```
+选择目标屏 → 快照所有合格窗口 → 写日志并 fsync → 移动窗口 → 回读确认
+                                                                    ↓
+                                        恢复时按日志逐窗还原，验证几何与显示状态
 ```
 
-打包：
+三个设计决定值得说明：
 
-```bash
-cd apps/desktop && npm run tauri build
-```
+**写日志在前，动窗口在后。** 每个窗口的原始位置先落盘并 fsync，然后才提交移动请求。代价是每次整理多几毫秒，换来的是任何时刻强杀进程都不会丢原始位置。
+
+**提交不等于成功。** 每次移动后重新读取窗口的真实几何与状态，只有与计划一致才记为成功。应用拒绝、自己弹回、或读不到结果，都会如实报告并保留恢复记录，而不是假装完成。
+
+**不碰没有把握的窗口。** 最小化窗口、其他虚拟桌面上的窗口、以管理员权限运行的程序、无边框全屏窗口都跳过并说明原因。移动一个看不见的窗口只会让用户更困惑。
+
+## 常见问题
+
+<details>
+<summary><b>整理后有些窗口没动，为什么？</b></summary>
+
+在「最近一次实际结果」里能看到每个窗口的结论。常见原因：
+
+- **最小化** — 移过去你也看不见，跳过
+- **其他虚拟桌面** — 不在当前桌面，无法操作
+- **以管理员权限运行** — 普通权限进程无法移动提权窗口
+- **拒绝移动** — 部分应用（Chrome、部分 Electron 应用）会把自己的窗口弹回原位，Unfy 会报告并保留恢复记录
+
+</details>
+
+<details>
+<summary><b>远程软件自带的「切换显示器」不够用吗？</b></summary>
+
+够用，但要每次手动切，而且切过去之后窗口还在原来的屏幕上——你只是换了一块屏看，窗口并没有搬过来。Unfy 是搬窗口，不是换视角。
+
+</details>
+
+<details>
+<summary><b>能自动检测远程连接吗？</b></summary>
+
+只有 **RDP** 能可靠检测。TeamViewer、AnyDesk、RustDesk、ToDesk、向日葵、Parsec 等工具都挂在已有的控制台会话上，不产生任何可查询的系统标志——没有任何公开 API 能回答「现在有人在远程这台机器吗」。
+
+因此 v1 的自动检测只在已验证的 RDP 会话上生效，且只做一件事：会话结束时自动恢复。其他远程软件请手动整理和恢复（可以设全局热键）。
+
+</details>
+
+<details>
+<summary><b>窗口位置会被上传吗？</b></summary>
+
+不会。没有遥测，没有网络请求（除手动检查更新外）。恢复记录只存在本机 `%APPDATA%\Unfy\journal`，诊断包也不含窗口标题、文件路径或屏幕画面。
+
+</details>
+
+## 开发
 
 需要 Rust stable + MSVC 工具链、Node 22+。Tauri 首次打包会从 GitHub 下载 NSIS/WiX；无法直连时用 `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR` 指向镜像。
 
-## 界面
+```bash
+cargo test --workspace                          # 单元与集成测试
+cargo clippy --workspace --all-targets -- -D warnings
+cargo run -p unfy-platform-win --bin e2e        # 真实桌面：创建自己的窗口并移动
+npm --prefix apps/desktop run build             # 前端类型检查 + 测试 + 打包
+```
 
-左侧分组导航 + 白色卡片的中性界面，主题跟随系统或手动指定：
+`e2e` 只操作它自己创建的窗口，可以在正在使用的桌面上运行。
 
-- **概览**：当前状态 → 一个主操作（整理 / 恢复）→ 布局预览（矩形内显示应用名）→ 未能移动的应用（逐个处理，不再提供「全部排除」）→ 活动历史 → 工具（救援、诊断）。
-- **显示器**：按真实坐标摆放每块屏的实时截图，角标与"在屏幕上显示编号"一致；布局方式（移到目标屏 / 网格），边距与间距只在网格模式出现。
-- **排除的应用**：列出当前有窗口的应用供勾选，也可手写可执行文件名；页面打开时每 5 秒刷新。
-- **设置**：主题、远程会话检测（关闭 / 远程桌面会话）、自启、快捷键（按键录制，不是手输语法）、恢复延迟、环境状态、更新、恢复默认设置。
+### 结构
 
-选择目标屏之所以用截图而不是分辨率列表：两块同型号显示器会产生两行完全相同的 `1920×1080`，而任务本身就是"哪一块是远程端看到的"。截图是唯一能分辨的线索。
+```
+crates/domain/       几何、身份、状态机；无 OS 依赖
+crates/layout/       纯函数布局规划
+crates/journal/      追加式事务日志，CRC + 崩溃重放
+crates/engine/       整理 / 恢复状态机，唯一允许发写操作的地方
+crates/platform/     平台后端接口 + 假后端
+crates/platform/win/ Windows 实现
+crates/platform/mac/ macOS 实现
+crates/detect/       远程会话证据收集
+crates/settings/     设置持久化与迁移
+apps/desktop/        Tauri + React 界面
+```
 
-更新区域如实反映构建配置：本地构建没有签名公钥与更新地址，界面显示"未配置更新源"并禁用检查按钮，而不是让用户点一个永远失败的按钮。
+### 文档
 
-窗口隐藏（关闭到托盘）时前端停止轮询；后台常驻不再每 4 秒执行 8 个命令。
-
-托盘图标始终使用原始图标，不随状态或主题变色；菜单随状态变化：未整理时只能"整理"，已整理时"恢复"才可用，并多出"暂停自动整理"。
+- [发布流程与签名](docs/release.md) — 密钥、证书、CI 门禁
+- [验证记录](docs/verification.md) — 实际跑过什么，没跑过什么
+- [产品规格](docs/spec/usability-review/README.md) — 行为契约与边界条件
 
 ## 明确不做
 
-当前阶段不做虚拟显示器、特权 helper 或付费授权；Linux X11 按已确认决策后移，Wayland 不承诺通用跨应用窗口移动。
+- 虚拟显示器、强制单屏模式
+- 特权 helper（因此无法移动提权窗口）
+- 遥测、账号、License
+- Linux 支持
 
-## 已知限制
+## License
 
-- macOS 无法移动原生全屏窗口（独立 Space），也无法操作其他 Space 上的窗口。
-- Windows 无法操作以管理员权限运行的窗口。
-- 无法得知远程端在看哪块屏，目标屏需要用户指定；目标未确认或已断开时，整理会拒绝执行而不是改投主屏。
-- 当前检测包含 RDP、虚拟显示器及远控进程/连接信号，但这些信息不足以统一证明入站控制生命周期；重复采样也不能把弱信号变可靠。自动动作的修订准入与各工具支持条件见 [检测规格](docs/spec/usability-review/03-detection-and-target.md)。
+MIT
