@@ -1,301 +1,214 @@
-//! Display enumeration and identity for macOS.
-//!
-//! Identity uses `CGDisplayCreateUUIDFromDisplayID`, the only documented stable
-//! identifier on this platform. Serial numbers are unreliable: many monitors
-//! report `0`, and the vendor/model numbers are properties of the *model*, not of
-//! this physical unit.
-//!
-//! Scale comes from `CGDisplayPixelsWide` vs `CGDisplayModeCopyPixelEncoding`-era
-//! logic being deprecated, so instead we take the ratio of the display's pixel
-//! width to the width reported by `NSScreen.frame` in points. That is the same
-//! number the Accessibility API uses.
+//! Main-thread AppKit display snapshots in the same desktop points used by AX.
+//! Work areas and bounds are published together; absent/stale work areas never
+//! silently become whole-display bounds that include the Dock and menu bar.
 
-#![cfg(target_os = "macos")]
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-use core_graphics::display::{CGDisplay, CGDisplayBounds, CGDisplayIsMain, CGGetActiveDisplayList};
+use core_foundation::base::TCFType;
+use core_graphics::display::CGDisplayIsMain;
 use unfy_domain::{DisplayKey, DisplaySnapshot, IdentityQuality, Rect, Scale, WindowId};
 use unfy_platform::{DisplayProvider, PlatformError, Result};
 
-/// Quartz-backed display provider.
-///
-/// `CGDisplayBounds` is the whole display including the menu bar, while window
-/// placement must respect the work area. macOS exposes work areas only through
-/// `NSScreen.visibleFrame`, which AppKit restricts to the main thread. The app
-/// therefore calls [`QuartzDisplays::prime_work_areas`] from `setup` (which runs
-/// on the main thread) and again on every display reconfiguration; `enumerate`
-/// uses the primed values and falls back to full bounds when they are missing.
 #[derive(Debug, Default)]
 pub struct QuartzDisplays {
-    cache: std::sync::Mutex<Option<Cached>>,
-    work_areas: std::sync::Mutex<std::collections::HashMap<u32, Rect>>,
+    cache: Mutex<Option<Cached>>,
 }
 
-/// A cached topology with the moment it was taken.
-///
-/// The previous cache had no expiry at all: `prime_work_areas` was the only thing
-/// that cleared it, nothing called that at runtime, and `invalidate` had no
-/// caller. Hot-plugging a display therefore kept returning the old list forever,
-/// so plans and rescue were computed against a desktop that no longer existed.
 #[derive(Debug)]
 struct Cached {
-    at: std::time::Instant,
-    displays: Vec<(u32, DisplaySnapshot)>,
+    at: Instant,
+    displays: Vec<DisplaySnapshot>,
 }
 
-/// How long a cached topology is trusted.
-const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+// Desktop integration refreshes on the main thread every second, including Dock
+// changes. A stalled refresher must stop planning from arbitrarily old geometry.
+const CACHE_TTL: Duration = Duration::from_secs(5);
 
 impl QuartzDisplays {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn invalidate(&self) {
-        if let Ok(mut cache) = self.cache.lock() {
-            *cache = None;
-        }
-        if let Ok(mut work) = self.work_areas.lock() {
-            work.clear();
-        }
-    }
-
-    /// Re-read the work areas when they are missing or stale.
-    ///
-    /// Called from `topology`, so a caller that never remembers to prime still gets
-    /// real work areas once the cache expires. Returns silently when not on the main
-    /// thread; the last primed values stay in use rather than being replaced by
-    /// full display bounds.
-    fn refresh_work_areas_if_stale(&self) {
-        let stale = match self.cache.lock() {
-            Ok(cache) => cache
-                .as_ref()
-                .is_none_or(|cached| cached.at.elapsed() >= CACHE_TTL),
-            Err(_) => true,
-        };
-        if stale {
-            self.prime_work_areas();
-        }
-    }
-
-    /// Record the current work area of every display.
-    ///
-    /// Must be called on the main thread; returns `false` when it was not, so
-    /// the caller can retry on the main thread instead of silently using whole
-    /// display bounds.
+    /// Refresh the entire topology on the main thread and publish it atomically.
+    /// False means no usable fresh snapshot was published.
     pub fn prime_work_areas(&self) -> bool {
-        use objc2::MainThreadMarker;
-        use objc2_app_kit::NSScreen;
-
-        let Some(marker) = MainThreadMarker::new() else {
+        let Some(marker) = objc2::MainThreadMarker::new() else {
             return false;
         };
-        // Keep the marker alive: `screens` is only valid while the main thread
-        // marker exists, which is the type-level guarantee AppKit relies on.
-        let screens = NSScreen::screens(marker);
-        // Flip against the primary display's top edge, not `mainScreen`.
-        //
-        // `+[NSScreen mainScreen]` is the screen with keyboard focus, not the one
-        // whose origin is (0,0). On a mixed-height setup, flipping with the focused
-        // screen's height moved every window by the difference as soon as the user
-        // clicked on the other monitor.
-        let reference_height = screens
-            .iter()
-            .next()
-            .map(|s| s.frame())
-            .map(|f| f.size.height + f.origin.y)
-            .unwrap_or(0.0);
-        let _marker = marker;
-
-        let mut work = std::collections::HashMap::new();
-        for screen in screens.iter() {
-            let visible = screen.visibleFrame();
-            let top = reference_height - (visible.origin.y + visible.size.height);
-            // `NSScreen` does not expose the `CGDirectDisplayID` directly. The
-            // documented bridge is `NSScreenNumber` in `deviceDescription`;
-            // when it is missing the display simply keeps its full bounds.
-            let Some(display_id) = screen_display_id(&screen) else {
-                continue;
-            };
-            work.insert(
-                display_id,
-                Rect::new(
-                    visible.origin.x.round() as i32,
-                    top.round() as i32,
-                    (visible.origin.x + visible.size.width).round() as i32,
-                    (top + visible.size.height).round() as i32,
-                ),
-            );
-        }
-
-        if let Ok(mut cache) = self.work_areas.lock() {
-            *cache = work;
-        }
-        if let Ok(mut cache) = self.cache.lock() {
-            *cache = None;
-        }
-        true
-    }
-
-    fn work_area_for(&self, id: u32, bounds: Rect) -> Rect {
-        self.work_areas
-            .lock()
-            .ok()
-            .and_then(|m| m.get(&id).copied())
-            .unwrap_or(bounds)
-    }
-
-    fn snapshot(&self) -> Result<Vec<(u32, DisplaySnapshot)>> {
-        self.refresh_work_areas_if_stale();
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached) = cache.as_ref() {
-                if cached.at.elapsed() < CACHE_TTL {
-                    return Ok(cached.displays.clone());
-                }
+        let fresh = objc2::rc::autoreleasepool(|_| enumerate(marker));
+        let Ok(mut cache) = self.cache.lock() else {
+            return false;
+        };
+        match fresh {
+            Ok(displays) => {
+                *cache = Some(Cached {
+                    at: Instant::now(),
+                    displays,
+                });
+                true
+            }
+            Err(_) => {
+                *cache = None;
+                false
             }
         }
-        let fresh = enumerate(self)?;
-        if let Ok(mut cache) = self.cache.lock() {
-            *cache = Some(Cached {
-                at: std::time::Instant::now(),
-                displays: fresh.clone(),
-            });
+    }
+
+    fn snapshot(&self) -> Result<Vec<DisplaySnapshot>> {
+        if objc2::MainThreadMarker::new().is_some() {
+            self.prime_work_areas();
         }
-        Ok(fresh)
+        let cache = self
+            .cache
+            .lock()
+            .map_err(|_| PlatformError::Os("display cache poisoned".into()))?;
+        let cached = cache
+            .as_ref()
+            .filter(|cached| cached.at.elapsed() < CACHE_TTL)
+            .ok_or_else(|| {
+                PlatformError::Os("main-thread display work areas unavailable or stale".into())
+            })?;
+        Ok(cached.displays.clone())
     }
 }
 
 impl DisplayProvider for QuartzDisplays {
     fn topology(&self) -> Result<Vec<DisplaySnapshot>> {
-        Ok(self.snapshot()?.into_iter().map(|(_, d)| d).collect())
+        self.snapshot()
     }
 
     fn scale_of(&self, key: &DisplayKey) -> Result<Scale> {
         self.snapshot()?
             .into_iter()
-            .find(|(_, d)| d.key == *key)
-            .map(|(_, d)| d.scale)
+            .find(|display| display.key == *key)
+            .map(|display| display.scale)
             .ok_or(PlatformError::DisplayGone)
     }
 
     fn display_for(&self, _id: &WindowId) -> Result<DisplayKey> {
-        // The AX backend fills `WindowSnapshot::display` during enumeration by
-        // matching the window rectangle against display bounds; looking it up
-        // here would require re-querying the window, which the engine does not
-        // need.
+        // MacPlatform combines the observed AX rectangle with this topology.
         Err(PlatformError::Unsupported)
     }
 }
 
-fn enumerate(owner: &QuartzDisplays) -> Result<Vec<(u32, DisplaySnapshot)>> {
-    let mut count: u32 = 0;
-    let mut ids = [0u32; 16];
-
-    let err = unsafe { CGGetActiveDisplayList(16, ids.as_mut_ptr(), &mut count) };
-    if err != 0 {
-        return Err(PlatformError::Os(format!(
-            "CGGetActiveDisplayList failed: {err}"
-        )));
-    }
-
-    let mut out = Vec::new();
-    for id in ids.iter().take(count as usize) {
-        let display = CGDisplay::new(*id);
-        let bounds = unsafe { CGDisplayBounds(*id) };
-        let rect = Rect::new(
-            bounds.origin.x.round() as i32,
-            bounds.origin.y.round() as i32,
-            (bounds.origin.x + bounds.size.width).round() as i32,
-            (bounds.origin.y + bounds.size.height).round() as i32,
-        );
-
-        // Geometry on this platform is in **points**, and AX reads/writes points
-        // too. The engine's coordinate space is therefore points, and the scale it
-        // uses for geometry must be 1.0. Reporting the Retina backing ratio here
-        // made every restore rescale a point rectangle by 2, which is the bug this
-        // comment exists to prevent. The backing ratio is not lost: it is exposed
-        // separately for screenshots and for the "physical size" line in the UI.
-        let _pixel_width = display.pixels_wide();
-        let scale = Scale::IDENTITY;
-
-        let native_id = uuid_for_display(*id).unwrap_or_else(|| format!("cg:{id}"));
-        let quality = if native_id.starts_with("cg:") {
-            IdentityQuality::Weak
-        } else {
+fn enumerate(marker: objc2::MainThreadMarker) -> Result<Vec<DisplaySnapshot>> {
+    let screens = objc2_app_kit::NSScreen::screens(marker);
+    // NSScreen's first entry is the global menu-bar reference screen. mainScreen
+    // instead follows keyboard focus and is not a coordinate-system reference.
+    let primary = screens.iter().next().ok_or(PlatformError::DisplayGone)?;
+    let reference_height = primary.frame().origin.y + primary.frame().size.height;
+    let mut displays = Vec::with_capacity(screens.len());
+    for screen in screens.iter() {
+        let id = screen_display_id(&screen)
+            .ok_or_else(|| PlatformError::Os("NSScreenNumber unavailable".into()))?;
+        let frame = screen.frame();
+        let visible = screen.visibleFrame();
+        let bounds = appkit_rect(
+            reference_height,
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height,
+        )?;
+        let work_area = appkit_rect(
+            reference_height,
+            visible.origin.x,
+            visible.origin.y,
+            visible.size.width,
+            visible.size.height,
+        )?;
+        let uuid = uuid_for_display(id);
+        let quality = if uuid.is_some() {
             IdentityQuality::Strong
+        } else {
+            IdentityQuality::Weak
         };
-
-        // The menu bar is 25-37 points tall depending on macOS version. The
-        // authoritative work area comes from `NSScreen.visibleFrame`, primed on
-        // the main thread; when priming has not run yet the display keeps its
-        // full bounds rather than pretending the menu bar does not exist.
-        out.push((
-            *id,
-            DisplaySnapshot {
-                key: DisplayKey { native_id, quality },
-                bounds: rect,
-                work_area: owner.work_area_for(*id, rect),
-                scale,
-                physical_size_mm: None,
-                primary: unsafe { CGDisplayIsMain(*id) != 0 },
-                label: format!("Display {}", id),
+        displays.push(DisplaySnapshot {
+            key: DisplayKey {
+                native_id: uuid.unwrap_or_else(|| format!("cg:{id}")),
+                quality,
             },
-        ));
+            bounds,
+            work_area,
+            // Both AppKit frames and AX window geometry use points. Retina
+            // backing pixels must never rescale these desktop coordinates.
+            scale: Scale::IDENTITY,
+            physical_size_mm: None,
+            primary: unsafe { CGDisplayIsMain(id) != 0 },
+            label: screen.localizedName().to_string(),
+        });
     }
-    Ok(out)
+    Ok(displays)
 }
 
-/// Stable per-display identifier.
-fn uuid_for_display(display_id: u32) -> Option<String> {
-    // `CGDisplayCreateUUIDFromDisplayID` lives in ColorSync and is available from
-    // macOS 10.13. It returns a CFUUID that is stable across reboots and port
-    // changes for the same physical display.
-    #[link(name = "ColorSync", kind = "framework")]
-    extern "C" {
-        fn CGDisplayCreateUUIDFromDisplayID(display: u32) -> core_foundation::base::CFTypeRef;
+fn appkit_rect(reference_top: f64, x: f64, y: f64, width: f64, height: f64) -> Result<Rect> {
+    let top = reference_top - (y + height);
+    let edges = [x, top, x + width, top + height];
+    if width <= 0.0
+        || height <= 0.0
+        || edges
+            .iter()
+            .any(|value| !value.is_finite() || *value < i32::MIN as f64 || *value > i32::MAX as f64)
+    {
+        return Err(PlatformError::Os("invalid NSScreen geometry".into()));
     }
-    let uuid = unsafe { CGDisplayCreateUUIDFromDisplayID(display_id) };
-    if uuid.is_null() {
-        return None;
-    }
-    // CFUUID -> string via CFStringCreateFromExternalRepresentation is fiddly;
-    // storing the CFUUID's byte representation is enough for identity.
-    let bytes = unsafe { core_foundation_sys::uuid::CFUUIDGetUUIDBytes(uuid as _) };
-    unsafe { core_foundation_sys::base::CFRelease(uuid as _) };
-    Some(format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes.byte0,
-        bytes.byte1,
-        bytes.byte2,
-        bytes.byte3,
-        bytes.byte4,
-        bytes.byte5,
-        bytes.byte6,
-        bytes.byte7,
-        bytes.byte8,
-        bytes.byte9,
-        bytes.byte10,
-        bytes.byte11,
-        bytes.byte12,
-        bytes.byte13,
-        bytes.byte14,
-        bytes.byte15,
+    Ok(Rect::new(
+        edges[0].round() as i32,
+        edges[1].round() as i32,
+        edges[2].round() as i32,
+        edges[3].round() as i32,
     ))
 }
 
-/// The `CGDirectDisplayID` behind an `NSScreen`.
-///
-/// `NSScreenNumber` in `deviceDescription` is the documented bridge between
-/// AppKit and Quartz display identifiers.
-#[cfg(target_os = "macos")]
-fn screen_display_id(screen: &objc2_app_kit::NSScreen) -> Option<u32> {
-    use objc2_foundation::NSDictionary;
-    use objc2_foundation::NSNumber;
-    use objc2_foundation::NSString;
+fn uuid_for_display(display_id: u32) -> Option<String> {
+    use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef, CFUUID};
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGDisplayCreateUUIDFromDisplayID(display: u32) -> CFUUIDRef;
+    }
+    let raw = unsafe { CGDisplayCreateUUIDFromDisplayID(display_id) };
+    if raw.is_null() {
+        return None;
+    }
+    let uuid = unsafe { CFUUID::wrap_under_create_rule(raw) };
+    let bytes = unsafe { CFUUIDGetUUIDBytes(uuid.as_concrete_TypeRef()) };
+    Some(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes.byte0, bytes.byte1, bytes.byte2, bytes.byte3, bytes.byte4, bytes.byte5,
+        bytes.byte6, bytes.byte7, bytes.byte8, bytes.byte9, bytes.byte10, bytes.byte11,
+        bytes.byte12, bytes.byte13, bytes.byte14, bytes.byte15,
+    ))
+}
 
-    let description: objc2::rc::Retained<NSDictionary<NSString, objc2::runtime::AnyObject>> =
-        screen.deviceDescription();
+fn screen_display_id(screen: &objc2_app_kit::NSScreen) -> Option<u32> {
+    use objc2_foundation::{NSNumber, NSString};
+    let description = screen.deviceDescription();
     let key = NSString::from_str("NSScreenNumber");
     let value = description.objectForKey(&key)?;
     let number = value.downcast_ref::<NSNumber>()?;
     u32::try_from(number.integerValue()).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_coordinates_share_global_reference_and_preserve_work_area() {
+        assert_eq!(
+            appkit_rect(1080.0, -1920.0, 1080.0, 1920.0, 1200.0).unwrap(),
+            Rect::new(-1920, -1200, 0, 0)
+        );
+        assert_eq!(
+            appkit_rect(1080.0, 0.0, -900.0, 1600.0, 900.0).unwrap(),
+            Rect::new(0, 1080, 1600, 1980)
+        );
+        assert_eq!(
+            appkit_rect(1080.0, 0.0, 80.0, 1920.0, 975.0).unwrap(),
+            Rect::new(0, 25, 1920, 1000)
+        );
+    }
+
+    #[test]
+    fn invalid_screen_geometry_is_not_published() {
+        assert!(appkit_rect(1080.0, f64::NAN, 0.0, 1920.0, 1080.0).is_err());
+        assert!(appkit_rect(1080.0, 0.0, 0.0, 0.0, 1080.0).is_err());
+    }
 }

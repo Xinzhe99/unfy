@@ -17,8 +17,8 @@ use windows::Win32::Devices::Display::{
 };
 use windows::Win32::Foundation::{LPARAM, POINT, RECT, TRUE};
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HDC, HMONITOR,
-    MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, HDC, HMONITOR, MONITORINFOEXW,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow};
@@ -106,6 +106,8 @@ impl WinDisplays {
 
 impl DisplayProvider for WinDisplays {
     fn topology(&self) -> Result<Vec<DisplaySnapshot>> {
+        // A pre-submit topology check must not reuse an earlier physical layout.
+        self.invalidate();
         Ok(self.snapshot()?.into_iter().map(|(_, d)| d).collect())
     }
 
@@ -120,39 +122,104 @@ impl DisplayProvider for WinDisplays {
     fn display_for(&self, id: &WindowId) -> Result<DisplayKey> {
         let _guard = PerMonitorV2::enter();
         let hwnd = hwnd_from_id(id)?;
-        let hmon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        let (rect, _) = crate::windows_impl::window_rects(hwnd)
+            .ok_or_else(|| PlatformError::Os("window geometry unavailable".into()))?;
         self.snapshot()?
             .into_iter()
-            .find(|(raw, _)| *raw == hmon.0 as isize)
-            .map(|(_, d)| d.key)
+            .map(|(_, display)| display)
+            .min_by(|a, b| {
+                let distance = |work: Rect| {
+                    let dx = (i64::from(work.left) - i64::from(rect.right))
+                        .max(i64::from(rect.left) - i64::from(work.right))
+                        .max(0);
+                    let dy = (i64::from(work.top) - i64::from(rect.bottom))
+                        .max(i64::from(rect.top) - i64::from(work.bottom))
+                        .max(0);
+                    i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy)
+                };
+                rect.intersection_area(&b.work_area)
+                    .cmp(&rect.intersection_area(&a.work_area))
+                    .then_with(|| distance(a.work_area).cmp(&distance(b.work_area)))
+                    .then_with(|| a.key.native_id.cmp(&b.key.native_id))
+            })
+            .map(|display| display.key)
             .ok_or(PlatformError::DisplayGone)
     }
 }
 
-/// Resolve a persisted window id to a live handle, refusing a recycled one.
-///
-/// `IsWindow` alone is not an identity check: Windows reuses `HWND` values, so a
-/// stale id can point at a completely different window. Both the pid and the
-/// process creation time must match what the id recorded. A mismatch is reported
-/// as `WindowGone` rather than `Os`, because from the engine's point of view the
-/// window it knew no longer exists - and it must not write to the new one.
+/// A property belongs to the window object, not its reusable numeric handle.
+/// The value is opaque data: no pointer is dereferenced across processes.
+const INSTANCE_PROPERTY: windows::core::PCWSTR = windows::core::w!("Unfy.WindowInstance.v1");
+
+pub(crate) fn window_instance(hwnd: windows::Win32::Foundation::HWND) -> Result<u64> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::UI::WindowsAndMessaging::{GetPropW, SetPropW};
+    static ASSIGN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _lock = ASSIGN
+        .lock()
+        .map_err(|_| PlatformError::IdentityUncertain)?;
+    let existing = unsafe { GetPropW(hwnd, INSTANCE_PROPERTY) }.0 as usize as u64;
+    if existing != 0 {
+        return Ok(existing);
+    }
+    let guid = unsafe { windows::Win32::System::Com::CoCreateGuid() }
+        .map_err(|_| PlatformError::IdentityUncertain)?;
+    let token = (guid.to_u128() as usize).max(1);
+    unsafe { SetPropW(hwnd, INSTANCE_PROPERTY, Some(HANDLE(token as *mut _))) }
+        .map_err(|_| PlatformError::IdentityUncertain)?;
+    if unsafe { GetPropW(hwnd, INSTANCE_PROPERTY) }.0 as usize != token {
+        return Err(PlatformError::IdentityUncertain);
+    }
+    Ok(token as u64)
+}
+
 pub(crate) fn hwnd_from_id(id: &WindowId) -> Result<windows::Win32::Foundation::HWND> {
+    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows::Win32::UI::WindowsAndMessaging::GetPropW;
     let hwnd = windows::Win32::Foundation::HWND(id.native_id as *mut core::ffi::c_void);
     if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
         return Err(PlatformError::WindowGone);
     }
-
     let (pid, start) = process_identity(hwnd);
-    if pid != id.process_id {
+    if pid != id.process_id || (start != 0 && id.process_start != 0 && start != id.process_start) {
         return Err(PlatformError::WindowGone);
     }
-    // `process_start == 0` means "unknown", recorded by an older build or by an
-    // unreadable process. It cannot prove a mismatch, so only a known, different
-    // creation time rejects the handle.
-    if id.process_start != 0 && start != 0 && start != id.process_start {
-        return Err(PlatformError::WindowGone);
+    if start == 0 || id.process_start == 0 || id.instance == 0 {
+        return Err(PlatformError::IdentityUncertain);
+    }
+    let mut own_session = 0;
+    let mut target_session = 0;
+    unsafe {
+        ProcessIdToSessionId(std::process::id(), &mut own_session)
+            .and_then(|_| ProcessIdToSessionId(pid, &mut target_session))
+    }
+    .map_err(|_| PlatformError::IdentityUncertain)?;
+    if own_session != target_session {
+        return Err(PlatformError::IdentityUncertain);
+    }
+    let token = unsafe { GetPropW(hwnd, INSTANCE_PROPERTY) }.0 as usize as u64;
+    if token != id.instance {
+        return Err(PlatformError::IdentityUncertain);
     }
     Ok(hwnd)
+}
+
+/// Establish identity for an explicitly scoped HWND without enumerating or
+/// attaching metadata to unrelated desktop windows.
+pub fn identify_window(native_id: u64, expected_process: u32) -> Result<WindowId> {
+    let hwnd = windows::Win32::Foundation::HWND(native_id as *mut core::ffi::c_void);
+    let (process_id, process_start) = process_identity(hwnd);
+    if process_id != expected_process || process_start == 0 {
+        return Err(PlatformError::IdentityUncertain);
+    }
+    let id = WindowId {
+        native_id,
+        process_id,
+        process_start,
+        instance: window_instance(hwnd)?,
+    };
+    hwnd_from_id(&id)?;
+    Ok(id)
 }
 
 struct EnumContext {
@@ -179,8 +246,9 @@ unsafe extern "system" fn enum_proc(
     let work = info.monitorInfo.rcWork;
     let primary = (info.monitorInfo.dwFlags & 1) != 0;
 
-    let mut dpi_x = 96u32;
-    let mut dpi_y = 96u32;
+    let mut dpi_x = 0u32;
+    let mut dpi_y = 0u32;
+    // Zero remains unknown; never fabricate a confirmed 100% scale.
     let _ = unsafe { GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
 
     let device = utf16_field(&info.szDevice);
@@ -265,7 +333,8 @@ fn monitor_device_path(hmon: HMONITOR) -> Option<String> {
         return None;
     }
     paths.truncate(num_paths as usize);
-
+    modes.truncate(num_modes as usize);
+    let mut matched = None;
     for path in &paths {
         let mut name = DISPLAYCONFIG_TARGET_DEVICE_NAME {
             header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
@@ -280,25 +349,46 @@ fn monitor_device_path(hmon: HMONITOR) -> Option<String> {
             continue;
         }
 
-        // The source mode lives in the mode array; find it by source id.
-        let source_rect = modes.iter().find(|m| m.id == path.sourceInfo.id).map(|m| {
-            let mode = unsafe { m.Anonymous.sourceMode };
-            Rect::new(
-                mode.position.x,
-                mode.position.y,
-                mode.position.x + mode.width as i32,
-                mode.position.y + mode.height as i32,
-            )
-        });
+        let source_rect = source_mode_rect(path, &modes);
 
         if source_rect == Some(target_rect) {
             let path_str = utf16_field(&name.monitorDevicePath);
             if !path_str.is_empty() {
-                return Some(path_str);
+                if matched.is_some() {
+                    return None;
+                }
+                matched = Some(path_str);
             }
         }
     }
-    None
+    matched
+}
+
+fn source_mode_rect(
+    path: &DISPLAYCONFIG_PATH_INFO,
+    modes: &[DISPLAYCONFIG_MODE_INFO],
+) -> Option<Rect> {
+    use windows::Win32::Devices::Display::DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE;
+    let index = unsafe { path.sourceInfo.Anonymous.modeInfoIdx } as usize;
+    let info = modes.get(index)?;
+    if info.infoType != DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE
+        || info.id != path.sourceInfo.id
+        || info.adapterId.LowPart != path.sourceInfo.adapterId.LowPart
+        || info.adapterId.HighPart != path.sourceInfo.adapterId.HighPart
+    {
+        return None;
+    }
+    let mode = unsafe { info.Anonymous.sourceMode };
+    Some(Rect::new(
+        mode.position.x,
+        mode.position.y,
+        mode.position
+            .x
+            .checked_add(i32::try_from(mode.width).ok()?)?,
+        mode.position
+            .y
+            .checked_add(i32::try_from(mode.height).ok()?)?,
+    ))
 }
 
 fn monitor_rect(hmon: HMONITOR) -> Option<Rect> {
@@ -311,18 +401,8 @@ fn monitor_rect(hmon: HMONITOR) -> Option<Rect> {
     Some(Rect::new(rc.left, rc.top, rc.right, rc.bottom))
 }
 
-/// Process id and creation time for a window, used to disambiguate recycled
-/// handles.
-///
-/// A recycled `HWND` that now belongs to another process is caught by the pid. A
-/// recycled `HWND` inside the *same* process is only caught by the creation time,
-/// which is why it is read for real instead of being left as zero: with
-/// `process_start = 0`, a closed editor window and a new one that happened to get
-/// the same handle would compare equal and the engine would write the old
-/// rectangle onto the new window.
-///
-/// Creation time is `0` only when the process cannot be opened, which is the
-/// elevated-window case the engine already treats as a permission failure.
+/// Real process creation time supplements the separate HWND lifetime token.
+/// It detects process reuse, but cannot detect HWND reuse within one process.
 pub(crate) fn process_identity(hwnd: windows::Win32::Foundation::HWND) -> (u32, u64) {
     use windows::Win32::Foundation::FILETIME;
     use windows::Win32::System::Threading::{
@@ -373,6 +453,39 @@ mod tests {
     use std::cell::Cell;
     use std::time::{Duration, Instant};
 
+    #[test]
+    fn ccd_source_mode_requires_matching_index_type_adapter_and_id() {
+        use windows::Win32::Devices::Display::{
+            DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET,
+        };
+        let mut path = DISPLAYCONFIG_PATH_INFO::default();
+        path.sourceInfo.id = 7;
+        path.sourceInfo.adapterId.LowPart = 11;
+        path.sourceInfo.Anonymous.modeInfoIdx = 1;
+        let mut modes = [DISPLAYCONFIG_MODE_INFO::default(); 2];
+        modes[0].id = 7;
+        modes[0].infoType = DISPLAYCONFIG_MODE_INFO_TYPE_TARGET;
+        modes[1].id = 7;
+        modes[1].adapterId.LowPart = 11;
+        modes[1].infoType = DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE;
+        modes[1].Anonymous.sourceMode =
+            windows::Win32::Devices::Display::DISPLAYCONFIG_SOURCE_MODE {
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            };
+        assert_eq!(
+            source_mode_rect(&path, &modes),
+            Some(Rect::new(0, 0, 1920, 1080))
+        );
+        path.sourceInfo.adapterId.LowPart = 12;
+        assert_eq!(source_mode_rect(&path, &modes), None);
+        path.sourceInfo.adapterId.LowPart = 11;
+        path.sourceInfo.Anonymous.modeInfoIdx = 0;
+        assert_eq!(source_mode_rect(&path, &modes), None);
+        path.sourceInfo.Anonymous.modeInfoIdx = u32::MAX;
+        assert_eq!(source_mode_rect(&path, &modes), None);
+    }
     fn display(name: &str, width: i32) -> (isize, DisplaySnapshot) {
         (
             0,

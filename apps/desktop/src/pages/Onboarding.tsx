@@ -1,313 +1,73 @@
-import { t } from "../i18n";
 import { useState } from "react";
-
-import {
-  api,
-  type DisplayDto,
-  type DisplayThumbnailDto,
-  type SettingsDto,
-} from "../api";
+import { t } from "../i18n";
+import { api, errorMessage, type DisplayDto, type DisplayThumbnailDto, type SettingsDto } from "../api";
 import { DisplayCards } from "../components/DisplayCards";
 import { Button } from "../components/ui";
 
-/**
- * First-run guide.
- *
- * The product's central assumption is unusual and has to be explained once: this
- * tool cannot know which screen the remote client is showing, so the user has to
- * tell it. Without this, a new user sees "尚未选择目标显示器" and has no idea
- * whether the app is broken or waiting for input.
- *
- * Each step has one decision: what the tool does, which display the remote shows,
- * whether automation runs, what happens when an application refuses to move, and
- * how to correct a wrong choice. The guide ends by writing `onboarding_done`, so it
- * does not reappear even if the chosen target equals the default.
- */
-export function Onboarding({
-  displays,
-  settings,
-  thumbnails,
-  busy,
-  onSelectTarget,
-  onIdentify,
-  onSetDetect,
-  onFinish,
-}: {
+export function Onboarding({ displays, settings, thumbnails, busy, onSelectTarget, onIdentify, onFinish }: {
   displays: DisplayDto[];
   settings: SettingsDto;
   thumbnails: Record<string, DisplayThumbnailDto>;
   busy: boolean;
-  onSelectTarget: (nativeId: string) => Promise<void>;
+  onSelectTarget: (nativeId: string) => Promise<boolean>;
   onIdentify: () => void;
-  onSetDetect: (
-    level: SettingsDto["auto_detect"],
-    auto: boolean,
-  ) => Promise<void>;
   onFinish: () => void;
 }) {
-  // The step is persisted rather than held only in memory: hiding and re-showing
-  // the window remounts React, and the guide used to silently jump back to step 1
-  // — which looked like the "next" button did nothing.
-  const [step, setStepState] = useState(settings.onboarding_step);
-  const [chosen, setChosen] = useState<string | null>(
-    settings.target?.native_id ?? null,
-  );
-
-  const setStep = (next: number) => {
-    setStepState(next);
-    // Fire and forget: a failed write only means the step is not remembered.
-    void api.saveSettings({ onboarding_step: next });
+  const [step, setStep] = useState(Math.min(1, Math.max(0, settings.onboarding_step)));
+  const [chosen, setChosen] = useState(settings.target?.native_id ?? null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const display = displays.find((item) => item.native_id === chosen);
+  const advance = async () => {
+    if (saving || busy) return;
+    setSaving(true);
+    setError(null);
+    try {
+      if (step === 0) {
+        await api.saveSettings({ onboarding_step: 1 });
+        setStep(1);
+      } else if (display && await onSelectTarget(display.native_id)) {
+        onFinish();
+      }
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally { setSaving(false); }
   };
-
-  const steps = [
-    {
-      title: t("这个工具做什么"),
-      body: (
-        <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>{t("当你在只有一块屏的设备上远程回这台电脑时，其他屏幕上的窗口是看不见的。")}</p>
-          <p>{t("Unfy 把这些窗口收拢到你指定的那块屏；远程结束后，再按之前的快照放回去。")}</p>
-          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("它不传输画面，也不建立远程连接。远程软件照常使用。")}</p>
-        </div>
-      ),
-    },
-    {
-      title: t("指定远程端能看到的那块屏"),
-      body: (
-        <div className="space-y-3">
-          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">{t("下面的画面就是每块屏现在的真实内容。如果分不清是哪一块，先在屏幕上显示编号，再对照远程画面。")}</p>
-          <DisplayCards
-            displays={displays}
-            target={
-              chosen
-                ? {
-                    native_id: chosen,
-                    label:
-                      displays.find((d) => d.native_id === chosen)?.label ?? "",
-                    present: true,
-                    number:
-                      displays.find((d) => d.native_id === chosen)?.number ?? null,
-                  }
-                : null
-            }
-            thumbnails={thumbnails}
-            onSelect={(id) => setChosen(id)}
-            disabled={busy}
-          />
-          <Button size="sm" onClick={onIdentify} disabled={busy}>
-            {t("在屏幕上显示编号")}
-          </Button>
-        </div>
-      ),
-    },
-    {
-      title: t("让它自动开始和结束"),
-      body: (
-        <div className="space-y-3">
-          <p className="text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-              {t("Unfy 可以在可验证的远程会话开始时整理、结束时恢复。目前只有远程桌面（RDP）会话能提供这种可验证的生命周期；其他远控软件即使正在运行，也不会自动搬动窗口。")}
-            </p>
-          <div className="rounded-[var(--radius-control)] border border-[var(--color-border)]">
-            <DetectChoice
-              title={t("手动")}
-              description={t("只用快捷键与托盘，检测保持关闭")}
-              selected={settings.auto_detect === "off"}
-              disabled={busy}
-              onSelect={() => onSetDetect("off", false)}
-            />
-            <DetectChoice
-              title={t("远程桌面会话时自动")}
-              description={t("仅在确认的远程桌面（RDP）会话开始和结束时自动整理、恢复")}
-              selected={settings.auto_detect === "verified" && settings.auto_gather}
-              disabled={busy}
-              onSelect={() => onSetDetect("verified", true)}
-            />
-          </div>
-          <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">{t("随时可以在「设置 → 远程会话检测」里改。改之前不会自动移动任何窗口。")}</p>
-        </div>
-      ),
-    },
-    {
-      title: t("随时可以纠正"),
-      body: (
-        <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>{t("整理之后，如果发现远程端看到的不是那块屏，用这两个入口立即纠正：")}</p>
-          <ul className="space-y-1.5 pl-4">
-            <li className="list-disc">
-              <strong className="font-medium">{t("托盘菜单")}</strong>{t("：右键托盘图标，选择「识别屏幕编号」或「重新整理到目标屏」。")}</li>
-            <li className="list-disc">
-              <strong className="font-medium">{t("快捷键")}</strong>{t("：在「设置」页录制。默认不占用任何组合键。")}</li>
-          </ul>
-          <p className="text-[var(--color-muted)]">{t("恢复入口永远免费可用，不需要任何账号。")}</p>
-        </div>
-      ),
-    },
-    {
-      title: t("有些窗口不会被移动"),
-      body: (
-        <div className="space-y-3 text-[13px] leading-relaxed text-[var(--color-fg-soft)]">
-          <p>{t("有些窗口不会接受新的位置：有的会自己纠正，有的大到放不进格子。整理时它们留在原处，不是失败：Unfy 会列出它们的名字，你可以逐个选择「不再整理此应用」。")}</p>
-          <p className="border-l-2 border-[var(--color-border-strong)] pl-3 text-xs text-[var(--color-muted)]">{t("这个选择只影响以后的整理；已经整理过的窗口仍然可以恢复。")}</p>
-          <p className="text-xs text-[var(--color-muted)]">{t("全屏应用、最小化的窗口和系统外壳本来就会跳过。")}</p>
-        </div>
-      ),
-    },
-  ];
-
-  const current = steps[step]!;
-  const isLast = step === steps.length - 1;
-  const canAdvance = step !== 1 || chosen !== null;
-
-  const next = async () => {
-    if (step === 1 && chosen) {
-      await onSelectTarget(chosen);
-    }
-    if (isLast) {
-      onFinish();
-      return;
-    }
-    setStep(step + 1);
-  };
-
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-5">
-        <span className="text-[13px] font-semibold tracking-tight">Unfy</span>
-        <button
-          type="button"
-          onClick={() => {
-            // Skipping is "stop explaining", not "discard what I already told you".
-            // The display picked on step two used to be thrown away unless the user
-            // pressed 下一步, so someone who chose the right screen and then skipped
-            // the rest ended up with the previous target - the guide's whole point
-            // undone by its own exit.
-            if (step === 1 && chosen) {
-              void onSelectTarget(chosen).then(onFinish);
-              return;
-            }
-            onFinish();
-          }}
-          className="text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"
-        >{t("跳过引导")}</button>
-      </div>
-
-      {/* Vertically centred with a ceiling: the first step is three sentences, and
-          pinning it to the top left most of the window empty below it. `justify-center`
-          alone made the short steps float and the long ones clip, so the block gets a
-          maximum height and the container may scroll past it. The width is a
-          comfortable measure - 512 px inside a 912 px window read like a footnote. */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-10 py-8">
-        {/* Centred with padding above rather than `justify-center`: a block that sits
-            exactly in the middle of a 718 px window leaves equal voids above and
-            below, which reads as an empty page. A third of the slack above and two
-            thirds below puts the text where the eye lands first. */}
-        <div className="mx-auto my-auto w-full max-w-xl">
-          <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--color-muted)]">
-            {t("第 {step} 步，共 {total} 步", {
-              step: step + 1,
-              total: steps.length,
-            })}
-          </p>
-          <h1 className="mt-1.5 text-xl font-semibold tracking-tight">
-            {current.title}
-          </h1>
-          <div className="mt-5">{current.body}</div>
-
-          <div className="mt-10 flex items-center justify-between">
-            <Button
-              variant="quiet"
-              onClick={() => setStep(Math.max(0, step - 1))}
-              disabled={step === 0 || busy}
-            >{t("上一步")}</Button>
-            <Button
-              variant="primary"
-              onClick={() => void next()}
-              disabled={!canAdvance || busy}
-            >
-              {t(isLast ? "开始使用" : "下一步")}
-            </Button>
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-5">
+        <span className="text-[13px] font-semibold">Unfy</span>
+        <Button variant="quiet" disabled={busy || saving} onClick={onFinish}>{t("跳过引导")}</Button>
+      </header>
+      <main className="min-h-0 flex-1 overflow-y-auto px-6 py-8">
+        <div className="mx-auto max-w-xl space-y-4">
+          <p className="text-xs text-[var(--color-muted)]">{t("第 {step} 步，共 {total} 步", { step: step + 1, total: 2 })}</p>
+          <h1 className="text-xl font-semibold">{t(step === 0 ? "安装在被控主机" : "指定远程端能看到的那块屏")}</h1>
+          {step === 0 ? (
+            <div className="space-y-3 text-[13px] leading-relaxed">
+              <p>{t("请在需要移动窗口的被控电脑上运行 Unfy。它不传输画面，也不建立远程连接。")}</p>
+              <p>{t("选择目标后，你可以手动整理一次，再恢复整理前布局。快捷键与自动化可稍后在设置中选择。")}</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-[13px]">{t("选择只保存目标，不会移动窗口。画面不可用时可用 Unfy 编号确认。")}</p>
+              <DisplayCards displays={displays} target={display ? { native_id: display.native_id, label: display.label, present: true, confirmed: true, number: display.number } : null} thumbnails={thumbnails} onSelect={setChosen} disabled={busy || saving} />
+              <Button onClick={onIdentify} disabled={busy || saving}>{t("在屏幕上显示编号")}</Button>
+              {!display ? <p className="text-xs">{t("请先选择目标显示器。")}</p> : null}
+              <p className="text-xs text-[var(--color-muted)]">{t("如果需要窗口控制权限，进入概览后按提示授权；未授权时不会移动窗口。")}</p>
+            </div>
+          )}
+          {error ? <p role="alert" className="text-xs text-[var(--color-danger)]">{error}</p> : null}
+          <div className="flex justify-between gap-2">
+            <Button variant="quiet" disabled={step === 0 || busy || saving} onClick={() => setStep(0)}>{t("上一步")}</Button>
+            <Button variant="primary" disabled={busy || saving || (step === 1 && !display)} onClick={() => void advance()}>{t(step === 1 ? "开始使用" : "下一步")}</Button>
           </div>
-          {step === 1 && chosen === null ? (
-            <p className="mt-3 text-center text-xs text-[var(--color-muted)]">{t("请先选择目标显示器。")}</p>
-          ) : null}
         </div>
-      </div>
-
-      <div className="flex justify-center gap-1.5 pb-6">
-        {steps.map((_, index) => (
-          <span
-            // Index, not the title: a translated title would change the key when
-            // the language changes and remount the dots.
-            key={index}
-            // The current step is a short bar rather than a dot: at 6 px a filled
-            // circle among four hollow ones was almost invisible, so the guide gave
-            // no sense of how much was left.
-            className={`h-1.5 rounded-full transition-all ${
-              index === step
-                ? "w-4 bg-[var(--color-accent)]"
-                : "w-1.5 bg-[var(--color-border-strong)]"
-            }`}
-          />
-        ))}
-      </div>
+      </main>
     </div>
   );
 }
 
-/**
- * One radio-style row for the detection choice.
- *
- * A switch would work, but the two options are not independent toggles: "manual"
- * and "automatic" are alternatives, and presenting them as a pair of switches
- * invites the state "detection on, both actions off", which does nothing and
- * looks broken.
- */
-function DetectChoice({
-  title,
-  description,
-  selected,
-  disabled,
-  onSelect,
-}: {
-  title: string;
-  description: string;
-  selected: boolean;
-  disabled: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      disabled={disabled}
-      onClick={onSelect}
-      className={`flex w-full items-start gap-2.5 border-b border-[var(--color-border)] px-3 py-2.5 text-left last:border-b-0 disabled:text-[var(--color-muted)] ${
-        selected ? "bg-[var(--color-surface-hover)]" : ""
-      }`}
-    >
-      <span
-        aria-hidden
-        className={`mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border ${
-          selected
-            ? "border-[var(--color-accent)]"
-            : "border-[var(--color-border-strong)]"
-        }`}
-      >
-        {selected ? (
-          <span className="size-1.5 rounded-full bg-[var(--color-accent)]" />
-        ) : null}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-[13px] font-medium">{title}</span>
-        <span className="mt-0.5 block text-xs leading-relaxed text-[var(--color-muted)]">
-          {description}
-        </span>
-      </span>
-    </button>
-  );
-}
-
-/** Persist completion, so the guide never reappears. */
 export async function completeOnboarding(): Promise<void> {
   await api.saveSettings({ onboarding_done: true });
 }

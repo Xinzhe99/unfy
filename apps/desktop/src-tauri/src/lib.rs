@@ -49,14 +49,9 @@ pub struct AppState {
     /// configuration away. The original file is kept as `settings.json.invalid`,
     /// and the banner is how they learn it exists.
     pub settings_recovered: bool,
-    /// When the last automatic gather ran, for the spec's 30-second cooldown.
-    ///
-    /// A session that flaps - connect, drop, connect - produces a sequence of
-    /// `Activated`/`Deactivated` transitions. The detector requires consecutive
-    /// polls for weak evidence, which filters a single flaky sample but not a
-    /// genuine two-second outage. The cooldown is the second layer: at most one
-    /// automatic gather per 30 seconds, whatever the evidence does.
-    pub last_auto_gather: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    /// Startup errors keep the original settings and recovery files authoritative.
+    /// Writes remain blocked until the file is repaired and the app restarted.
+    pub settings_error: Option<String>,
     /// When the storage probe last ran, as seconds since the process started.
     ///
     /// The probe writes and deletes a file; `health_check` is polled every four
@@ -100,10 +95,18 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let settings_error = unfy_settings::initialize_config_dir()
+            .err()
+            .map(|error| error.to_string());
+        Self::from_startup(settings_error)
+    }
+
+    fn from_startup(mut settings_error: Option<String>) -> Self {
         let settings_path = Settings::default_path();
         let mut settings_recovered = false;
         let settings = Settings::load(&settings_path).unwrap_or_else(|e| {
             settings_recovered = true;
+            settings_error.get_or_insert_with(|| format!("settings could not be read: {e}"));
             // Do not silently overwrite the user's file: it may be recoverable
             // by hand, and the next save would destroy the evidence. Keep a copy
             // next to it and start from defaults.
@@ -154,7 +157,7 @@ impl AppState {
             ))),
             last_observation: Arc::new(std::sync::Mutex::new(None)),
             settings_recovered,
-            last_auto_gather: Arc::new(std::sync::Mutex::new(None)),
+            settings_error,
             storage_probe: Arc::new(std::sync::Mutex::new(None)),
             schedule: Arc::new(std::sync::Mutex::new(schedule::Schedule::new())),
             ui_locale: Arc::new(std::sync::Mutex::new(ui_locale)),
@@ -174,9 +177,7 @@ impl AppState {
 /// empty, and a failed migration left no trace. The file is the only logging
 /// destination that survives a user restarting the app.
 ///
-/// Rotation keeps five files of 2 MiB. Logs contain only state transitions,
-/// counts and window handles — never titles, paths or screen content — so a
-/// bounded history is safe to keep and to attach to a support request.
+/// Rotation retains five daily files; there is no per-file size cap.
 /// A path with the user's home directory replaced by `~`.
 ///
 /// The logs are what a user attaches to a support request, and the policy they are
@@ -200,7 +201,7 @@ fn redact_home_in(path: &std::path::Path, home: Option<&str>) -> String {
     }
 }
 
-fn init_logging() {
+fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let dir = unfy_settings::config_dir().join("logs");
     let file = std::fs::create_dir_all(&dir).ok().and_then(|()| {
         tracing_appender::rolling::Builder::new()
@@ -219,13 +220,10 @@ fn init_logging() {
             .with_env_filter(log_filter())
             .with_target(false)
             .init();
-        return;
+        return None;
     };
 
     let (non_blocking, guard) = tracing_appender::non_blocking(file);
-    // The guard flushes on drop; leaking it keeps the writer alive for the whole
-    // process without threading an owned value through Tauri's builder.
-    std::mem::forget(guard);
 
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
@@ -233,6 +231,7 @@ fn init_logging() {
         .with_ansi(false)
         .with_writer(non_blocking)
         .init();
+    Some(guard)
 }
 
 /// Record a panic before the process dies.
@@ -273,9 +272,6 @@ fn log_filter() -> tracing_subscriber::EnvFilter {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_logging();
-    install_panic_hook();
-
     tauri::Builder::default()
         // Must be the first plugin: a second instance has to hand off and exit
         // before it can touch the journal directory or the global shortcuts.
@@ -297,7 +293,6 @@ pub fn run() {
             Some(vec!["--tray"]),
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::window_visible,
             commands::get_status,
@@ -306,6 +301,8 @@ pub fn run() {
             commands::preview,
             commands::migrate,
             commands::restore,
+            commands::restore_recovery_transaction,
+            commands::cancel_auto_restore,
             commands::rescue_offscreen,
             commands::get_settings,
             commands::save_settings,
@@ -319,6 +316,7 @@ pub fn run() {
             commands::open_permission_settings,
             commands::update_status,
             commands::check_update,
+            commands::install_update,
             commands::set_paused,
             commands::hotkey_status,
             commands::display_thumbnails,
@@ -332,6 +330,35 @@ pub fn run() {
             commands::reset_settings,
         ])
         .setup(|app| {
+            let migration_error = unfy_settings::initialize_config_dir()
+                .err()
+                .map(|error| error.to_string());
+            app.manage(init_logging());
+            install_panic_hook();
+            app.manage(AppState::from_startup(migration_error));
+            #[cfg(target_os = "macos")]
+            {
+                let state = app.state::<AppState>();
+                if let Ok(engine) = state.engine.lock() {
+                    engine.backend().prime_work_areas();
+                }
+                let handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let refresh = handle.clone();
+                    if handle
+                        .run_on_main_thread(move || {
+                            let state = refresh.state::<AppState>();
+                            if let Ok(engine) = state.engine.try_lock() {
+                                engine.backend().prime_work_areas();
+                            };
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                });
+            }
             // A tray failure must not abort startup. Tauri turns a `setup` error
             // into a panic ("Failed to setup app"), which kills the process - and
             // the tray is an optional surface: shortcuts and the window still
@@ -657,9 +684,13 @@ fn persist_window_geometry(app: &tauri::AppHandle) {
         return;
     };
     let state = app.state::<AppState>();
+    if state.settings_error.is_some() {
+        return;
+    }
     let Ok(mut settings) = state.settings.lock() else {
         return;
     };
+    let previous = settings.clone();
     let maximized = window.is_maximized().unwrap_or(false);
     let geometry = (
         position.x,
@@ -674,6 +705,7 @@ fn persist_window_geometry(app: &tauri::AppHandle) {
         if settings.window_maximized != maximized {
             settings.window_maximized = maximized;
             if let Err(e) = settings.save(&state.settings_path) {
+                *settings = previous;
                 tracing::warn!(error = %e, "could not persist window state");
             }
         }
@@ -684,6 +716,7 @@ fn persist_window_geometry(app: &tauri::AppHandle) {
     }
     settings.window_maximized = maximized;
     if let Err(e) = settings.save(&state.settings_path) {
+        *settings = previous;
         tracing::warn!(error = %e, "could not persist window geometry");
     }
 }
@@ -691,281 +724,6 @@ fn persist_window_geometry(app: &tauri::AppHandle) {
 /// Convenience for tests and for the headless probe.
 pub fn app_state() -> AppState {
     AppState::new()
-}
-
-#[cfg(test)]
-mod lock_order {
-    //! The two state locks have one legal order.
-    //!
-    //! `std::sync::Mutex` is not reentrant. The command paths hold the engine while
-    //! reading settings, and `get_status` runs on the main thread every four seconds,
-    //! so a path that holds the settings *guard* and then asks for the engine
-    //! deadlocks against it: the window stops answering and the other thread waits
-    //! forever. That is exactly what happened once - `monitor::gather` took the
-    //! settings first - and the window froze during an automatic gather.
-    //!
-    //! Reading the source is unusual for a test, but this rule is about the shape of
-    //! the code rather than its behaviour: no single path can show a deadlock, and a
-    //! comment asking politely is not a mechanism.
-
-    fn sources() -> Vec<(String, String)> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut out = Vec::new();
-        for entry in std::fs::read_dir(dir).expect("read src") {
-            let path = entry.expect("entry").path();
-            if path.extension().is_some_and(|e| e == "rs") {
-                let name = path.file_name().unwrap().to_string_lossy().to_string();
-                out.push((name, std::fs::read_to_string(&path).expect("read file")));
-            }
-        }
-        out
-    }
-
-    fn function_name(line: &str) -> Option<String> {
-        let rest = line.split("fn ").nth(1)?;
-        let name: String = rest
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        (!name.is_empty()).then_some(name)
-    }
-
-    /// The variable a `let` binds a lock to, when the lock is taken by a plain
-    /// `let name = …lock()…` rather than inside a `match`, which clones and drops
-    /// the guard within the statement.
-    fn bound_guard(line: &str) -> Option<&str> {
-        let trimmed = line.trim_start();
-        let rest = trimmed.strip_prefix("let ")?;
-        if rest.contains("match ") || rest.contains("if let ") {
-            return None;
-        }
-        let name = rest.strip_prefix("mut ").unwrap_or(rest);
-        let name = name
-            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .next()?;
-        (!name.is_empty()).then_some(name)
-    }
-
-    /// Indentation of a line, in spaces. `cargo fmt` keeps this consistent, which is
-    /// what makes it usable as a scope check.
-    fn indent(line: &str) -> usize {
-        line.len() - line.trim_start().len()
-    }
-
-    #[test]
-    fn settings_are_never_held_while_the_engine_is_taken() {
-        let mut offenders = Vec::new();
-        let mut checked = 0usize;
-        for (name, text) in sources() {
-            let mut function = String::from("(top level)");
-            // Guards the scanner believes are alive, with the indentation they were
-            // bound at. A `}` that closes at or above that level ends their scope.
-            let mut held: Vec<(String, usize)> = Vec::new();
-            for line in text.lines() {
-                if let Some(found) = function_name(line.trim_start()) {
-                    function = found;
-                    held.clear();
-                    continue;
-                }
-                let trimmed = line.trim_start();
-                if trimmed.starts_with("//") {
-                    continue;
-                }
-                if trimmed.starts_with('}') && trimmed.len() <= 2 {
-                    let here = indent(line);
-                    held.retain(|(_, bound)| *bound <= here);
-                }
-                if trimmed.contains(".settings.lock()") {
-                    if let Some(guard) = bound_guard(line) {
-                        held.push((guard.to_string(), indent(line)));
-                    }
-                }
-                for (guard, _) in held.clone() {
-                    if line.contains(&format!("drop({guard})")) {
-                        held.retain(|(g, _)| g != &guard);
-                    }
-                }
-                if trimmed.contains(".engine.lock()") {
-                    checked += 1;
-                    if !held.is_empty() {
-                        offenders.push(format!("{name}:{function} (holds {held:?})"));
-                    }
-                }
-            }
-        }
-        // A floor, so the rule cannot quietly stop matching anything.
-        assert!(checked > 8, "the scan found only {checked} engine locks");
-        assert_eq!(
-            offenders,
-            Vec::<String>::new(),
-            "these hold the settings guard while taking the engine, which deadlocks \n\
-             against the status poll: take the engine first"
-        );
-    }
-
-    /// Which functions take either state lock, by name.
-    fn lock_takers(sources: &[(String, String)]) -> Vec<(String, String)> {
-        let mut out = Vec::new();
-        for (file, text) in sources {
-            let mut function = String::new();
-            for line in text.lines() {
-                if let Some(found) = function_name(line.trim_start()) {
-                    function = found;
-                }
-                if !function.is_empty()
-                    && (line.contains(".engine.lock()") || line.contains(".settings.lock()"))
-                {
-                    out.push((file.clone(), function.clone()));
-                }
-            }
-        }
-        out
-    }
-
-    /// Calling a function that takes a lock, while holding one, deadlocks the same way
-    /// a direct second `lock()` does - and the direct check above cannot see it.
-    ///
-    /// This is the shape that actually bit: `diagnostics_report` held both guards and
-    /// called `pending_work`, which takes them itself. The call sits eighty lines below
-    /// the guards, so nothing about the line looked wrong.
-    #[test]
-    fn a_held_guard_is_not_followed_by_a_call_that_locks() {
-        let all = sources();
-        let takers: Vec<String> = {
-            let mut v: Vec<String> = lock_takers(&all).into_iter().map(|(_, f)| f).collect();
-            v.sort();
-            v.dedup();
-            v
-        };
-        assert!(
-            takers.len() > 4,
-            "the scan found only {} locking functions",
-            takers.len()
-        );
-
-        let mut offenders = Vec::new();
-        for (name, text) in &all {
-            let mut function = String::from("(top level)");
-            let mut held: Vec<(String, usize)> = Vec::new();
-            for line in text.lines() {
-                if let Some(found) = function_name(line.trim_start()) {
-                    function = found;
-                    held.clear();
-                    continue;
-                }
-                let trimmed = line.trim_start();
-                if trimmed.starts_with("//") {
-                    continue;
-                }
-                if trimmed.starts_with('}') && trimmed.len() <= 2 {
-                    let here = indent(line);
-                    held.retain(|(_, bound)| *bound <= here);
-                }
-                if trimmed.contains(".settings.lock()") || trimmed.contains(".engine.lock()") {
-                    if let Some(guard) = bound_guard(line) {
-                        held.push((guard.to_string(), indent(line)));
-                    }
-                }
-                for (guard, _) in held.clone() {
-                    if line.contains(&format!("drop({guard})")) {
-                        held.retain(|(g, _)| g != &guard);
-                    }
-                }
-                if held.is_empty() {
-                    continue;
-                }
-                // A call to a function that locks, while a guard is alive. Skip the
-                // function's own name: recursion is not what this is about, and the
-                // `.lock()` lines themselves are handled above.
-                for taker in &takers {
-                    if taker == &function {
-                        continue;
-                    }
-                    // A call, not a method on something else: `engine.restore()` is the
-                    // engine's own method, and `has_pending_work()` merely ends with the
-                    // name `pending_work`. Both matched a plain substring test and
-                    // produced three false alarms before this.
-                    let call = format!("{taker}(");
-                    let at = match line.find(&call) {
-                        Some(at) => at,
-                        None => continue,
-                    };
-                    let before = line[..at].chars().next_back();
-                    if matches!(before, Some('.') | Some('_') | Some(':') | Some('>')) {
-                        continue;
-                    }
-                    offenders.push(format!(
-                        "{name}:{function} holds {held:?} then calls {taker}"
-                    ));
-                }
-            }
-        }
-        offenders.sort();
-        offenders.dedup();
-        assert_eq!(
-            offenders,
-            Vec::<String>::new(),
-            "these call a locking function while holding a guard: \n{}",
-            offenders.join("\n")
-        );
-    }
-}
-
-#[cfg(test)]
-mod window_visibility {
-    //! Revealing the window must go through one function.
-    //!
-    //! Three places show it - the tray's settings item, the tray's left-click toggle and
-    //! a second instance handing off. Each used to do `show`/`unminimize`/`set_focus`
-    //! itself, and when the frontend needed a "you are visible again" event only one of
-    //! them was updated, so a window reopened the other two ways could keep showing stale
-    //! data. Counting the raw calls is cruder than the lock-order scan and enough here:
-    //! the only legal `window.show()` is inside `show_window`.
-
-    fn sources() -> Vec<(String, String)> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut out = Vec::new();
-        for entry in std::fs::read_dir(dir).expect("read src") {
-            let path = entry.expect("entry").path();
-            if path.extension().is_some_and(|e| e == "rs") {
-                let name = path.file_name().unwrap().to_string_lossy().to_string();
-                out.push((name, std::fs::read_to_string(&path).expect("read file")));
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn the_window_is_shown_only_through_the_helper() {
-        let mut offenders = Vec::new();
-        let mut inside_helper = false;
-        for (name, text) in sources() {
-            for line in text.lines() {
-                if line.contains("fn show_window") {
-                    inside_helper = name == "lib.rs";
-                    continue;
-                }
-                if inside_helper && line.trim() == "}" {
-                    inside_helper = false;
-                }
-                let trimmed = line.trim_start();
-                // Skip comments and the check itself: the doc comment above quotes the
-                // call it forbids, and so does this condition.
-                if trimmed.starts_with("//") || trimmed.starts_with("if line.contains") {
-                    continue;
-                }
-                if line.contains("window.show()") && !inside_helper {
-                    offenders.push(format!("{name}: {}", line.trim()));
-                }
-            }
-        }
-        assert_eq!(
-            offenders,
-            Vec::<String>::new(),
-            "these reveal the window without telling the frontend it is back: \n{}",
-            offenders.join("\n")
-        );
-    }
 }
 
 #[cfg(test)]

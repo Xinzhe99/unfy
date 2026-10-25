@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use unfy_domain::{Rect, WindowId, WindowMode};
 use uuid::Uuid;
 
-use crate::{AppliedResult, JournalError, Preimage, Result, SCHEMA_VERSION};
+use crate::{AppliedResult, JournalError, Preimage, Result};
 
 /// The maximum accepted record size. A larger length prefix means the file is
 /// not a journal or the length itself was corrupted; either way we must not
@@ -33,10 +33,14 @@ pub enum Record {
         id: WindowId,
         target: Rect,
         mode: WindowMode,
+        #[serde(default)]
+        write_seq: u64,
     },
     Result {
         transaction: Uuid,
         result: AppliedResult,
+        #[serde(default)]
+        write_seq: u64,
     },
     /// A window reached a terminal state and owes nothing further.
     ///
@@ -127,13 +131,6 @@ impl Record {
         if record.kind_byte() != body[0] {
             return Err("kind byte does not match payload".to_string());
         }
-        if let Record::Begin { schema_version, .. } = &record {
-            if !(1..=SCHEMA_VERSION).contains(schema_version) {
-                return Err(format!(
-                    "journal schema {schema_version} is not supported (max {SCHEMA_VERSION})"
-                ));
-            }
-        }
         Ok(Some((record, total)))
     }
 }
@@ -141,6 +138,7 @@ impl Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SCHEMA_VERSION;
     use unfy_domain::IdentityQuality;
 
     fn sample_preimage() -> Preimage {
@@ -149,6 +147,7 @@ mod tests {
                 native_id: 0x1234,
                 process_id: 42,
                 process_start: 7,
+                instance: 1,
             },
             display_native_id: "display-a".into(),
             display_quality: IdentityQuality::Strong,
@@ -181,9 +180,11 @@ mod tests {
                 id: sample_preimage().id,
                 target: Rect::new(0, 0, 100, 100),
                 mode: WindowMode::Normal,
+                write_seq: 1,
             },
             Record::Result {
                 transaction: tx,
+                write_seq: 1,
                 result: AppliedResult {
                     id: sample_preimage().id,
                     outcome: unfy_domain::WindowOutcome::Applied,
@@ -256,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn newer_schema_is_rejected() {
+    fn newer_schema_header_remains_available_for_diagnostics() {
         let tx = Uuid::new_v4();
         let encoded = Record::Begin {
             schema_version: SCHEMA_VERSION + 1,
@@ -266,6 +267,8 @@ mod tests {
         }
         .encode()
         .unwrap();
-        assert!(Record::decode(&encoded).is_err());
+        assert!(
+            matches!(Record::decode(&encoded), Ok(Some((Record::Begin { schema_version, .. }, _))) if schema_version == SCHEMA_VERSION + 1)
+        );
     }
 }

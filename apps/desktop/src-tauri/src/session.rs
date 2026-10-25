@@ -194,7 +194,9 @@ pub fn set_autostart<R: Runtime>(app: &AppHandle<R>, desired: bool) -> Result<()
     };
     tracing::info!(desired, current, %exe, "reconciling autostart");
 
-    if current == desired {
+    // Re-register an enabled entry too: the executable may have moved after an
+    // upgrade while the OS still reports the obsolete entry as enabled.
+    if !desired && !current {
         return Ok(());
     }
 
@@ -230,6 +232,9 @@ pub fn set_autostart<R: Runtime>(app: &AppHandle<R>, desired: bool) -> Result<()
 pub fn apply_saved_autostart<R: Runtime>(app: &AppHandle<R>) {
     let desired = {
         let state = app.state::<AppState>();
+        if state.settings_error.is_some() {
+            return;
+        }
         let settings = state.settings.lock();
         match settings {
             Ok(settings) => settings.autostart,
@@ -272,6 +277,12 @@ pub fn watch_topology<R: Runtime>(app: &AppHandle<R>) {
             let Ok(mut engine) = state.engine.lock() else {
                 continue;
             };
+            if crate::commands::in_maintenance(&state)
+                || state.settings_error.is_some()
+                || engine.is_paused()
+            {
+                continue;
+            };
             let current = engine.topology_signature();
             if current.is_none() || current == last {
                 continue;
@@ -282,6 +293,10 @@ pub fn watch_topology<R: Runtime>(app: &AppHandle<R>) {
                 continue;
             }
             last = current;
+            let recovery = crate::commands::recovery_status(&engine, false);
+            if recovery.blockers > 0 || !recovery.transactions.is_empty() {
+                continue;
+            }
 
             match engine.on_topology_changed() {
                 Ok(rescued) => {

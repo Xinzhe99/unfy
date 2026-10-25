@@ -8,15 +8,85 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
+use tauri_plugin_autostart::ManagerExt;
 use unfy_domain::{DisplaySnapshot, Rect, WindowId};
-use unfy_engine::{
-    EngineConfig, EngineState, MigrationReport, PendingWork, Preview, RestoreReport,
-};
+use unfy_engine::{EngineConfig, EngineState, MigrationReport, Preview, RestoreReport};
 use unfy_platform::{DisplayProvider, WindowBackend};
 use unfy_settings::{Settings, TargetDisplay};
 
 use crate::message::Message;
 use crate::{platform, AppState};
+
+/// Captured before queueing; rechecked under the single-writer lock.
+struct WriteAdmission {
+    maintenance: Arc<std::sync::atomic::AtomicBool>,
+    token: crate::schedule::ScheduleToken,
+    startup_error: Option<String>,
+}
+
+impl WriteAdmission {
+    fn claim(app: &AppState) -> Result<Self, String> {
+        if in_maintenance(app) {
+            return Err("maintenance".into());
+        }
+        Ok(Self {
+            maintenance: app.maintenance.clone(),
+            token: app
+                .schedule
+                .lock()
+                .map_err(|error| error.to_string())?
+                .claim_manual(),
+            startup_error: app.settings_error.clone(),
+        })
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if self.maintenance.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("maintenance".into());
+        }
+        if !self.token.is_current() {
+            return Err("restore_cancelled".into());
+        }
+        Ok(())
+    }
+}
+
+fn ensure_settings_writable(app: &AppState) -> Result<(), String> {
+    match &app.settings_error {
+        Some(error) => Err(error.clone()),
+        None => Ok(()),
+    }
+}
+
+fn commit_settings<B: unfy_engine::Backend>(
+    path: &std::path::Path,
+    engine: &mut unfy_engine::Engine<B>,
+    settings: &mut Settings,
+    candidate: Settings,
+) -> Result<(), String> {
+    candidate.validate().map_err(|error| error.to_string())?;
+    let previous = engine.config().clone();
+    let mut config = engine_config_from_settings(&candidate);
+    config.journal_dir = previous.journal_dir.clone();
+    config.on_progress = previous.on_progress.clone();
+    engine
+        .update_config(config)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = candidate.save(path) {
+        engine
+            .update_config(previous)
+            .map_err(|rollback| format!("{error}; {rollback}"))?;
+        return Err(error.to_string());
+    }
+    if candidate.paused {
+        engine.pause()
+    } else {
+        engine.resume()
+    }
+    .map_err(|error| error.to_string())?;
+    *settings = candidate;
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 pub struct StatusDto {
@@ -29,6 +99,7 @@ pub struct StatusDto {
     pub display_count: usize,
     pub target: Option<TargetDto>,
     pub pending_windows: usize,
+    pub recovery_blockers: usize,
     pub last_error: Option<Message>,
     /// Automation paused; the current layout is retained.
     pub paused: bool,
@@ -66,6 +137,7 @@ pub struct TargetDto {
     pub label: String,
     /// False when the saved target is not present in the current topology.
     pub present: bool,
+    pub confirmed: bool,
     /// The user-facing number, from the live topology when the display is present
     /// and from the saved value when it is not. `None` only for settings written
     /// before the number was recorded.
@@ -142,6 +214,7 @@ pub struct MigrationDto {
     /// Names of the applications that refused to move. A pid means nothing to a
     /// user; "Code.exe 没有接受" is something they can act on.
     pub refused_apps: Vec<String>,
+    pub results: Vec<WindowResultDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +230,45 @@ pub struct RestoreDto {
     pub state: &'static str,
     /// Applications whose windows could not be restored, for the same reason.
     pub pending_apps: Vec<String>,
+    pub results: Vec<WindowResultDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WindowResultDto {
+    pub window_id: String,
+    pub app_name: Option<String>,
+    pub outcome: &'static str,
+    pub reason: Option<&'static str>,
+}
+
+fn window_results(
+    outcomes: &std::collections::HashMap<WindowId, unfy_domain::WindowOutcome>,
+    names: &std::collections::HashMap<u32, String>,
+) -> Vec<WindowResultDto> {
+    use unfy_domain::WindowOutcome;
+    let mut results: Vec<_> = outcomes
+        .iter()
+        .map(|(id, outcome)| WindowResultDto {
+            window_id: window_label(id),
+            app_name: names
+                .get(&id.process_id)
+                .cloned()
+                .filter(|name| !name.is_empty()),
+            outcome: match outcome {
+                WindowOutcome::Applied => "applied",
+                WindowOutcome::Restored => "restored",
+                WindowOutcome::KeptUserChange => "kept_user_change",
+                WindowOutcome::FallbackVisible => "fallback_visible",
+                WindowOutcome::Rejected => "rejected",
+                WindowOutcome::Gone => "gone",
+                WindowOutcome::Skipped => "skipped",
+                WindowOutcome::Unknown => "unknown",
+            },
+            reason: None,
+        })
+        .collect();
+    results.sort_by(|a, b| a.window_id.cmp(&b.window_id));
+    results
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +290,7 @@ pub struct SaveSettingsRequest {
     pub auto_gather: Option<bool>,
     pub auto_restore: Option<bool>,
     pub remote_screens: Option<String>,
+    pub dismiss_migration_notice: Option<bool>,
 }
 
 /// Refresh the tray after a state change so its labels, enabled set and tooltip
@@ -257,7 +370,12 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
     let engine = app.engine.lock().map_err(|e| e.to_string())?;
     let settings = app.settings.lock().map_err(|e| e.to_string())?;
 
-    let displays = engine.backend().topology().map_err(|e| e.to_string())?;
+    let topology = engine.backend().topology();
+    let topology_error = topology
+        .as_ref()
+        .err()
+        .map(|error| Message::new(error.to_string()));
+    let displays = topology.unwrap_or_default();
 
     // Live number when the display is present, saved number when it is not: a
     // disconnected target still has to be named the way the user last saw it.
@@ -271,42 +389,30 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
             native_id: t.native_id.clone(),
             label: t.label.clone(),
             present: live.is_some(),
+            confirmed: resolve_confirmed_target(&engine, &settings).is_ok(),
             number: live.or(t.number),
         }
     });
 
-    // Windows still held by an unfinished transaction, from the same source the
-    // recovery banner uses. Computed before the DTO so one query serves both.
-    let pending_windows = {
-        let owned = engine.current_transaction();
-        // Count what still owes a restore, not every captured window: a window
-        // that was already put back must not keep the restore entry alive, and a
-        // window that is still displaced must not disappear from it because the
-        // state label happens to be Idle.
-        let mut count = engine.unresolved_window_count();
-        // A journal the engine does not own (another session, or an unreadable one
-        // at startup) still counts: the windows may be displaced.
-        let dir = unfy_settings::config_dir().join("journal");
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "journal") {
-                    if let Ok(unfy_journal::Recovered::Unfinished(tx)) =
-                        unfy_journal::recover(&path)
-                    {
-                        if Some(tx.transaction) != owned {
-                            count = count.max(tx.touched_windows().len());
-                        }
-                    }
-                }
-            }
-        }
-        count
-    };
-    let last_error = app.last_error.lock().ok().and_then(|guard| guard.clone());
+    let recovery = recovery_status(&engine, app.settings_error.is_some());
+    let last_error = app
+        .last_error
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .or_else(|| {
+            app.settings_error
+                .as_ref()
+                .map(|error| Message::new(error.clone()))
+        })
+        .or(topology_error);
 
     Ok(StatusDto {
-        state: state_name(engine.state()),
+        state: if recovery.blockers > 0 {
+            "error"
+        } else {
+            state_name(engine.state())
+        },
         platform: platform::name(),
         supported: platform::is_supported(),
         has_permission: platform::has_window_permission(),
@@ -316,7 +422,8 @@ pub fn get_status(app: State<'_, AppState>) -> Result<StatusDto, String> {
         // Counted from the journal, not invented. The tray and the exit barrier
         // both depend on this number, and a hardcoded zero made a degraded state
         // look idle in every surface that read the status.
-        pending_windows,
+        pending_windows: recovery.windows,
+        recovery_blockers: recovery.blockers,
         // The engine keeps the last failure so a caller can explain it; the
         // status is the natural place to carry it for the overview banner.
         last_error,
@@ -464,12 +571,8 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
     // guarantee.
     // A gather supersedes a pending delayed restore: the user just asked for the
     // windows to be gathered, so a timer that would scatter them again must die.
-    if in_maintenance(app) {
-        return Err("maintenance".to_string());
-    }
-    if let Ok(mut schedule) = app.schedule.lock() {
-        schedule.cancel();
-    }
+    ensure_settings_writable(app)?;
+    let admission = WriteAdmission::claim(app)?;
 
     let engine_state = app.engine.clone();
     let settings = app.settings.clone();
@@ -494,10 +597,10 @@ pub async fn migrate_with_trigger<R: tauri::Runtime>(
     });
 
     let result = tokio::task::spawn_blocking(move || {
-        migrate_blocking(engine_state, settings, activity, emit, trigger)
+        migrate_blocking(engine_state, settings, activity, emit, trigger, admission)
     })
     .await
-    .map_err(|e| format!("migration task failed: {e}"))?;
+    .unwrap_or_else(|error| Err(format!("migration task failed: {error}")));
 
     let _ = tauri::Emitter::emit(
         &emitter,
@@ -515,8 +618,14 @@ fn migrate_blocking(
     activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
     emit: Arc<dyn Fn(usize, usize) + Send + Sync>,
     trigger: &'static str,
+    admission: WriteAdmission,
 ) -> Result<MigrationDto, String> {
     let mut engine = engine.lock().map_err(|e| e.to_string())?;
+    admission.check()?;
+    let recovery = recovery_status(&engine, admission.startup_error.is_some());
+    if recovery.blockers > 0 || !recovery.transactions.is_empty() {
+        return Err("recovery_required".into());
+    }
     let settings = settings.lock().map_err(|e| e.to_string())?;
 
     // Install the progress hook for this run. It is replaced rather than
@@ -536,13 +645,7 @@ fn migrate_blocking(
     // the user cannot see.
     let target = resolve_confirmed_target(&engine, &settings)?;
 
-    // A gather while windows are still captured is refused by the engine; give
-    // the user the action that actually helps instead of a raw error string.
-    // `retarget` rather than `migrate`: the tray and the button both say
-    // "整理到目标屏", and pressing it while a layout is already active means
-    // "move everything to the display I just picked". Refusing with
-    // `already_active` made the label a lie. `retarget` restores first, so the
-    // original preimages survive.
+    // Replanning preserves the transaction's first preimages.
     let retarget = engine.retarget(&target).map_err(|e| match e {
         unfy_domain::EngineError::Paused => "paused".to_string(),
         unfy_domain::EngineError::RestoreIncomplete { pending } => {
@@ -551,7 +654,6 @@ fn migrate_blocking(
         other => other.to_string(),
     })?;
     let report: MigrationReport = retarget.migration;
-    let restored_first = 0usize;
 
     // Record before returning: the user's question ("what did it just do?") is
     // asked immediately after the action, not after a later poll.
@@ -561,16 +663,24 @@ fn migrate_blocking(
             kind: crate::activity::Kind::Gather,
             affected: report.applied_count(),
             unsettled: report.unfinished() + report.unplaced.len(),
-            note: if restored_first > 0 {
-                Some(Message::one(
-                    "先恢复了 {count} 个窗口",
-                    "count",
-                    restored_first.to_string(),
-                ))
-            } else {
-                None
-            },
+            note: None,
             trigger: trigger.into(),
+        });
+    }
+    let names: std::collections::HashMap<u32, String> = engine
+        .backend()
+        .enumerate()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|window| (window.id.process_id, window.app_name))
+        .collect();
+    let mut results = window_results(&report.outcomes, &names);
+    for skipped in &report.skipped {
+        results.push(WindowResultDto {
+            window_id: window_label(&skipped.id),
+            app_name: (!skipped.app_name.is_empty()).then(|| skipped.app_name.clone()),
+            outcome: "skipped",
+            reason: Some(skipped.reason.code()),
         });
     }
     Ok(MigrationDto {
@@ -588,16 +698,8 @@ fn migrate_blocking(
         not_attempted: report.not_attempted.len(),
         cascaded: report.cascaded,
         state: state_name(engine.state()),
+        results,
         refused_apps: {
-            // Look the names up while the engine lock is still held; the report
-            // only carries ids.
-            let names: std::collections::HashMap<u32, String> = engine
-                .backend()
-                .enumerate()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|w| (w.id.process_id, w.app_name))
-                .collect();
             let mut apps: Vec<String> = report
                 .refused
                 .iter()
@@ -658,12 +760,20 @@ pub async fn restore_with_trigger<R: tauri::Runtime>(
         std::time::Duration::ZERO
     };
 
-    // Claim the schedule even for a zero delay: a zero-delay restore must also
-    // cancel any older pending one, otherwise two restores run back to back.
-    let token = {
-        let mut schedule = app.schedule.lock().map_err(|e| e.to_string())?;
-        schedule.claim()
+    let admission = if honour_delay {
+        WriteAdmission {
+            maintenance: app.maintenance.clone(),
+            token: app
+                .schedule
+                .lock()
+                .map_err(|error| error.to_string())?
+                .claim(),
+            startup_error: app.settings_error.clone(),
+        }
+    } else {
+        WriteAdmission::claim(app)?
     };
+    let token = admission.token.clone();
 
     if delay > std::time::Duration::ZERO {
         let seconds = delay.as_secs();
@@ -694,10 +804,18 @@ pub async fn restore_with_trigger<R: tauri::Runtime>(
     let settings_path = app.settings_path.clone();
     let activity = app.activity.clone();
     let result = tokio::task::spawn_blocking(move || {
-        restore_blocking(engine_state, settings, settings_path, activity, trigger)
+        restore_blocking(
+            engine_state,
+            settings,
+            settings_path,
+            activity,
+            trigger,
+            admission,
+            None,
+        )
     })
     .await
-    .map_err(|e| format!("restore task failed: {e}"))?;
+    .unwrap_or_else(|error| Err(format!("restore task failed: {error}")));
     // Close the progress cycle. The gather path has always emitted this; the restore
     // path did not, and the UI sets `busy` from these events. A delayed restore left
     // it saying "正在恢复布局…" - the countdown's final message - with `busy` stuck at
@@ -719,8 +837,23 @@ fn restore_blocking(
     settings_path: std::path::PathBuf,
     activity: Arc<std::sync::Mutex<crate::activity::Activity>>,
     trigger: &'static str,
+    admission: WriteAdmission,
+    recovery_transaction: Option<uuid::Uuid>,
 ) -> Result<RestoreDto, String> {
     let mut engine = engine.lock().map_err(|e| e.to_string())?;
+    admission.check()?;
+    if let Some(transaction) = recovery_transaction {
+        if engine.current_transaction().is_some() {
+            return Err("restore_incomplete".into());
+        }
+        let path = find_recovery_transaction(&engine.config().journal_dir, transaction)?;
+        engine.recover(path).map_err(|error| error.to_string())?;
+    } else if engine.current_transaction().is_none() {
+        let directory = engine.config().journal_dir.clone();
+        engine
+            .recover_latest(directory)
+            .map_err(|error| error.to_string())?;
+    }
     let report: RestoreReport = engine.restore().map_err(|e| e.to_string())?;
     let state = state_name(engine.state());
     let complete = report.is_complete();
@@ -745,14 +878,13 @@ fn restore_blocking(
     // A completed restore means there is nothing left to warn about, so an
     // earlier dismissal is stale. Leaving it would suppress the next, unrelated
     // crash banner.
-    if complete {
+    if complete && admission.startup_error.is_none() {
         if let Ok(mut guard) = settings.lock() {
-            clear_recovery_dismissal(&mut guard);
-            // Restoring ends the cycle, so a paused engine has nothing left to
-            // pause. Leaving the flag set would make the next launch start
-            // paused with no transaction, which looks like automation is broken.
-            guard.paused = false;
-            let _ = guard.save(&settings_path);
+            let mut candidate = guard.clone();
+            clear_recovery_dismissal(&mut candidate);
+            if candidate.save(&settings_path).is_ok() {
+                *guard = candidate;
+            }
         }
     }
 
@@ -777,16 +909,21 @@ fn restore_blocking(
         awaiting_original: report.awaiting_original.len(),
         state,
         pending_apps,
+        results: window_results(&report.outcomes, &names),
     })
 }
 
 #[tauri::command]
 pub fn rescue_offscreen(app: State<'_, AppState>) -> Result<usize, String> {
-    if in_maintenance(&app) {
-        return Err("maintenance".to_string());
-    }
+    ensure_settings_writable(&app)?;
+    let admission = WriteAdmission::claim(&app)?;
     let rescued = {
         let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+        admission.check()?;
+        let recovery = recovery_status(&engine, false);
+        if recovery.blockers > 0 || !recovery.transactions.is_empty() {
+            return Err("recovery_required".into());
+        }
         engine.rescue_offscreen().map_err(|e| e.to_string())?
     };
     // Rescue moves real windows, so it belongs in the history for the same reason
@@ -824,40 +961,31 @@ fn settings_dto(
     handle: &tauri::AppHandle,
 ) -> Result<SettingsDto, String> {
     let mut dto = {
-        let settings = app.settings.lock().map_err(|e| e.to_string())?;
-        SettingsDto::from(&*settings)
+        let engine = app.engine.lock().map_err(|error| error.to_string())?;
+        let settings = app.settings.lock().map_err(|error| error.to_string())?;
+        let mut dto = SettingsDto::from(&*settings);
+        if let Some(target) = dto.target.as_mut() {
+            target.confirmed = resolve_confirmed_target(&engine, &settings).is_ok();
+            if let Ok(displays) = engine.backend().topology() {
+                let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
+                let number = ordered
+                    .iter()
+                    .position(|display| display.key.native_id == target.native_id)
+                    .map(|index| index + 1);
+                target.present = number.is_some();
+                target.number = number.or(target.number);
+            }
+        }
+        dto
     };
-    let _ = handle;
     if let Ok(tracker) = app.detector.lock() {
-        dto.remote_active = tracker.is_active();
+        dto.remote_active = tracker.connected_session().is_some();
+        dto.remote_unknown = tracker.is_unknown();
         dto.remote_evidence = tracker.evidence().map(crate::message::evidence_message);
     }
-    // `From<&Settings>` cannot see the topology, so the target's presence and live
-    // number are resolved here. Without this the settings payload claimed the
-    // target was present even after the monitor was unplugged.
-    if let Some(target) = dto.target.as_mut() {
-        let live = app
-            .engine
-            .lock()
-            .ok()
-            .and_then(|engine| unfy_platform::DisplayProvider::topology(engine.backend()).ok())
-            .map(|displays| {
-                let ordered = unfy_domain::DisplaySnapshot::ordered_by_position(&displays);
-                ordered
-                    .iter()
-                    .position(|d| d.key.native_id == target.native_id)
-                    .map(|index| index + 1)
-            });
-        match live {
-            Some(Some(number)) => {
-                target.present = true;
-                target.number = Some(number);
-            }
-            Some(None) => target.present = false,
-            // Topology unavailable: leave the saved values rather than claiming
-            // the display disappeared.
-            None => {}
-        }
+    match handle.autolaunch().is_enabled() {
+        Ok(actual) => dto.autostart_actual = Some(actual),
+        Err(error) => dto.autostart_error = Some(error.to_string()),
     }
     Ok(dto)
 }
@@ -868,6 +996,9 @@ pub struct SettingsDto {
     pub margin: i32,
     pub gap: i32,
     pub autostart: bool,
+    pub autostart_actual: Option<bool>,
+    pub autostart_error: Option<String>,
+    pub migration_notice: bool,
     pub theme: String,
     pub language: String,
     pub hotkey_gather: Option<String>,
@@ -882,11 +1013,12 @@ pub struct SettingsDto {
     pub auto_restore: bool,
     /// `single` or `all`: what the remote client can display.
     pub remote_screens: String,
-    /// Applications that refused the last gather, for the "exclude" shortcut.
+    /// The saved display and whether it is currently confirmed.
     pub target: Option<TargetDto>,
     /// What the detector currently believes, and why. Independent of whether
     /// automation is enabled: the overview shows the evidence either way.
     pub remote_active: bool,
+    pub remote_unknown: bool,
     pub remote_evidence: Option<Message>,
 }
 
@@ -901,6 +1033,9 @@ impl From<&Settings> for SettingsDto {
             margin: s.margin,
             gap: s.gap,
             autostart: s.autostart,
+            autostart_actual: None,
+            autostart_error: None,
+            migration_notice: s.migration_notice,
             language: match s.language {
                 unfy_settings::LanguageName::System => "system",
                 unfy_settings::LanguageName::Zh => "zh",
@@ -927,6 +1062,7 @@ impl From<&Settings> for SettingsDto {
             },
             // Filled in by `settings_dto`, which has access to the detector.
             remote_active: false,
+            remote_unknown: false,
             remote_evidence: None,
             onboarding_done: s.onboarding_done,
             onboarding_step: s.onboarding_step,
@@ -937,7 +1073,8 @@ impl From<&Settings> for SettingsDto {
             target: s.target_display.as_ref().map(|t| TargetDto {
                 native_id: t.native_id.clone(),
                 label: t.label.clone(),
-                present: true,
+                present: false,
+                confirmed: false,
                 number: t.number,
             }),
         }
@@ -953,17 +1090,59 @@ pub fn in_maintenance(app: &AppState) -> bool {
     app.maintenance.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+pub(crate) struct MaintenanceGuard {
+    flag: Arc<std::sync::atomic::AtomicBool>,
+    release: bool,
+}
+
+impl MaintenanceGuard {
+    pub(crate) fn acquire(app: &AppState) -> Result<Self, String> {
+        use std::sync::atomic::Ordering;
+        app.maintenance
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| "maintenance".to_string())?;
+        let guard = Self {
+            flag: app.maintenance.clone(),
+            release: true,
+        };
+        app.schedule
+            .lock()
+            .map_err(|error| error.to_string())?
+            .cancel();
+        Ok(guard)
+    }
+
+    pub(crate) fn keep_closed(mut self) {
+        self.release = false;
+    }
+}
+
+impl Drop for MaintenanceGuard {
+    fn drop(&mut self) {
+        if self.release {
+            self.flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
 /// Resolve the display the user confirmed, or explain what is missing.
-fn resolve_confirmed_target(
+pub(crate) fn resolve_confirmed_target(
     engine: &unfy_engine::Engine<crate::platform::Backend>,
     settings: &Settings,
 ) -> Result<unfy_domain::DisplayKey, String> {
     let Some(saved) = settings.target_display.as_ref() else {
         return Err("no_target".to_string());
     };
-    engine
+    let live = engine
         .resolve_target(Some(saved.native_id.as_str()))
-        .ok_or_else(|| "target_missing".to_string())
+        .ok_or_else(|| "target_missing".to_string())?;
+    if !(saved.quality.is_restorable() && live.quality.is_restorable()) {
+        let signature = engine.topology_signature();
+        if saved.confirmed_topology.is_none() || saved.confirmed_topology != signature {
+            return Err("target_unconfirmed".into());
+        }
+    }
+    Ok(live)
 }
 
 /// Convert the persisted settings into the engine configuration.
@@ -991,36 +1170,17 @@ pub fn engine_config_from_settings(settings: &Settings) -> EngineConfig {
     }
 }
 
-/// Apply the persisted settings to a running engine.
-///
-/// Returns the engine's refusal (an open transaction) instead of swallowing it:
-/// the caller has to tell the user that the new values start with the next
-/// gather, not now.
-fn publish_settings_to_engine(
-    app: &State<'_, AppState>,
-    settings: &Settings,
-) -> Result<(), String> {
-    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
-    let mut config = engine_config_from_settings(settings);
-    // Keep the live progress hook: it belongs to the caller, not to the document.
-    config.on_progress = engine.config().on_progress.clone();
-    engine.update_config(config).map_err(|e| e.to_string())
-}
-
 #[tauri::command]
 pub fn save_settings(
     handle: tauri::AppHandle,
     app: State<'_, AppState>,
     request: SaveSettingsRequest,
 ) -> Result<SettingsDto, String> {
-    // Read before taking the settings lock: the engine lock order is
-    // engine-then-settings elsewhere, and reversing it here would invite a
-    // deadlock the first time both paths run concurrently.
-    let engine_has_open_transaction = app
-        .engine
-        .lock()
-        .map(|engine| engine.current_transaction().is_some())
-        .unwrap_or(false);
+    ensure_settings_writable(&app)?;
+    let mut engine = app.engine.lock().map_err(|error| error.to_string())?;
+    if in_maintenance(&app) {
+        return Err("maintenance".into());
+    }
 
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
 
@@ -1028,15 +1188,14 @@ pub fn save_settings(
     // file - exactly as they were; mutating in place and returning an error
     // halfway through would keep the fields that happened to be applied first.
     let mut candidate = settings.clone();
+    if request.dismiss_migration_notice == Some(true) {
+        candidate.migration_notice = false;
+    }
 
     if let Some(mode) = request.layout_mode {
         candidate.layout_mode = match mode.as_str() {
             "grid" => unfy_settings::LayoutModeName::Grid,
-            // The interface's name for the default mode, plus the two historical
-            // spellings a stale window or a hand-edited file may still send.
-            "default" | "preserve_order" | "primary_side" => {
-                unfy_settings::LayoutModeName::MoveInto
-            }
+            "default" => unfy_settings::LayoutModeName::MoveInto,
             other => return Err(format!("unknown layout mode: {other}")),
         };
     }
@@ -1097,7 +1256,6 @@ pub fn save_settings(
     // restore here, which meant flipping a preference could rearrange the user's
     // desktop; the spec is explicit that stopping automation only stops future
     // automatic actions.
-    let _ = engine_has_open_transaction;
     if let Some(auto_gather) = request.auto_gather {
         candidate.auto_gather = auto_gather;
     }
@@ -1111,6 +1269,11 @@ pub fn save_settings(
             other => return Err(format!("unknown remote_screens: {other}")),
         };
     }
+    if candidate.remote_screens == unfy_settings::RemoteScreens::All {
+        candidate.auto_detect = "off".into();
+        candidate.auto_gather = false;
+        candidate.auto_restore = false;
+    }
     if let Some(excluded_apps) = request.excluded_apps {
         candidate.excluded_apps = excluded_apps;
     }
@@ -1121,20 +1284,26 @@ pub fn save_settings(
         candidate.onboarding_step = onboarding_step.min(4);
     }
 
-    // Validate and persist the candidate before it becomes live.
-    candidate.validate().map_err(|e| e.to_string())?;
-    candidate
-        .save(&app.settings_path)
-        .map_err(|e| e.to_string())?;
-    *settings = candidate;
-    let dto = SettingsDto::from(&*settings);
-    let snapshot = settings.clone();
+    let invalidate_automation = candidate.paused != settings.paused
+        || candidate.auto_detect != settings.auto_detect
+        || candidate.auto_gather != settings.auto_gather
+        || candidate.auto_restore != settings.auto_restore
+        || candidate.remote_screens != settings.remote_screens;
+    if invalidate_automation {
+        app.schedule
+            .lock()
+            .map_err(|error| error.to_string())?
+            .cancel();
+    }
+    commit_settings(&app.settings_path, &mut engine, &mut settings, candidate)?;
+    let autostart = settings.autostart;
     drop(settings);
+    drop(engine);
 
     // OS side effects happen after the document is committed. A registration
     // failure is reported, not turned into "settings not saved".
     if autostart_changed.is_some() {
-        if let Err(e) = crate::session::set_autostart(&handle, dto.autostart) {
+        if let Err(e) = crate::session::set_autostart(&handle, autostart) {
             // The preference is saved but the OS did not accept it. Say so, and
             // keep the saved value so the next launch can retry.
             note_result(
@@ -1151,24 +1320,22 @@ pub fn save_settings(
         crate::session::install(&handle);
     }
 
-    if let Err(e) = publish_settings_to_engine(&app, &snapshot) {
-        tracing::warn!(error = %e, "settings saved but not applied to the live engine");
-        note_result(
-            &app,
-            Some(Message::new(
-                "设置已保存，但当前整理还在进行中，新的布局会在下次整理时生效。",
-            )),
-        );
-    }
-
     crate::monitor::apply_sensitivity(&handle);
     sync_tray(&handle);
-    Ok(dto)
+    settings_dto(&app, &handle)
 }
 
 #[tauri::command]
-pub fn set_target_display(app: State<'_, AppState>, native_id: String) -> Result<(), String> {
-    let engine = app.engine.lock().map_err(|e| e.to_string())?;
+pub fn set_target_display(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+    native_id: String,
+) -> Result<(), String> {
+    ensure_settings_writable(&app)?;
+    let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+    if in_maintenance(&app) {
+        return Err("maintenance".into());
+    }
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
 
     let displays = engine.backend().topology().map_err(|e| e.to_string())?;
@@ -1183,8 +1350,18 @@ pub fn set_target_display(app: State<'_, AppState>, native_id: String) -> Result
 
     let mut target = TargetDisplay::from_key(&display.key, display.label.clone());
     target.number = Some(position + 1);
-    settings.target_display = Some(target);
-    settings.save(&app.settings_path).map_err(|e| e.to_string())
+    target.confirmed_topology = engine.topology_signature();
+    let mut candidate = settings.clone();
+    candidate.target_display = Some(target);
+    commit_settings(&app.settings_path, &mut engine, &mut settings, candidate)?;
+    app.schedule
+        .lock()
+        .map_err(|error| error.to_string())?
+        .cancel();
+    drop(settings);
+    drop(engine);
+    sync_tray(&handle);
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -1193,6 +1370,158 @@ pub struct PendingWorkDto {
     pub windows: usize,
     pub may_have_moved: bool,
     pub truncated_bytes: u64,
+    pub blockers: usize,
+    pub transactions: Vec<RecoveryTransactionDto>,
+    /// The unresolved windows belong to a transaction this process opened and is
+    /// still holding, not to a crashed run. The count is the same; the warning is
+    /// not. A successful gather leaves the live layout unresolved by design.
+    pub live: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecoveryTransactionDto {
+    pub id: String,
+    pub windows: usize,
+}
+
+/// One read-only view shared by status, recovery UI and lifecycle barriers.
+pub(crate) fn recovery_status(
+    engine: &unfy_engine::Engine<crate::platform::Backend>,
+    startup_blocked: bool,
+) -> PendingWorkDto {
+    let mut status = scan_recovery(
+        &engine.config().journal_dir,
+        engine.current_transaction(),
+        engine.unresolved_window_count(),
+    );
+    status.blockers += usize::from(startup_blocked);
+    status.present |= startup_blocked;
+    // `scan_recovery` sees only counts. Two distinctions live in the engine: a
+    // transaction this run opened is the layout on screen, and an adopted one only
+    // warrants a crash warning when it stopped between submitting a write and
+    // reading it back. A journal whose writes all completed is a layout the user
+    // closed the app on - normal, and not something to call "unfinished".
+    status.live = engine.current_transaction().is_some()
+        && (!engine.adopted_transaction() || !engine.interrupted_write());
+    status
+}
+
+fn journal_paths(directory: &std::path::Path) -> (Vec<std::path::PathBuf>, usize) {
+    let mut directories = vec![directory.to_path_buf()];
+    let mut files = Vec::new();
+    let mut blockers = 0;
+    while let Some(current) = directories.pop() {
+        let entries = match std::fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(error) if current == directory && error.kind() == std::io::ErrorKind::NotFound => {
+                continue
+            }
+            Err(_) => {
+                blockers += 1;
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    blockers += 1;
+                    continue;
+                }
+            };
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(_) => {
+                    blockers += 1;
+                    continue;
+                }
+            };
+            if kind.is_symlink() {
+                blockers += 1;
+            } else if kind.is_dir() {
+                directories.push(entry.path());
+            } else if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "journal")
+            {
+                files.push(entry.path());
+            }
+        }
+    }
+    files.sort();
+    (files, blockers)
+}
+
+fn find_recovery_transaction(
+    directory: &std::path::Path,
+    transaction: uuid::Uuid,
+) -> Result<std::path::PathBuf, String> {
+    let (paths, blockers) = journal_paths(directory);
+    if blockers > 0 {
+        return Err("recovery_required".into());
+    }
+    let mut matched = None;
+    for path in paths {
+        if let Ok(unfy_journal::Recovered::Unfinished(recovered)) = unfy_journal::recover(&path) {
+            if recovered.transaction == transaction && recovered.has_open_obligation() {
+                if matched.is_some() {
+                    return Err("recovery_required".into());
+                }
+                matched = Some(path);
+            }
+        }
+    }
+    matched.ok_or_else(|| "recovery_record_missing".into())
+}
+
+fn scan_recovery(
+    directory: &std::path::Path,
+    owned: Option<uuid::Uuid>,
+    in_memory: usize,
+) -> PendingWorkDto {
+    let mut status = PendingWorkDto {
+        present: in_memory > 0,
+        windows: in_memory,
+        may_have_moved: in_memory > 0,
+        truncated_bytes: 0,
+        blockers: 0,
+        transactions: Vec::new(),
+        live: false,
+    };
+    let (paths, blockers) = journal_paths(directory);
+    status.blockers = blockers;
+    let mut seen = std::collections::HashSet::new();
+    for path in paths {
+        match unfy_journal::recover(&path) {
+            Ok(unfy_journal::Recovered::Clean) => {}
+            Ok(unfy_journal::Recovered::Unfinished(transaction)) => {
+                if !seen.insert(transaction.transaction) {
+                    status.blockers += 1;
+                    continue;
+                }
+                if Some(transaction.transaction) == owned {
+                    continue;
+                }
+                status.truncated_bytes += transaction.truncated_bytes;
+                if !transaction.has_open_obligation() {
+                    continue;
+                }
+                let windows = transaction.touched_windows().len();
+                status.windows += windows;
+                status.may_have_moved |=
+                    transaction.may_have_moved_windows() || transaction.has_unresolved_intent();
+                status.transactions.push(RecoveryTransactionDto {
+                    id: transaction.transaction.to_string(),
+                    windows,
+                });
+            }
+            Err(_) => status.blockers += 1,
+        }
+    }
+    status.transactions.sort_by(|a, b| a.id.cmp(&b.id));
+    status.present = status.windows > 0 || status.blockers > 0;
+    status
 }
 
 /// Report whether there is unfinished recovery work.
@@ -1208,72 +1537,62 @@ pub struct PendingWorkDto {
 /// normal work in progress, and showing a warning banner for it would be wrong.
 #[tauri::command]
 pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> {
-    let settings = app.settings.lock().map_err(|e| e.to_string())?;
-    // A dismissal expires. A permanent flag would mean the user dismisses one
-    // crash banner and never learns about a later, different crash.
-    if settings.recovery_dismissed_until > now_unix_secs() {
-        return Ok(PendingWorkDto {
-            present: false,
-            windows: 0,
-            may_have_moved: false,
-            truncated_bytes: 0,
-        });
+    let engine = app.engine.lock().map_err(|error| error.to_string())?;
+    let mut status = recovery_status(&engine, app.settings_error.is_some());
+    let settings = app.settings.lock().map_err(|error| error.to_string())?;
+    // Dismissal hides this reminder only; get_status and lifecycle checks always
+    // retain the real counts, including unreadable records.
+    if settings.recovery_dismissed_until > now_unix_secs() && status.blockers == 0 {
+        status.present = false;
     }
-    drop(settings);
+    Ok(status)
+}
 
-    let (owned, adopted_windows) = {
-        let engine = app.engine.lock().map_err(|e| e.to_string())?;
-        let owned = engine.current_transaction();
-        // Any state can hold unresolved windows - a failed restore leaves
-        // `Degraded`, but a partially resolved transaction can also be `Active`.
-        // Deriving this from the label was what hid the restore entry.
-        (owned, engine.unresolved_window_count())
-    };
-
-    let dir = unfy_settings::config_dir().join("journal");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Ok(PendingWorkDto {
-            present: adopted_windows > 0,
-            windows: adopted_windows,
-            may_have_moved: adopted_windows > 0,
-            truncated_bytes: 0,
-        });
-    };
-
-    let mut best_windows = adopted_windows;
-    let mut may_have_moved = adopted_windows > 0;
-    let mut truncated_bytes = 0u64;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.extension().is_some_and(|e| e == "journal") {
-            continue;
-        }
-        if let Ok(unfy_journal::Recovered::Unfinished(tx)) = unfy_journal::recover(&path) {
-            if Some(tx.transaction) == owned {
-                // The engine already owns this one; counted above.
-                continue;
-            }
-            if !tx.has_open_obligation() {
-                // Every captured window was already resolved: the file is history.
-                std::fs::remove_file(&path).ok();
-                continue;
-            }
-            let work = PendingWork::from_recovered(&tx);
-            // Sum rather than take the maximum: two unfinished transactions
-            // describe two different sets of displaced windows.
-            best_windows += work.windows;
-            may_have_moved |= work.may_have_moved;
-            truncated_bytes = truncated_bytes.max(work.truncated_bytes);
-        }
-    }
-
-    Ok(PendingWorkDto {
-        present: best_windows > 0,
-        windows: best_windows,
-        may_have_moved,
-        truncated_bytes,
+#[tauri::command]
+pub async fn restore_recovery_transaction(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+    transaction: String,
+) -> Result<RestoreDto, String> {
+    let transaction = uuid::Uuid::parse_str(&transaction).map_err(|error| error.to_string())?;
+    let admission = WriteAdmission::claim(&app)?;
+    let engine = app.engine.clone();
+    let settings = app.settings.clone();
+    let path = app.settings_path.clone();
+    let activity = app.activity.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        restore_blocking(
+            engine,
+            settings,
+            path,
+            activity,
+            "window",
+            admission,
+            Some(transaction),
+        )
     })
+    .await
+    .unwrap_or_else(|error| Err(format!("restore task failed: {error}")));
+    note_result(&app, result.as_ref().err().cloned().map(Message::new));
+    sync_tray(&handle);
+    result
+}
+
+#[tauri::command]
+pub fn cancel_auto_restore(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+) -> Result<(), String> {
+    app.schedule
+        .lock()
+        .map_err(|error| error.to_string())?
+        .cancel_automatic();
+    let _ = tauri::Emitter::emit(
+        &handle,
+        "unfy://progress",
+        serde_json::json!({ "phase": "done" }),
+    );
+    Ok(())
 }
 
 /// Hide the recovery banner for a while, without discarding the journal.
@@ -1283,9 +1602,15 @@ pub fn pending_work(app: State<'_, AppState>) -> Result<PendingWorkDto, String> 
 /// unrelated crash is reported again.
 #[tauri::command]
 pub fn dismiss_pending_work(app: State<'_, AppState>) -> Result<(), String> {
+    ensure_settings_writable(&app)?;
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
-    settings.recovery_dismissed_until = now_unix_secs() + 24 * 60 * 60;
-    settings.save(&app.settings_path).map_err(|e| e.to_string())
+    let mut candidate = settings.clone();
+    candidate.recovery_dismissed_until = now_unix_secs() + 24 * 60 * 60;
+    candidate
+        .save(&app.settings_path)
+        .map_err(|e| e.to_string())?;
+    *settings = candidate;
+    Ok(())
 }
 
 /// Clear the dismissal, for example after the user actually restores.
@@ -1665,7 +1990,7 @@ pub fn update_status(
 /// Check for an update now, honouring the recovery barrier.
 #[tauri::command]
 pub async fn check_update(handle: tauri::AppHandle) -> Result<UpdateCheckDto, String> {
-    let outcome = crate::update::check_and_install(handle.clone(), true).await;
+    let outcome = crate::update::check_only(&handle).await;
     let detail = outcome.detail();
 
     // Record the outcome so the settings page can show the last result after a
@@ -1682,6 +2007,20 @@ pub async fn check_update(handle: tauri::AppHandle) -> Result<UpdateCheckDto, St
 
     Ok(UpdateCheckDto {
         outcome: outcome.as_str().to_string(),
+        detail,
+    })
+}
+
+#[tauri::command]
+pub async fn install_update(handle: tauri::AppHandle) -> Result<UpdateCheckDto, String> {
+    let outcome = crate::update::check_and_install(handle.clone(), true).await;
+    let detail = outcome.detail();
+    let state = handle.state::<AppState>();
+    if let Ok(mut last) = state.last_update.lock() {
+        *last = Some((outcome.as_str().into(), outcome.version(), detail.clone()));
+    }
+    Ok(UpdateCheckDto {
+        outcome: outcome.as_str().into(),
         detail,
     })
 }
@@ -1752,6 +2091,11 @@ pub fn reset_settings(
     handle: tauri::AppHandle,
     app: State<'_, AppState>,
 ) -> Result<SettingsDto, String> {
+    ensure_settings_writable(&app)?;
+    let mut engine = app.engine.lock().map_err(|error| error.to_string())?;
+    if in_maintenance(&app) {
+        return Err("maintenance".into());
+    }
     let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
     let preserved_target = settings.target_display.clone();
     let fresh = Settings {
@@ -1761,20 +2105,21 @@ pub fn reset_settings(
         onboarding_done: true,
         ..Default::default()
     };
-    fresh.save(&app.settings_path).map_err(|e| e.to_string())?;
-    *settings = fresh.clone();
+    commit_settings(&app.settings_path, &mut engine, &mut settings, fresh)?;
     drop(settings);
-
-    // The engine reads layout and exclusions from its own config, and the
-    // detector reads its level from settings; without these the reset would only
-    // take effect at the next launch.
-    if let Err(e) = publish_settings_to_engine(&app, &fresh) {
-        tracing::warn!(error = %e, "reset could not be applied to the live engine");
-    }
+    drop(engine);
+    app.schedule
+        .lock()
+        .map_err(|error| error.to_string())?
+        .cancel();
     crate::monitor::apply_sensitivity(&handle);
     crate::session::install(&handle);
     if let Err(e) = crate::session::set_autostart(&handle, false) {
         tracing::warn!(error = %e, "reset could not disable autostart");
+        note_result(
+            &app,
+            Some(Message::one("开机自启未能设置：{error}", "error", e)),
+        );
     }
     sync_tray(&handle);
 
@@ -1860,8 +2205,6 @@ pub fn set_ui_locale(
 pub struct PauseDto {
     pub paused: bool,
     pub state: &'static str,
-    /// True when resuming also ran the restore that the pause had deferred.
-    pub restored_deferred: bool,
 }
 
 /// Pause or resume automation while keeping the current layout.
@@ -1891,38 +2234,25 @@ fn set_paused_inner<R: tauri::Runtime>(
     app: &State<'_, AppState>,
     paused: bool,
 ) -> Result<PauseDto, String> {
-    // One implementation for the window, the tray and the shortcut. Pausing used
-    // to be applied by the engine in one path and by a settings flag in another,
-    // which produced "the UI says paused, the engine keeps gathering".
+    ensure_settings_writable(app)?;
+    app.schedule
+        .lock()
+        .map_err(|error| error.to_string())?
+        .cancel();
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
-    if paused {
-        engine.pause().map_err(|e| e.to_string())?;
-    } else {
-        engine.resume().map_err(|e| e.to_string())?;
+    if in_maintenance(app) {
+        return Err("maintenance".into());
     }
-    let paused = engine.is_paused();
+    let mut settings = app.settings.lock().map_err(|error| error.to_string())?;
+    let mut candidate = settings.clone();
+    candidate.paused = paused;
+    commit_settings(&app.settings_path, &mut engine, &mut settings, candidate)?;
     let state = state_name(engine.state());
+    drop(settings);
     drop(engine);
 
-    // Persist the same value that is now live. A failure is reported: silently
-    // keeping a preference that the next launch will not honour is worse than an
-    // error the user can see.
-    {
-        let mut settings = app.settings.lock().map_err(|e| e.to_string())?;
-        let previous = settings.paused;
-        settings.paused = paused;
-        if let Err(e) = settings.save(&app.settings_path) {
-            settings.paused = previous;
-            return Err(format!("could not save the paused preference: {e}"));
-        }
-    }
-
     sync_tray(handle);
-    Ok(PauseDto {
-        paused,
-        state,
-        restored_deferred: false,
-    })
+    Ok(PauseDto { paused, state })
 }
 
 /// Accept the current window positions as the new baseline.
@@ -1936,27 +2266,19 @@ fn set_paused_inner<R: tauri::Runtime>(
 /// there is nothing to restore, so the next gather captures the current layout as
 /// home.
 #[tauri::command]
-pub fn keep_current_layout(app: State<'_, AppState>) -> Result<(), String> {
+pub fn keep_current_layout(
+    handle: tauri::AppHandle,
+    app: State<'_, AppState>,
+) -> Result<(), String> {
+    let admission = WriteAdmission::claim(&app)?;
     let mut engine = app.engine.lock().map_err(|e| e.to_string())?;
+    admission.check()?;
     let before = engine.captured_window_count();
     engine.keep_current_layout().map_err(|e| e.to_string())?;
-    // The engine already cleared its pause; mirror that rather than clearing a
-    // separate flag and hoping the two agree.
-    let paused = engine.is_paused();
+    // Keeping a layout does not resume automation or alter the user's settings.
     let state = state_name(engine.state());
     drop(engine);
 
-    if let Ok(mut settings) = app.settings.lock() {
-        settings.paused = paused;
-        if let Err(e) = settings.save(&app.settings_path) {
-            tracing::warn!(error = %e, "kept the layout but could not persist the pause flag");
-        }
-    }
-    // Accepting the current layout is the same decision as cancelling a pending
-    // automatic restore: the windows stay where they are.
-    if let Ok(mut schedule) = app.schedule.lock() {
-        schedule.cancel();
-    }
     if let Ok(mut log) = app.activity.lock() {
         log.record(crate::activity::Entry {
             at: crate::activity::now(),
@@ -1971,6 +2293,7 @@ pub fn keep_current_layout(app: State<'_, AppState>) -> Result<(), String> {
         *slot = None;
     }
     tracing::info!(state, "kept the current layout; recovery records closed");
+    sync_tray(&handle);
     Ok(())
 }
 
@@ -2062,4 +2385,195 @@ pub fn running_applications(app: State<'_, AppState>) -> Vec<AppDto> {
             name,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestDirectory(std::path::PathBuf);
+    impl TestDirectory {
+        fn new() -> Self {
+            let directory =
+                std::env::temp_dir().join(format!("unfy-command-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&directory).unwrap();
+            Self(directory)
+        }
+    }
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn unfinished(directory: &std::path::Path, window: u64) -> uuid::Uuid {
+        let transaction = uuid::Uuid::new_v4();
+        let mut journal = unfy_journal::Journal::begin_named(
+            directory.join(format!("{transaction}.journal")),
+            transaction,
+            "test",
+        )
+        .unwrap();
+        let preimage = unfy_journal::Preimage {
+            id: WindowId {
+                native_id: window,
+                process_id: 1,
+                process_start: 1,
+                instance: 1,
+            },
+            display_native_id: "screen".into(),
+            display_quality: unfy_domain::IdentityQuality::Strong,
+            display_work_area: Rect::new(0, 0, 1920, 1080),
+            display_scale: unfy_domain::Scale::IDENTITY,
+            visible_rect: Rect::new(50, 50, 550, 450),
+            outer_rect: Rect::new(50, 50, 550, 450),
+            mode: unfy_domain::WindowMode::Normal,
+            topmost: false,
+            native_placement: None,
+        };
+        journal.write_preimage(&preimage).unwrap();
+        journal
+            .write_intent(&preimage.id, Rect::new(2000, 50, 2500, 450), preimage.mode)
+            .unwrap();
+        journal.durable().unwrap();
+        transaction
+    }
+
+    #[test]
+    fn recovery_counts_nested_obligations_without_double_counting_owned_transaction() {
+        let directory = TestDirectory::new();
+        let nested = directory.0.join("imported");
+        std::fs::create_dir(&nested).unwrap();
+        let owned = unfinished(&directory.0, 1);
+        let other = unfinished(&nested, 2);
+        let status = scan_recovery(&directory.0, Some(owned), 1);
+        assert_eq!(status.windows, 2);
+        assert_eq!(status.blockers, 0);
+        assert_eq!(
+            status
+                .transactions
+                .iter()
+                .map(|tx| tx.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![other.to_string()]
+        );
+        assert_eq!(
+            find_recovery_transaction(&directory.0, other)
+                .unwrap()
+                .parent(),
+            Some(nested.as_path())
+        );
+    }
+
+    #[test]
+    fn unreadable_directory_and_corrupt_journal_block_lifecycle_instead_of_counting_zero() {
+        let directory = TestDirectory::new();
+        let corrupt = directory.0.join("bad.journal");
+        std::fs::write(&corrupt, b"broken journal").unwrap();
+        let status = scan_recovery(&directory.0, None, 0);
+        assert!(status.present);
+        assert_eq!(status.windows, 0);
+        assert_eq!(status.blockers, 1);
+        assert_eq!(std::fs::read(&corrupt).unwrap(), b"broken journal");
+        assert_eq!(scan_recovery(&corrupt, None, 0).blockers, 1);
+    }
+
+    #[test]
+    fn recovery_queries_leave_valid_empty_journals_untouched() {
+        let directory = TestDirectory::new();
+        let id = uuid::Uuid::new_v4();
+        let path = directory.0.join(format!("{id}.journal"));
+        let mut journal = unfy_journal::Journal::begin_named(&path, id, "test").unwrap();
+        journal.durable().unwrap();
+        drop(journal);
+        let before = std::fs::read(&path).unwrap();
+        assert!(!scan_recovery(&directory.0, None, 0).present);
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
+    #[test]
+    fn failed_settings_save_keeps_runtime_configuration_and_pause() {
+        let directory = TestDirectory::new();
+        let mut settings = Settings::default();
+        let before = settings.clone();
+        let config = engine_config_from_settings(&settings);
+        let mut engine =
+            unfy_engine::Engine::new(unfy_platform::FakeBackend::with_two_displays(), config);
+        let mut candidate = settings.clone();
+        candidate.layout_mode = unfy_settings::LayoutModeName::Grid;
+        candidate.excluded_apps = vec!["editor.exe".into()];
+        candidate.paused = true;
+        assert!(commit_settings(&directory.0, &mut engine, &mut settings, candidate).is_err());
+        assert_eq!(settings, before);
+        assert_eq!(
+            engine.config().layout.mode,
+            unfy_layout::LayoutMode::MoveInto
+        );
+        assert!(engine.config().excluded_apps.is_empty());
+        assert!(!engine.is_paused());
+    }
+
+    #[test]
+    fn successful_settings_commit_survives_reload_with_the_same_pause_policy() {
+        let directory = TestDirectory::new();
+        let path = directory.0.join("settings.json");
+        let mut settings = Settings::default();
+        let mut engine = unfy_engine::Engine::new(
+            unfy_platform::FakeBackend::with_two_displays(),
+            engine_config_from_settings(&settings),
+        );
+        let mut candidate = settings.clone();
+        candidate.paused = true;
+        commit_settings(&path, &mut engine, &mut settings, candidate).unwrap();
+        assert!(engine.is_paused());
+        assert!(Settings::load(&path).unwrap().paused);
+        let reset = Settings {
+            onboarding_done: true,
+            ..Default::default()
+        };
+        commit_settings(&path, &mut engine, &mut settings, reset).unwrap();
+        assert!(!engine.is_paused());
+        assert!(!Settings::load(path).unwrap().paused);
+    }
+
+    #[test]
+    fn queued_gather_checks_maintenance_after_acquiring_writer_lock() {
+        let directory = TestDirectory::new();
+        let config = EngineConfig {
+            journal_dir: directory.0.join("journal"),
+            ..Default::default()
+        };
+        let engine = Arc::new(std::sync::Mutex::new(unfy_engine::Engine::new(
+            platform::make(),
+            config,
+        )));
+        let maintenance = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let admission = WriteAdmission {
+            maintenance: maintenance.clone(),
+            token: crate::schedule::Schedule::new().claim_manual(),
+            startup_error: None,
+        };
+        let held = engine.lock().unwrap();
+        let worker_engine = engine.clone();
+        let activity = Arc::new(std::sync::Mutex::new(crate::activity::Activity::load(
+            directory.0.join("activity.jsonl"),
+        )));
+        let (queued, ready) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            queued.send(()).unwrap();
+            migrate_blocking(
+                worker_engine,
+                Arc::new(std::sync::Mutex::new(Settings::default())),
+                activity,
+                Arc::new(|_, _| {}),
+                "test",
+                admission,
+            )
+        });
+        ready.recv().unwrap();
+        maintenance.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(held);
+        assert_eq!(worker.join().unwrap().unwrap_err(), "maintenance");
+        assert_eq!(engine.lock().unwrap().current_transaction(), None);
+    }
 }

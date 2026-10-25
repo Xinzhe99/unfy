@@ -33,6 +33,6 @@ export function targetState(
     saved: true,
     gone: !target.present,
     // A display that is gone cannot also be "weak"; there is nothing to recognise.
-    weak: target.present && live !== undefined && !live.restorable,
+    weak: target.present && (!target.confirmed || (live !== undefined && !live.restorable)),
   };
 }

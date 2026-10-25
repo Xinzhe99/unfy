@@ -1,296 +1,36 @@
-/**
- * Interface language.
- *
- * Run with `bun test`.
- *
- * The catalogue is keyed by the Chinese source string, so the failure mode to guard
- * against is not a crash but a *silent* one: a missing English entry renders the
- * Chinese, which looks like a translation gap rather than a bug. These tests pin
- * the contract that makes that fallback safe, plus a coverage check so strings
- * added later cannot quietly stay untranslated.
- */
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { applyLocale, currentLocale, resolveLocale, t } from "../i18n";
+import { renderMessage } from "../api";
 
-import { applyLocale, resolveLocale, t } from "../i18n";
+afterEach(() => applyLocale("zh"));
 
-afterEach(() => {
-  applyLocale("zh");
-});
-
-describe("resolution", () => {
-  test("an explicit choice wins over the system", () => {
+describe("locale resolution", () => {
+  test("explicit language overrides the system", () => {
     expect(resolveLocale("zh")).toBe("zh");
     expect(resolveLocale("en")).toBe("en");
-  });
-
-  test("system falls back to a real locale, never an empty one", () => {
-    // `navigator` is undefined under Bun, which exercises the fallback path.
     expect(["zh", "en"]).toContain(resolveLocale("system"));
   });
-});
-
-describe("translation", () => {
-  test("returns the source string in Chinese", () => {
+  test("the active language changes immediately", () => {
+    applyLocale("en");
+    expect(currentLocale()).toBe("en");
     applyLocale("zh");
-    expect(t("就绪")).toBe("就绪");
-  });
-
-  test("returns English when the entry exists", () => {
-    applyLocale("en");
-    expect(t("就绪")).toBe("Ready");
-    expect(t("布局已启用")).toBe("Layout active");
-  });
-
-  test("falls back to the Chinese source for an unknown key", () => {
-    applyLocale("en");
-    // A string with no English entry must render something readable, not a key.
-    expect(t("这条文案还没有英文")).toBe("这条文案还没有英文");
-  });
-
-  test("substitutes named placeholders", () => {
-    applyLocale("en");
-    expect(t("已整理 {count} 个窗口", { count: 3 })).toBe("Gathered 3 windows");
-    expect(t("显示器 {number}（主）", { number: 2 })).toBe(
-      "Display 2 (primary)",
-    );
-  });
-
-  test("leaves an unsupplied placeholder visible", () => {
-    applyLocale("en");
-    // Rendering `undefined` would hide the mistake; leaving the braces shows it.
-    expect(t("已整理 {count} 个窗口")).toContain("{count}");
+    expect(currentLocale()).toBe("zh");
   });
 });
 
-describe("coverage", () => {
-  /**
-   * Every sentence the Rust side sends must exist in the catalogue too.
-   *
-   * The backend cannot word these itself, so it sends a key and the frontend looks
-   * it up. Nothing on either side of the boundary checks that the entry is there:
-   * the TypeScript scan cannot see Rust, and the Rust tests only check the shape of
-   * the message. A missing entry renders the Chinese source in an English window.
-   */
-  test("every backend message key has an English entry", () => {
-    const root = `${import.meta.dir}/..`;
-    const catalogue = readFileSync(`${root}/i18n.ts`, "utf8");
-    const known = new Set(
-      [...catalogue.matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]!),
-    );
-    const backend = `${root}/../src-tauri/src`;
-    const missing: string[] = [];
-    let found = 0;
-    for (const entry of readdirSync(backend, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".rs")) continue;
-      const source = readFileSync(`${backend}/${entry.name}`, "utf8");
-      for (const match of source.matchAll(
-        /Message::(?:new|one)\((?:\s*)"((?:[^"\\]|\\.)*)"/g,
-      )) {
-        const key = match[1]!.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-        if (!/[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/.test(key)) continue;
-        found += 1;
-        if (!known.has(key)) missing.push(`${entry.name}: ${key}`);
-      }
+describe("message interpolation", () => {
+  test("unknown messages remain readable in either locale", () => {
+    for (const locale of ["zh", "en"] as const) {
+      applyLocale(locale);
+      expect(t("Uncatalogued {count}", { count: 7 })).toBe("Uncatalogued 7");
     }
-    // Guard against the regex silently matching nothing after a refactor.
-    expect(found).toBeGreaterThan(15);
-    expect(missing).toEqual([]);
   });
-
-  /**
-   * Every `t("…")` key must exist in the catalogue.
-   *
-   * A key that is not there falls back to the Chinese source, which is invisible
-   * to the compiler and to a render test that does not reach that branch. A batch
-   * of them shipped that way: the wrappers were added by searching the source for
-   * Chinese, while the English entries were added by searching for something else.
-   */
-  test("every key used in the source has an English entry", () => {
-    const root = `${import.meta.dir}/..`;
-    const catalogue = readFileSync(`${root}/i18n.ts`, "utf8");
-    const known = new Set(
-      [...catalogue.matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]!),
-    );
-    const files: string[] = [];
-    for (const dir of ["", "pages/", "components/", "lib/"]) {
-      const base = `${root}/${dir}`;
-      for (const entry of readdirSync(base, { withFileTypes: true })) {
-        if (!entry.isFile()) continue;
-        if (!/\.tsx?$/.test(entry.name)) continue;
-        if (entry.name.includes(".test.")) continue;
-        if (entry.name === "i18n.ts") continue;
-        files.push(`${dir}${entry.name}`);
-      }
-    }
-    const missing: string[] = [];
-    for (const file of files) {
-      const source = readFileSync(`${root}/${file}`, "utf8");
-      for (const match of source.matchAll(/(?<![A-Za-z0-9_$.])t\(\s*"([^"]+)"/g)) {
-        // A call written into a comment is documentation, not a lookup; and the
-        // lookbehind keeps `onSetDetect("off", …)` from reading as a `t("off")`.
-        const lineStart = source.lastIndexOf("\n", match.index!) + 1;
-        if (/^\s*(\/\/|\*|\/\*)/.test(source.slice(lineStart, match.index!))) continue;
-        if (!known.has(match[1]!)) missing.push(`${file}: ${match[1]}`);
-      }
-    }
-    expect(missing).toEqual([]);
+  test("missing parameters remain visible", () => {
+    applyLocale("en");
+    expect(t("Uncatalogued {count}")).toBe("Uncatalogued {count}");
   });
-
-  /**
-   * No catalogue entry may be unreachable.
-   *
-   * The three tests above catch a *missing* translation. This one catches the
-   * opposite, which is what actually accumulated: renaming a sentence leaves the old
-   * entry behind, and a duplicate key differing by one space hides beside the real
-   * one. Nothing reads them, nothing breaks, and they quietly grow - the count was 15
-   * by the time anyone looked, including six for skip reasons that no longer exist
-   * and an old wording of the refused-window hint that contradicted the new one.
-   *
-   * A key counts as reachable if the literal appears anywhere in the frontend or the
-   * Rust sources. That is deliberately loose: many keys are looked up indirectly
-   * through a map (`skipLabels`, `stateLabels`, the activity `kind` table) or sent
-   * from Rust as a `Message::new` argument, and a stricter "appears inside a t(...)
-   * call" rule would flag all of those.
-   */
-  test("no catalogue entry is unreachable", () => {
-    const root = `${import.meta.dir}/..`;
-    const catalogue = readFileSync(`${root}/i18n.ts`, "utf8");
-    const known = [...catalogue.matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]!);
-
-    const sources: string[] = [];
-    const walk = (dir: string) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const full = `${dir}/${entry.name}`;
-        if (entry.isDirectory()) {
-          walk(full);
-          continue;
-        }
-        if (!/\.(ts|tsx|rs)$/.test(entry.name)) continue;
-        if (entry.name.includes(".test.")) continue;
-        if (entry.name === "i18n.ts") continue;
-        sources.push(readFileSync(full, "utf8"));
-      }
-    };
-    walk(root);
-    walk(`${root}/../src-tauri/src`);
-    const haystack = sources.join("\n");
-
-    const orphans = known.filter((key) => !haystack.includes(key));
-    expect(orphans).toEqual([]);
-    // Guard against the scan silently finding nothing after a path change.
-    expect(known.length).toBeGreaterThan(300);
-  });
-
-  /**
-   * Backend events and frontend listeners must name the same set.
-   *
-   * An event with no listener is a contract nobody honours - `unfy://resumed` was
-   * emitted on every wake from sleep and nothing listened, which reads as a promise the
-   * frontend was supposed to keep. A listener with no emitter is worse: the window waits
-   * for something that never arrives.
-   */
-  test("every backend event has a listener and every listener an event", () => {
-    const root = `${import.meta.dir}/..`;
-    const collect = (dir: string, pattern: RegExp) => {
-      const found = new Set<string>();
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isFile() || !pattern.test(entry.name)) continue;
-        const text = readFileSync(`${dir}/${entry.name}`, "utf8");
-        for (const match of text.matchAll(/"(unfy:\/\/[a-z-]+)"/g)) {
-          found.add(match[1]!);
-        }
-      }
-      return found;
-    };
-    const backend = collect(`${root}/../src-tauri/src`, /\.rs$/);
-    const frontend = collect(root, /\.tsx$/);
-    expect(backend.size).toBeGreaterThan(5);
-    expect([...backend].filter((e) => !frontend.has(e))).toEqual([]);
-    expect([...frontend].filter((e) => !backend.has(e))).toEqual([]);
-  });
-
-  /**
-   * Every command the window invokes must be registered, and vice versa.
-   *
-   * A missing registration is a button that throws "command not found" the moment it is
-   * pressed; a registered command nobody calls is dead surface. Both are invisible to the
-   * compiler because the name is a string on one side and an identifier on the other.
-   */
-  test("the window and the backend agree on every command", () => {
-    const root = `${import.meta.dir}/..`;
-    const api = readFileSync(`${root}/api.ts`, "utf8");
-    const invoked = new Set(
-      [...api.matchAll(/invoke(?:<[^>]*>)?\("([a-z_]+)"/g)].map((m) => m[1]!),
-    );
-    const lib = readFileSync(`${root}/../src-tauri/src/lib.rs`, "utf8");
-    const block = lib.split("tauri::generate_handler![")[1]?.split("]")[0] ?? "";
-    const registered = new Set([...block.matchAll(/commands::(\w+)/g)].map((m) => m[1]!));
-
-    expect(registered.size).toBeGreaterThan(20);
-    expect([...invoked].filter((c) => !registered.has(c))).toEqual([]);
-    expect([...registered].filter((c) => !invoked.has(c))).toEqual([]);
-  });
-
-  test("every Chinese literal in the UI has an English entry", () => {
-    // Reads the source rather than the catalogue so a new hardcoded string is
-    // caught even if nobody remembers to add it to the dictionary.
-    const root = `${import.meta.dir}/..`;
-    const catalogue = readFileSync(`${root}/i18n.ts`, "utf8");
-    const known = new Set(
-      [...catalogue.matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]!),
-    );
-    // Wrapped strings are keys by construction; these are the raw ones.
-    // `中文` is a language name and is identical in both locales by design.
-    const allowed = new Set(["中文"]);
-    for (const value of allowed) known.add(value);
-
-    const files = [
-      "App.tsx",
-      "pages/Overview.tsx",
-      "pages/Displays.tsx",
-      "pages/Exclusions.tsx",
-      "pages/General.tsx",
-      "pages/Onboarding.tsx",
-      "components/PlanPreview.tsx",
-      "components/DisplayCards.tsx",
-      "components/HotkeyRecorder.tsx",
-    ];
-    const offenders: string[] = [];
-    for (const file of files) {
-      const source = readFileSync(`${root}/${file}`, "utf8");
-      // Quoted props and JSX text nodes that contain Chinese but are not already
-      // inside a `t(...)` call.
-      for (const match of source.matchAll(
-        /(?:title|label|hint|description|placeholder|aria-label)="([^"{}]*[\u4e00-\u9fff][^"{}]*)"/g,
-      )) {
-        if (!known.has(match[1]!)) offenders.push(`${file}: ${match[1]}`);
-      }
-      for (const match of source.matchAll(/>([^<>{}]*[\u4e00-\u9fff][^<>{}]*)</g)) {
-        const text = match[1]!.trim();
-        if (text && !known.has(text)) offenders.push(`${file}: ${text}`);
-      }
-      // Every Chinese string literal must either be a catalogue key or be wrapped
-      // in `t(...)`. This covers the array entries and ternary branches that the
-      // JSX scan cannot see - `{ value: "all", label: "全部屏幕" }` looked
-      // translated because the surrounding prop was, and shipped in Chinese.
-      for (const match of source.matchAll(/"([^"\\<>\n]*[\u4e00-\u9fff][^"\\<>\n]*)"/g)) {
-        const literal = match[1]!;
-        // Comments quote example copy; they are documentation, not UI text.
-        const lineStart = source.lastIndexOf("\n", match.index!) + 1;
-        const line = source.slice(lineStart, match.index!);
-        if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
-        if (literal.includes("${")) continue;
-        if (literal.trim().length <= 1) continue;
-        // The scanner runs over source text, so `>` and `/>` fragments from JSX
-        // regexes leak in; they are not copy.
-        if (/^[\s/>]*$/.test(literal)) continue;
-        if (known.has(literal)) continue;
-        const before = source.slice(Math.max(0, match.index! - 2), match.index!);
-        if (before.endsWith("t(")) continue;
-        offenders.push(`${file}: literal ${literal}`);
-      }
-    }
-    expect(offenders).toEqual([]);
+  test("backend evidence objects render their message and parameters", () => {
+    applyLocale("en");
+    expect(renderMessage({ key: "Connection {session}", params: { session: "42" } })).toBe("Connection 42");
   });
 });

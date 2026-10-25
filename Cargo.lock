@@ -4724,6 +4724,7 @@ dependencies = [
  "unfy-domain",
  "unfy-engine",
  "unfy-journal",
+ "unfy-layout",
  "unfy-platform",
  "windows",
 ]
@@ -4736,6 +4737,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "unfy-domain",
+ "unfy-journal",
  "unfy-layout",
 ]
 

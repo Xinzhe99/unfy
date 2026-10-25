@@ -5,6 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   api,
   errorMessage,
+  renderMessage,
+  type MessageDto,
   type ActivityEntryDto,
   type HealthItemDto,
   formatBytes,
@@ -16,8 +18,10 @@ import {
   type PendingWorkDto,
   type PreviewDto,
   type SettingsDto,
+  type SaveSettingsRequest,
   type StatusDto,
   type UpdateStatusDto,
+  type WindowResultDto,
 } from "./api";
 import { stateLabels } from "./api";
 import { applyLocale, rememberLocale, resolveLocale, t } from "./i18n";
@@ -95,6 +99,7 @@ export default function App() {
   // rule changed), so the gather result is the only source: it is what the user just
   // saw happen.
   const [refusedApps, setRefusedApps] = useState<string[]>([]);
+  const [latestResults, setLatestResults] = useState<WindowResultDto[] | null>(null);
   const [hotkeys, setHotkeys] = useState<HotkeyStatusDto | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, DisplayThumbnailDto>>({});
@@ -112,6 +117,25 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const noticeTimer = useRef<number | null>(null);
   const countdownTimer = useRef<number | null>(null);
+  const [windowVisible, setWindowVisible] = useState(false);
+  const [restoreCountdown, setRestoreCountdown] = useState<number | null>(null);
+  const refreshFlight = useRef<Promise<void> | null>(null);
+  const auxiliaryFlight = useRef<Promise<unknown> | null>(null);
+  const refreshAgain = useRef(false);
+  const mutationEpoch = useRef(0);
+  const actionFlight = useRef(false);
+  const previewEpoch = useRef(0);
+
+  const clearCountdown = useCallback(() => {
+    if (countdownTimer.current !== null) window.clearInterval(countdownTimer.current);
+    countdownTimer.current = null;
+    setRestoreCountdown(null);
+  }, []);
+
+  const invalidatePreview = useCallback(() => {
+    previewEpoch.current += 1;
+    setPreview(null);
+  }, []);
 
   const flash = useCallback((next: Notice) => {
     setNotice(next);
@@ -119,38 +143,42 @@ export default function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(null), 6000);
   }, []);
 
-  const refresh = useCallback(async () => {
-    try {
-      const [
-        nextStatus,
-        nextDisplays,
-        nextSettings,
-        nextPending,
-        nextHotkeys,
-        nextUpdate,
-        nextActivity,
-        nextHealth,
-      ] = await Promise.all([
-        api.getStatus(),
-        api.listDisplays(),
-        api.getSettings(),
-        api.pendingWork(),
-        api.hotkeyStatus(),
-        api.updateStatus(),
-        api.activityLog(),
-        api.healthCheck(),
-      ]);
-      setActivity(nextActivity);
-      setHealth(nextHealth);
-      setStatus(nextStatus);
-      setDisplays(nextDisplays);
-      setSettings(nextSettings);
-      setPending(nextPending);
-      setHotkeys(nextHotkeys);
-      setUpdateStatus(nextUpdate);
-    } catch (e) {
-      flash({ tone: "danger", text: errorMessage(e) });
+  const refresh = useCallback((): Promise<void> => {
+    if (!auxiliaryFlight.current) {
+      const epoch = mutationEpoch.current;
+      auxiliaryFlight.current = Promise.allSettled([
+        api.hotkeyStatus().then((value) => { if (epoch === mutationEpoch.current) setHotkeys(value); }),
+        api.updateStatus().then((value) => { if (epoch === mutationEpoch.current) setUpdateStatus(value); }),
+        api.activityLog().then((value) => { if (epoch === mutationEpoch.current) setActivity(value); }),
+        api.healthCheck().then((value) => { if (epoch === mutationEpoch.current) setHealth(value); }),
+      ]).finally(() => { auxiliaryFlight.current = null; });
     }
+    if (refreshFlight.current) {
+      refreshAgain.current = true;
+      return refreshFlight.current;
+    }
+    const flight = (async () => {
+      do {
+        refreshAgain.current = false;
+        const epoch = mutationEpoch.current;
+        const results = await Promise.allSettled([
+          api.getStatus(), api.listDisplays(), api.getSettings(), api.pendingWork(),
+        ]);
+        if (epoch !== mutationEpoch.current) {
+          refreshAgain.current = true;
+          continue;
+        }
+        const [nextStatus, nextDisplays, nextSettings, nextPending] = results;
+        if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
+        else flash({ tone: "danger", text: errorMessage(nextStatus.reason) });
+        if (nextDisplays.status === "fulfilled") setDisplays(nextDisplays.value);
+        if (nextSettings.status === "fulfilled") setSettings(nextSettings.value);
+        else flash({ tone: "danger", text: errorMessage(nextSettings.reason) });
+        if (nextPending.status === "fulfilled") setPending(nextPending.value);
+      } while (refreshAgain.current);
+    })().finally(() => { refreshFlight.current = null; });
+    refreshFlight.current = flight;
+    return flight;
   }, [flash]);
 
   // Applied during render: `t()` reads a module-level value, and an effect ran too
@@ -193,107 +221,49 @@ export default function App() {
       .catch(() => undefined);
   }, [settings?.theme]);
 
-  // Screenshots are only fetched when a surface that shows them is visible: each
-  // one is a full-screen capture and a PNG encode, and most sessions never open
-  // those pages. The guide counts as such a surface — it is where a new user
-  // picks the target display.
-  const needsThumbnails =
-    page === "displays" ||
-    page === "exclusions" ||
-    (settings !== null && !settings.onboarding_done);
+  const needsThumbnails = page === "displays" || (settings !== null && !settings.onboarding_done);
+  const topologyKey = displays.map((display) => `${display.native_id}:${display.origin_x}:${display.origin_y}:${display.width}:${display.height}`).join("|");
 
   useEffect(() => {
-    if (!needsThumbnails) return;
+    if (!needsThumbnails || !windowVisible) return;
     let cancelled = false;
+    let inFlight = false;
     const capture = async () => {
-      // Screen capture can fail - a locked session, a display that vanished mid-call -
-      // and an uncaught rejection here fired every two seconds. The cards keep the
-      // pictures they already have; a blank capture is reported by the card itself.
-      const shots = await api.displayThumbnails().catch(() => null);
-      if (cancelled || shots === null) return;
-      setThumbnails(Object.fromEntries(shots.map((s) => [s.native_id, s])));
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const shots = await api.displayThumbnails();
+        if (!cancelled) setThumbnails(Object.fromEntries(shots.map((shot) => [shot.native_id, shot])));
+      } catch {
+        if (!cancelled) setThumbnails({});
+      } finally { inFlight = false; }
     };
     captureShots.current = () => void capture();
-    // Captured on entry, then whenever the desktop says it changed.
-    //
-    // This used to poll every five seconds. Each poll is a full capture of every
-    // display plus a base64 payload over the IPC bridge, which is why the picture
-    // lagged behind the screen: it was up to five seconds old, and the round trip
-    // added to that. A capture is only stale when the screen changed, and the
-    // backend already watches the topology; it says so.
     void capture();
-    // Two seconds is a compromise: fast enough that a window opened on the host
-    // shows up while the user is still looking at the page, cheap enough that the
-    // capture does not compete with the rest of the polling. The topology event
-    // below refreshes it immediately when the displays themselves change.
-    const timer = window.setInterval(() => void capture(), 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [needsThumbnails, page, displays.length]);
+    return () => { cancelled = true; captureShots.current = () => {}; };
+  }, [needsThumbnails, windowVisible, topologyKey]);
 
-  // The list is what the user is looking at while they switch to another app and
-  // come back. Fetching only on navigation meant the newly opened app was missing
-  // until the page was left and re-entered a second time.
   useEffect(() => {
-    if (page !== "exclusions") return;
+    if (page !== "exclusions" || !windowVisible) return;
     let cancelled = false;
+    let inFlight = false;
     const load = async () => {
-      // Same reasoning as the thumbnail poll: enumeration can fail, and a rejection
-      // every five seconds is noise. Keeping the previous list is better than emptying
-      // the picker while the user is choosing from it.
-      const apps = await api.runningApplications().catch(() => null);
-      if (!cancelled && apps !== null) setRunningApps(apps);
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const apps = await api.runningApplications();
+        if (!cancelled) setRunningApps(apps);
+      } catch { /* Keep the last list when enumeration is temporarily unavailable. */ }
+      finally { inFlight = false; }
     };
     void load();
     const timer = window.setInterval(() => void load(), 5000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      if (countdownTimer.current !== null) {
-        window.clearInterval(countdownTimer.current);
-      }
-    };
-  }, [page, settings?.excluded_apps]);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [page, windowVisible, settings?.excluded_apps.join("|")]);
 
-  // A preview describes the windows as they were when it was computed. Leaving
-  // the page means the user did something else in between - switching apps,
-  // closing windows, plugging in a monitor - so the picture is stale by the time
-  // they come back. It was previously kept forever and silently disagreed with the
-  // desktop.
   useEffect(() => {
-    if (page !== "overview") setPreview(null);
-  }, [page]);
-
-  // While the plan is on screen it is recomputed on the same cadence as the rest of
-  // the overview. It is a description of which windows exist right now: leaving it
-  // frozen meant a window the user had just closed was still drawn in the picture
-  // they were using to decide whether to gather.
-  const previewShown = preview !== null;
-  useEffect(() => {
-    if (!previewShown) return;
-    let cancelled = false;
-    const timer = window.setInterval(() => {
-      // The rejection is caught, not ignored: `preview` refuses while the engine is
-      // mid-migration, and a display can be unplugged between two polls. Without this
-      // the promise rejected unhandled every four seconds and the drawing quietly
-      // stopped updating - the user saw a stale plan with nothing saying why.
-      void api
-        .preview()
-        .then((next) => {
-          if (!cancelled) setPreview(next);
-        })
-        .catch(() => {
-          // Keep the last good drawing; the next tick may succeed. Saying something
-          // here would flash a banner every four seconds during a gather.
-        });
-    }, 4000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [previewShown]);
+    invalidatePreview();
+  }, [page, topologyKey, settings?.layout_mode, settings?.margin, settings?.gap, settings?.target?.native_id, status?.target?.confirmed, settings?.excluded_apps.join("|"), invalidatePreview]);
 
   useEffect(() => {
     // The first load is done by `startPolling` below, which runs only when the
@@ -303,6 +273,8 @@ export default function App() {
     const unlistenAction = listen<{ action: string; ok: boolean; message?: string }>(
       "unfy://action",
       (event) => {
+        mutationEpoch.current += 1;
+        invalidatePreview();
         void refresh();
         if (!event.payload.ok && event.payload.message) {
           flash({ tone: "danger", text: errorMessage(event.payload.message) });
@@ -311,57 +283,25 @@ export default function App() {
     );
     const unlistenRemote = listen<{
       active: boolean;
-      evidence?: string;
+      candidate?: boolean;
+      unknown?: boolean;
+      session_id?: number;
+      evidence?: MessageDto;
       acted?: boolean;
-      applied?: number;
-      restored?: number;
+      rescued?: number;
       error?: string;
-      suppressed?: string;
     }>("unfy://remote", (event) => {
+      mutationEpoch.current += 1;
       void refresh();
-      const { active, evidence, acted, applied, restored, error, suppressed } =
-        event.payload;
-      if (suppressed === "cooldown") {
-        // Silence would look like a bug: the session was detected but nothing
-        // happened. Say why, and say that the manual button still works.
-        flash({
-          tone: "neutral",
-          text: t("检测到{evidence}，但 30 秒内已经整理过一次，这次跳过。需要时可直接点「整理到目标屏」。", { evidence: evidence ?? t("远程会话") }),
-        });
-        return;
-      }
+      const { active, evidence, acted, rescued, error } = event.payload;
+      if (active || acted || error) clearCountdown();
       if (error) {
-        flash({
-          tone: "warning",
-          text: t("自动处理失败：{message}", { message: error }),
-        });
-        return;
-      }
-      if (active && acted) {
-        flash({
-          tone: "success",
-          text: t("检测到{evidence}，已整理 {count} 个窗口。", { evidence: evidence ?? t("远程会话"), count: applied ?? 0 }),
-        });
-        return;
-      }
-      // The user told the app the remote client already shows every screen, so there is
-      // nothing hidden to gather. Say nothing: they configured this, and a flash on every
-      // remote session would be noise. Falling through to the branch below was worse than
-      // silence - it claimed "自动整理已关闭" and pointed at a switch that is already on,
-      // which is a different setting entirely.
-      if (suppressed === "all_screens") return;
-      if (active && evidence) {
-        flash({
-          tone: "neutral",
-          text: t("检测到{evidence}。自动整理已关闭，可点「整理到目标屏」。", { evidence: evidence ?? "" }),
-        });
-        return;
-      }
-      if (!active && acted) {
-        flash({
-          tone: "success",
-          text: t("远程会话已结束，已恢复 {count} 个窗口。", { count: restored ?? 0 }),
-        });
+        flash({ tone: "warning", text: t("自动处理失败：{message}", { message: errorMessage(error) }) });
+      } else if (acted) {
+        invalidatePreview();
+        flash({ tone: "success", text: t("已把 {count} 个窗口移回可见区域。", { count: rescued ?? 0 }) });
+      } else if (evidence) {
+        flash({ tone: "neutral", text: renderMessage(evidence) });
       }
     });
     const unlistenExit = listen("unfy://exit-blocked", () => {
@@ -380,68 +320,24 @@ export default function App() {
       seconds?: number;
       done?: number;
       total?: number;
-    }>(
-      "unfy://progress",
-      (event) => {
-        const phase = event.payload.phase;
-        setBusy(phase !== "done" && phase !== "waiting");
-        // A count once the engine reports one. Without it the button only says
-        // "working", which is indistinguishable from "stuck" when a single
-        // application holds the batch for a few seconds.
-        if (phase === "migrating" && (event.payload.total ?? 0) > 0) {
-          setProgress({
-            done: event.payload.done ?? 0,
-            total: event.payload.total ?? 0,
-          });
-        }
-        if (phase === "done") setProgress(null);
-        // A delayed restore is not "busy": the window is still usable and the
-        // user can cancel it by gathering. Saying "正在恢复" during the wait
-        // would be a lie, and hiding the countdown leaves the button looking dead.
-        if (phase === "waiting") {
-          // Tick the countdown locally: the backend announces the wait once, and a
-          // frozen t("5 秒后") for five seconds looks like the app has stalled.
-          const seconds = event.payload.seconds ?? 0;
-          if (countdownTimer.current !== null) {
-            window.clearInterval(countdownTimer.current);
-          }
-          // The countdown owns the notice line for its whole life, so a timer
-          // left over from the preceding message must be cancelled here: `flash`
-          // clears every notice after six seconds, and a twenty-second wait would
-          // lose its countdown at the six-second mark and show nothing at all for
-          // the remaining fourteen. That is exactly the stretch where the user is
-          // wondering whether the app noticed the disconnect.
-          if (noticeTimer.current !== null) {
-            window.clearTimeout(noticeTimer.current);
-            noticeTimer.current = null;
-          }
-          let remaining = seconds;
-          const show = () => {
-            setNotice({
-              tone: "neutral",
-              text:
-                remaining > 0
-                  ? t("{seconds} 秒后恢复布局。点「保留当前布局」可以取消。", { seconds: remaining })
-                  : t("正在恢复布局…"),
-            });
-          };
-          show();
-          countdownTimer.current = window.setInterval(() => {
-            remaining -= 1;
-            if (remaining < 0) {
-              if (countdownTimer.current !== null) {
-                window.clearInterval(countdownTimer.current);
-                countdownTimer.current = null;
-              }
-              return;
-            }
-            show();
-          }, 1000);
-          return;
-        }
-        if (phase === "done") void refresh();
-      },
-    );
+    }>("unfy://progress", (event) => {
+      const { phase, seconds, done, total } = event.payload;
+      mutationEpoch.current += 1;
+      clearCountdown();
+      if (phase === "waiting") {
+        const deadline = Date.now() + (seconds ?? 0) * 1000;
+        setRestoreCountdown(seconds ?? 0);
+        countdownTimer.current = window.setInterval(() => {
+          setRestoreCountdown(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+        }, 1000);
+      } else if (phase === "migrating" || phase === "restoring") {
+        invalidatePreview();
+        setProgress(total ? { done: done ?? 0, total } : null);
+      } else {
+        setProgress(null);
+      }
+      void refresh();
+    });
     const unlistenTopology = listen<{
       rescued: number;
       needs_regather?: boolean;
@@ -449,6 +345,8 @@ export default function App() {
     }>(
       "unfy://topology-changed",
       (event) => {
+        mutationEpoch.current += 1;
+        invalidatePreview();
         void refresh();
         // The displays just changed, so every screenshot is wrong until recaptured.
         captureShots.current();
@@ -500,12 +398,19 @@ export default function App() {
     // Hidden is not stale: the tray shows the same facts from the same engine, and
     // showing the window refreshes immediately.
     let timer: number | null = null;
+    let disposed = false;
+    let visibilityVersion = 0;
     const startPolling = () => {
+      if (disposed) return;
+      visibilityVersion += 1;
+      setWindowVisible(true);
       if (timer !== null) return;
       void refresh();
       timer = window.setInterval(() => void refresh(), 4000);
     };
     const stopPolling = () => {
+      visibilityVersion += 1;
+      setWindowVisible(false);
       if (timer === null) return;
       window.clearInterval(timer);
       timer = null;
@@ -539,14 +444,13 @@ export default function App() {
     // immediately) began polling eight commands every four seconds for a window nobody
     // had opened. The backend event cannot help here either: it fires during setup,
     // before this listener exists.
-    void api
-      .windowVisible()
-      .catch(() => true)
-      .then((visible) => {
-        if (visible) startPolling();
-      });
+    const initialVisibilityVersion = visibilityVersion;
+    void api.windowVisible().catch(() => false).then((visible) => {
+      if (!disposed && visibilityVersion === initialVisibilityVersion && visible) startPolling();
+    });
 
     return () => {
+      disposed = true;
       void unlistenAction.then((fn) => fn());
       void unlistenRemote.then((fn) => fn());
       void unlistenExit.then((fn) => fn());
@@ -563,13 +467,16 @@ export default function App() {
         window.clearInterval(countdownTimer.current);
       }
     };
-  }, [refresh, flash]);
+  }, [refresh, flash, clearCountdown, invalidatePreview]);
 
   const run = useCallback(
     async <T,>(
       action: () => Promise<T>,
       onSuccess?: (value: T) => Notice | null,
     ): Promise<T | null> => {
+      if (actionFlight.current) return null;
+      actionFlight.current = true;
+      mutationEpoch.current += 1;
       setBusy(true);
       try {
         const value = await action();
@@ -586,6 +493,8 @@ export default function App() {
         });
         return null;
       } finally {
+        actionFlight.current = false;
+        mutationEpoch.current += 1;
         setBusy(false);
         void refresh();
       }
@@ -593,20 +502,23 @@ export default function App() {
     [flash, refresh],
   );
 
-  const saveSettings = (patch: Partial<SettingsDto>) =>
+  const saveSettings = (patch: SaveSettingsRequest) =>
     run(async () => {
       const next = await api.saveSettings(patch);
       setSettings(next);
       return next;
     });
 
-  const onRestore = () =>
+  const onRestore = (transaction?: string) =>
     run(
       async () => {
-        return api.restore();
+        clearCountdown();
+        invalidatePreview();
+        return transaction ? api.restoreRecoveryTransaction(transaction) : api.restore();
       },
       (report) => {
         setPendingApps(report.pending_apps);
+        setLatestResults(report.results);
         return {
         // `awaiting_original` counts as unresolved: those windows are visible but
         // their original screen is gone, so they still owe their original position.
@@ -647,7 +559,7 @@ export default function App() {
       },
     );
 
-  if (settings && !settings.onboarding_done) {
+  if (settings && !settings.onboarding_done && !settings.migration_notice && status && !pending?.present && status.pending_windows === 0 && status.captured_windows === 0 && status.recovery_blockers === 0) {
     return (
       <Onboarding
         displays={displays}
@@ -655,7 +567,8 @@ export default function App() {
         thumbnails={thumbnails}
         busy={busy}
         onSelectTarget={async (nativeId) => {
-          await run(() => api.setTargetDisplay(nativeId));
+          const result = await run(async () => { await api.setTargetDisplay(nativeId); return true; });
+          return result === true;
         }}
         onIdentify={() =>
           void run(() => api.identifyDisplays(4), (outcome) => ({
@@ -670,14 +583,6 @@ export default function App() {
                   : t("无法显示编号，请检查屏幕状态。"),
           }))
         }
-        onSetDetect={async (level, auto) => {
-          const next = await api.saveSettings({
-            auto_detect: level,
-            auto_gather: auto,
-            auto_restore: auto,
-          });
-          setSettings(next);
-        }}
         onFinish={() =>
           void run(
             async () => {
@@ -763,7 +668,7 @@ export default function App() {
           <Status tone={status ? stateTone[state] : "neutral"}>
             {/* Before the first reply there is no state to name. Showing "ready"
                 while the app has not yet read anything is a claim it cannot make. */}
-            {status ? t(stateLabels[state]) : t("正在载入…")}
+            {status ? t(status.recovery_blockers > 0 ? "需要处理" : (status.pending_windows > 0 && state === "idle") ? "恢复记录仍待处理" : stateLabels[state]) : t("正在载入…")}
             {status?.paused ? t(" · 已暂停") : ""}
           </Status>
           {!supported ? (
@@ -808,6 +713,29 @@ export default function App() {
                 <span className="text-[var(--color-fg-soft)]">{notice.text}</span>
               </div>
             ) : null}
+            {settings?.migration_notice ? (
+              <div role="status" className="space-y-2 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
+                <p>{t("旧版主次布局已改为保留大小移入；旧版自动化已关闭。现有恢复记录保留，不会重新排列当前窗口。可在设置中重新选择已验证的连接触发。")}</p>
+                <button type="button" className="min-h-8 px-2" disabled={busy} onClick={() => void saveSettings({ dismiss_migration_notice: true })}>{t("知道了")}</button>
+              </div>
+            ) : null}
+            {restoreCountdown !== null ? (
+              <div role="status" className="space-y-2 rounded-[var(--radius-control)] border border-[var(--color-border)] p-3 text-xs">
+                <p>{t("远程连接已结束，{seconds} 秒后恢复。取消只停止本次计时，恢复记录会保留。", { seconds: restoreCountdown })}</p>
+                <button type="button" className="min-h-8 px-2" disabled={busy} onClick={() => void onRestore()}>{t("立即恢复")}</button>
+                <button type="button" className="min-h-8 px-2" disabled={busy} onClick={() => void run(async () => { await api.cancelAutoRestore(); clearCountdown(); })}>{t("取消本次自动恢复")}</button>
+              </div>
+            ) : null}
+            {/* The chip is a warning about records this run did not create. A live
+                gather also has unresolved windows - that is the layout on screen -
+                and the overview already shows it with a restore button. */}
+            {!pending?.live && ((status?.pending_windows ?? 0) > 0 || (status?.recovery_blockers ?? 0) > 0) ? (
+              <div role="status" className="flex flex-wrap items-center gap-2 text-xs">
+                <span>{t("恢复记录仍待处理")}</span>
+                <button type="button" className="min-h-8 px-2" onClick={() => { setPage("overview"); void refresh(); }}>{t("查看恢复记录")}</button>
+                <button type="button" className="min-h-8 px-2" disabled={busy} onClick={() => void onRestore()}>{t("尝试恢复")}</button>
+              </div>
+            ) : null}
 
             {status && !status.has_permission ? (
               <PermissionPrompt
@@ -824,11 +752,13 @@ export default function App() {
               />
             ) : null}
 
-            {pending?.present ? (
+            {pending && !pending.live && (pending.present || (page === "overview" && ((pending.transactions?.length ?? 0) > 0 || pending.blockers > 0))) ? (
               <PendingCard
                 pending={pending}
                 busy={busy}
                 onRestore={() => void onRestore()}
+                onRestoreTransaction={(transaction) => void onRestore(transaction)}
+                onRecheck={() => void refresh()}
                 onDismiss={() =>
                   void run(
                     () => api.dismissPendingWork(),
@@ -852,12 +782,16 @@ export default function App() {
                 refusedApps={refusedApps}
                 activity={activity}
                 progress={progress}
+                latestResults={latestResults}
                 busy={busy}
+                recoveryPending={Boolean(!pending?.live && (pending?.present || pending?.transactions?.length))}
+                onRecheck={() => void refresh()}
                 onPreview={() =>
                   void run(
                     async () => {
+                      const epoch = ++previewEpoch.current;
                       const next = await api.preview();
-                      setPreview(next);
+                      if (epoch === previewEpoch.current) setPreview(next);
                       return next;
                     },
                     (next) =>
@@ -869,9 +803,12 @@ export default function App() {
                 onMigrate={() =>
                   void run(
                     async () => {
+                      clearCountdown();
+                      invalidatePreview();
                       const result = await api.migrate();
-                      setPreview(null);
+                      invalidatePreview();
                       setRefusedApps(result.refused_apps);
+                      setLatestResults(result.results);
                       return result;
                     },
                     (result) => {
@@ -946,46 +883,10 @@ export default function App() {
                   )
                 }
                 onIdentify={() =>
-                  void run(() => api.identifyDisplays(4), (shown) => ({
-                    tone: shown ? "neutral" : "warning",
-                    text: shown
-                      ? t("已在每块屏幕上显示编号，4 秒后消失。")
-                      : t("无法显示编号，请检查屏幕状态。"),
+                  void run(() => api.identifyDisplays(4), (outcome) => ({
+                    tone: outcome === "unavailable" ? "warning" : "neutral",
+                    text: outcome === "unavailable" ? t("无法显示编号，请检查屏幕状态。") : outcome === "already_showing" ? t("编号正在显示，请对照屏幕确认。") : t("已在每块屏幕上显示编号。"),
                   }))
-                }
-                diagnosticsPreview={diagnosticsPreview}
-                onPreviewDiagnostics={() =>
-                  void (async () => {
-                    try {
-                      const text = await api.previewDiagnostics();
-                      setDiagnosticsPreview(text);
-                    } catch (e) {
-                      flash({ tone: "danger", text: errorMessage(e) });
-                    }
-                  })()
-                }
-                onExport={() =>
-                  void run(
-                    () => api.exportDiagnostics(),
-                    (result) => ({
-                      tone: "neutral",
-                      text: t("诊断包已写入 {path}（{size}）。", {
-                path: result.path,
-                size: formatBytes(result.bytes),
-              }),
-                    }),
-                  )
-                }
-                onOpenConfigDir={() =>
-                  void run(
-                    () => api.openAppFolder("config"),  // the config directory
-                    (opened) => ({
-                      tone: opened ? "neutral" : "warning",
-                      text: opened
-                        ? t("已在文件管理器中打开配置目录。")
-                        : t("无法打开配置目录。"),
-                    }),
-                  )
                 }
                 onOpenDisplays={() => setPage("displays")}
                 onDismissError={() =>
@@ -993,7 +894,7 @@ export default function App() {
                 }
                 onKeepLayout={() =>
                   void run(
-                    () => api.keepCurrentLayout(),
+                    async () => { await api.keepCurrentLayout(); clearCountdown(); invalidatePreview(); },
                     () => ({
                       tone: "neutral",
                       text: t("已保留当前布局，之后可以重新整理到目标屏。"),
@@ -1026,6 +927,8 @@ export default function App() {
                 target={status?.target ?? null}
                 thumbnails={thumbnails}
                 busy={busy}
+                hasRecovery={(status?.captured_windows ?? 0) > 0}
+                onRefreshThumbnails={() => captureShots.current()}
                 onSelect={(nativeId) =>
                   void run(
                     () => api.setTargetDisplay(nativeId),
@@ -1064,6 +967,45 @@ export default function App() {
                 health={health}
                 updateStatus={updateStatus}
                 busy={busy}
+                platform={status?.platform}
+                diagnosticsPreview={diagnosticsPreview}
+                onPreviewDiagnostics={() =>
+                  void (async () => {
+                    try {
+                      const text = await api.previewDiagnostics();
+                      setDiagnosticsPreview(text);
+                    } catch (e) {
+                      flash({ tone: "danger", text: errorMessage(e) });
+                    }
+                  })()
+                }
+                onExport={() =>
+                  void run(
+                    () => api.exportDiagnostics(),
+                    (result) => ({
+                      tone: "neutral",
+                      text: t("诊断包已写入 {path}（{size}）。", {
+                path: result.path,
+                size: formatBytes(result.bytes),
+              }),
+                    }),
+                  )
+                }
+                onOpenConfigDir={() =>
+                  void run(
+                    () => api.openAppFolder("config"),  // the config directory
+                    (opened) => ({
+                      tone: opened ? "neutral" : "warning",
+                      text: opened
+                        ? t("已在文件管理器中打开配置目录。")
+                        : t("无法打开配置目录。"),
+                    }),
+                  )
+                }
+                onInstallUpdate={() => void run(() => api.installUpdate(), (result) => ({
+                  tone: result.outcome === "failed" ? "danger" : "neutral",
+                  text: result.outcome === "installed" ? t("更新已安装，应用即将重启。") : result.outcome === "deferred" ? t("恢复记录仍待处理") : errorMessage(result.detail),
+                }))}
                 onSave={(patch) => void saveSettings(patch)}
                 onClearHistory={() =>
                   void run(
@@ -1101,7 +1043,11 @@ export default function App() {
                 }
                 onCheckUpdate={() =>
                   void run(
-                    () => api.checkUpdate(),
+                    async () => {
+                      const result = await api.checkUpdate();
+                      setUpdateStatus(await api.updateStatus().catch(() => updateStatus));
+                      return result;
+                    },
                     (result) => ({
                       tone:
                         result.outcome === "up_to_date"
@@ -1110,7 +1056,9 @@ export default function App() {
                             ? "danger"
                             : "neutral",
                       text:
-                        result.outcome === "up_to_date"
+                        result.outcome === "available"
+                          ? t("发现新版本")
+                          : result.outcome === "up_to_date"
                           ? t("当前已是最新版本。")
                           : result.outcome === "deferred"
                             ? t("新版本已下载，但当前有未完成的整理，尚未安装。恢复完成后可以再试。")

@@ -23,6 +23,7 @@ const target = (overrides: Partial<TargetDto> = {}): TargetDto => ({
   native_id: "A",
   label: "DISPLAY1",
   present: true,
+  confirmed: true,
   number: 1,
   ...overrides,
 });
@@ -72,4 +73,10 @@ describe("target state", () => {
     const state = targetState(target(), []);
     expect(state.weak).toBe(false);
   });
+});
+
+test("an unconfirmed saved identity requires attention even on an attached display", () => {
+  const state = targetState(target({ confirmed: false }), [display({ native_id: "A" })]);
+  expect(state.weak).toBe(true);
+  expect(state.gone).toBe(false);
 });

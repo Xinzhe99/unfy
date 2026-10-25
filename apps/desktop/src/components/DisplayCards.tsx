@@ -110,18 +110,10 @@ export function DisplayCards({
                       className="size-full object-contain"
                       draggable={false}
                     />
-                    {/* A black capture is a monitor that is off, on another input,
-                        or a virtual display with no client attached. Saying so
-                        distinguishes "nothing is there" from a broken preview. */}
-                    {shot.blank ? (
-                      <span className="absolute inset-x-0 bottom-0 bg-[var(--color-overlay)] px-1.5 py-0.5 text-center text-[10px] leading-tight text-[var(--color-overlay-fg)]">
-                        {t("没有画面")}
-                      </span>
-                    ) : null}
                   </>
                 ) : (
                   <div className="flex size-full items-center justify-center text-[11px] text-[var(--color-muted)]">
-                    {t("无法截取画面")}
+                    {t("暂时无法获取预览，仍可按编号选择")}
                   </div>
                 )}
                 {/* The number matches the badge flashed on the physical screen.
@@ -152,7 +144,7 @@ export function DisplayCards({
                 </div>
                 {selected ? (
                   <span className="shrink-0 text-[11px] font-medium text-[var(--color-fg-soft)]">
-                    {t("使用中")}
+                    {t(target?.confirmed ? "已选择" : "需要确认")}
                   </span>
                 ) : null}
               </div>

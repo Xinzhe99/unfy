@@ -44,7 +44,7 @@ fn backend() -> FakeBackend {
 }
 
 #[test]
-fn pause_keeps_the_layout_and_blocks_new_gathers() {
+fn pause_keeps_the_layout_and_allows_manual_actions() {
     let mut engine = Engine::new(backend(), config("pause"));
     engine.migrate(&target()).expect("migrate");
     assert_eq!(engine.captured_window_count(), 1);
@@ -54,11 +54,10 @@ fn pause_keeps_the_layout_and_blocks_new_gathers() {
     // Pausing must not move anything or discard the journal.
     assert_eq!(engine.captured_window_count(), 1);
 
-    let refused = engine.migrate(&target());
-    assert!(
-        matches!(refused, Err(unfy_domain::EngineError::Paused)),
-        "a paused engine must refuse new gathers, got {refused:?}"
-    );
+    engine
+        .gather_new(&target())
+        .expect("manual gather while paused");
+    assert!(engine.is_paused());
 
     engine.resume().expect("resume");
     assert!(!engine.is_paused());
@@ -72,6 +71,40 @@ fn pause_keeps_the_layout_and_blocks_new_gathers() {
 }
 
 #[test]
+fn a_successful_gather_is_live_and_an_adopted_one_is_not() {
+    // The banner that says "a previous gather did not finish" must not appear
+    // right after a gather that succeeded. Both states have unresolved windows;
+    // only the adopted one is a warning.
+    let mut engine = Engine::new(backend(), config("live-adopted"));
+    assert!(!engine.adopted_transaction(), "no transaction at all");
+
+    engine.migrate(&target()).expect("migrate");
+    assert_eq!(engine.unresolved_window_count(), 1);
+    assert!(
+        !engine.adopted_transaction(),
+        "the layout the user just created is not unfinished work from a crash"
+    );
+
+    // Re-opening the same journal in a fresh engine is exactly what startup does.
+    let directory = engine.config().journal_dir.clone();
+    drop(engine);
+    let mut restarted = Engine::new(backend(), config("live-adopted"));
+    restarted
+        .recover_latest(&directory)
+        .expect("adopt the journal");
+    assert_eq!(restarted.unresolved_window_count(), 1);
+    assert!(
+        restarted.adopted_transaction(),
+        "a journal read from disk was opened by another run"
+    );
+    assert!(
+        !restarted.interrupted_write(),
+        "every write in that journal got a result, so the process died after the \
+         gather finished, not in the middle of it"
+    );
+}
+
+#[test]
 fn pause_without_a_transaction_still_pauses_automation() {
     // Pause is an automation policy, not a property of a transaction. It used to
     // be a no-op without one, so the UI said "paused" while the engine kept
@@ -82,11 +115,10 @@ fn pause_without_a_transaction_still_pauses_automation() {
         engine.is_paused(),
         "pause must survive without a transaction"
     );
-    // And it must actually block a gather, which is the effect the user asked for.
-    assert!(matches!(
-        engine.migrate(&target()),
-        Err(unfy_domain::EngineError::Paused)
-    ));
+    engine
+        .migrate(&target())
+        .expect("manual gather while automation is paused");
+    assert!(engine.is_paused());
     engine.resume().expect("resume");
     assert!(!engine.is_paused());
 }

@@ -19,7 +19,7 @@
 //! a second set of semantics for the same user request.
 
 use serde::{Deserialize, Serialize};
-use unfy_domain::{Rect, Size, WindowId};
+use unfy_domain::{rescale_between, Rect, Scale, Size, WindowId};
 
 /// How windows are arranged on the target display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,7 +89,7 @@ pub struct Candidate {
     pub focused: bool,
     /// The work area of the display the window is on right now.
     pub source_work: Rect,
-    /// Effective scale of the display the window is on. `1.0` when unknown.
+    /// Effective source scale; zero denotes unknown and prevents a write plan.
     pub source_scale: f64,
     /// Whether the window is already reachable on the target display.
     pub already_on_target: bool,
@@ -126,6 +126,8 @@ pub enum Unplaced {
     NoCapacity,
     /// The window cannot be moved at all.
     NotMovable,
+    /// A source work area, rectangle or DPI scale is missing or invalid.
+    InvalidGeometry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,20 +184,41 @@ pub fn plan(
 
     match config.mode {
         LayoutMode::MoveInto => move_into(candidates, target_work, target_scale, config),
-        LayoutMode::Grid => grid_plan(candidates, target_work, config),
+        LayoutMode::Grid => {
+            let scale = if target_scale.is_finite() && target_scale > 0.0 {
+                target_scale
+            } else {
+                1.0
+            };
+            let scaled = LayoutConfig {
+                margin: (f64::from(config.margin.max(0)) * scale).round() as i32,
+                gap: (f64::from(config.gap.max(0)) * scale).round() as i32,
+                fallback_min: Size::new(
+                    (f64::from(config.fallback_min.width.max(1)) * scale).ceil() as i32,
+                    (f64::from(config.fallback_min.height.max(1)) * scale).ceil() as i32,
+                ),
+                ..*config
+            };
+            grid_plan(candidates, target_work, target_scale, &scaled)
+        }
     }
 }
 
-/// Whether a window's current rectangle is already usable on the target.
-///
-/// A window whose top-left corner is inside the work area but whose body extends
-/// far outside still counts as "not on target": the user cannot see the parts that
-/// matter. Requiring a full title bar is too strict for oversized windows, so the
-/// test is the same reachability rule the engine uses elsewhere.
+/// Whether a standard title bar is reachable in desktop units.
 pub fn is_usable_on_target(rect: Rect, work: Rect) -> bool {
-    rect.reachable_in(&work, MIN_REACHABLE.width, MIN_REACHABLE.height)
-        && rect.left >= work.left
-        && rect.top >= work.top
+    is_usable_on_target_scaled(rect, work, 1.0)
+}
+
+/// `scale` is physical pixels per logical unit on Windows; point-based
+/// backends pass 1.0. The visible patch starts at the title bar, not anywhere
+/// in the window's body. Unknown custom drag regions require backend policy.
+pub fn is_usable_on_target_scaled(rect: Rect, work: Rect, scale: f64) -> bool {
+    if !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+    let width = (f64::from(MIN_REACHABLE.width) * scale).ceil() as i32;
+    let height = (f64::from(MIN_REACHABLE.height) * scale).ceil() as i32;
+    rect.reachable_in(&work, width, height) && rect.left >= work.left && rect.top >= work.top
 }
 
 /// The default mode: move windows onto the target without rearranging them.
@@ -235,11 +258,6 @@ pub fn move_into(
     }
 
     for candidate in candidates {
-        if !candidate.can_move {
-            unplaced.push((candidate.id.clone(), Unplaced::NotMovable));
-            continue;
-        }
-
         if candidate.already_on_target {
             placements.push(Placement {
                 id: candidate.id.clone(),
@@ -249,9 +267,20 @@ pub fn move_into(
             });
             continue;
         }
+        if !candidate.can_move {
+            unplaced.push((candidate.id.clone(), Unplaced::NotMovable));
+            continue;
+        }
+        if !valid_geometry(candidate, target_scale) {
+            unplaced.push((candidate.id.clone(), Unplaced::InvalidGeometry));
+            continue;
+        }
 
         let (rect, clamped) = move_rect(candidate, target_work, target_scale, config);
-        if rect.intersection_area(&candidate.current) > 0 && !candidate.already_on_target {
+        if placements
+            .iter()
+            .any(|placed| rect.intersection_area(&placed.rect) > 0)
+        {
             // Overlap is expected and allowed; record it so the UI can explain why
             // windows are stacked instead of pretending the result is a tidy layout.
             overlapped = true;
@@ -279,98 +308,129 @@ fn move_rect(
     target_scale: f64,
     config: &LayoutConfig,
 ) -> (Rect, bool) {
-    let mut width = candidate.current.width().max(1);
-    let mut height = candidate.current.height().max(1);
+    let original_width = candidate.current.width().max(1);
+    let original_height = candidate.current.height().max(1);
+    let valid_scale = candidate.source_scale.is_finite()
+        && candidate.source_scale > 0.0
+        && target_scale.is_finite()
+        && target_scale > 0.0;
+    let ratio = if valid_scale && candidate.can_resize {
+        target_scale / candidate.source_scale
+    } else {
+        1.0
+    };
+    let mut width = (f64::from(original_width) * ratio).round().max(1.0) as i32;
+    let mut height = (f64::from(original_height) * ratio).round().max(1.0) as i32;
     let mut clamped = false;
 
-    // Apparent-size conversion first: a 1200x900 window on a 150 % display is an
-    // 800x600 window at 100 %, and the user expects it to look the same size. This
-    // is a per-window ratio of the two displays' effective scales, never the ratio
-    // of the whole desktop.
-    let source_scale = if candidate.source_scale.is_finite() && candidate.source_scale > 0.0 {
-        candidate.source_scale
-    } else {
-        1.0
-    };
-    let target_scale = if target_scale.is_finite() && target_scale > 0.0 {
-        target_scale
-    } else {
-        1.0
-    };
-    if (source_scale - target_scale).abs() > f64::EPSILON {
-        let ratio = target_scale / source_scale;
-        width = ((f64::from(width) * ratio).round() as i32).max(1);
-        height = ((f64::from(height) * ratio).round() as i32).max(1);
-    }
-
-    let minimum = candidate.min_size.filter(|m| m.width > 0 && m.height > 0);
-
-    if candidate.can_resize && (width > target_work.width() || height > target_work.height()) {
-        // One uniform factor for both axes. Using separate factors is what made a
-        // 1200x900 window become 800x600 on one axis and something else on the
-        // other, which the user reads as "it squashed my window".
-        let factor = (f64::from(target_work.width()) / f64::from(width))
-            .min(f64::from(target_work.height()) / f64::from(height));
-        let scaled_w = (f64::from(width) * factor).floor() as i32;
-        let scaled_h = (f64::from(height) * factor).floor() as i32;
-        width = scaled_w.max(1);
-        height = scaled_h.max(1);
-        clamped = true;
-    }
-
-    if let Some(min) = minimum {
-        // Never go below the window's own minimum. If the minimum itself does not
-        // fit, keep it and let the reachability clamp place it: sending an illegal
-        // size produces a rejection, not a smaller window.
-        if candidate.can_resize && (width < min.width || height < min.height) {
-            width = width.max(min.width);
-            height = height.max(min.height);
+    if candidate.can_resize {
+        let minimum = candidate.min_size.filter(|m| m.width > 0 && m.height > 0);
+        let (min_width, min_height) = minimum.map_or_else(
+            || {
+                (
+                    ((f64::from(config.fallback_min.width.max(1)) * target_scale).ceil() as i32)
+                        .min(width),
+                    ((f64::from(config.fallback_min.height.max(1)) * target_scale).ceil() as i32)
+                        .min(height),
+                )
+            },
+            |m| {
+                (
+                    (f64::from(m.width) * ratio).ceil().max(1.0) as i32,
+                    (f64::from(m.height) * ratio).ceil().max(1.0) as i32,
+                )
+            },
+        );
+        let fit = (f64::from(target_work.width()) / f64::from(width))
+            .min(f64::from(target_work.height()) / f64::from(height))
+            .min(1.0);
+        let minimum_factor = (f64::from(min_width) / f64::from(width))
+            .max(f64::from(min_height) / f64::from(height));
+        // One factor satisfies both constraints. Independent max(min) calls
+        // distort the aspect ratio and can manufacture an illegal rectangle.
+        let factor = fit.max(minimum_factor);
+        if factor != 1.0 {
+            width = (f64::from(width) * factor).ceil().max(1.0) as i32;
+            height = (f64::from(height) * factor).ceil().max(1.0) as i32;
             clamped = true;
         }
-    } else if candidate.can_resize {
-        // Unknown minimum: an existing small window must not be inflated to the
-        // planner floor. The floor only matters when shrinking.
-        let floor = config.fallback_min;
-        if clamped {
-            width = width.max(floor.width.min(target_work.width()));
-            height = height.max(floor.height.min(target_work.height()));
-        }
     }
 
-    // Relative position inside the source work area. When the source is the same
-    // as the target this is the identity, so a re-run after a topology change does
-    // not drift.
-    let (fx, fy) = if candidate.source_work.width() > 0 && candidate.source_work.height() > 0 {
-        (
-            f64::from(candidate.current.left - candidate.source_work.left)
-                / f64::from(candidate.source_work.width()),
-            f64::from(candidate.current.top - candidate.source_work.top)
-                / f64::from(candidate.source_work.height()),
-        )
-    } else {
-        (0.0, 0.0)
-    };
-
-    let left = target_work.left + (fx * f64::from(target_work.width())).round() as i32;
-    let top = target_work.top + (fy * f64::from(target_work.height())).round() as i32;
-
-    let rect = Rect::new(left, top, left + width, top + height);
-    // Clamp so the title bar stays reachable without shrinking further. A window
-    // larger than the work area is aligned to its origin rather than pushed across
-    // the neighbouring display.
+    // Map the origin using the shared source-local convention. A one-pixel
+    // probe avoids clamping the full-size rectangle before applying constraints.
+    let origin = rescale_between(
+        Rect::new(
+            candidate.current.left,
+            candidate.current.top,
+            candidate.current.left.saturating_add(1),
+            candidate.current.top.saturating_add(1),
+        ),
+        candidate.source_work,
+        Scale::IDENTITY,
+        target_work,
+        Scale::IDENTITY,
+    );
+    let rect = Rect::new(
+        origin.left,
+        origin.top,
+        origin.left.saturating_add(width),
+        origin.top.saturating_add(height),
+    );
     (rect.clamp_into(&target_work), clamped)
 }
 
-fn grid_plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig) -> Plan {
-    let mut ordered: Vec<&Candidate> = candidates.iter().collect();
-    let effective_min = |c: &Candidate| -> Size {
-        let m = c.min_size.unwrap_or(config.fallback_min);
-        Size::new(m.width.max(1), m.height.max(1))
-    };
+fn valid_geometry(candidate: &Candidate, target_scale: f64) -> bool {
+    !candidate.current.is_empty()
+        && !candidate.source_work.is_empty()
+        && candidate.source_scale.is_finite()
+        && candidate.source_scale > 0.0
+        && target_scale.is_finite()
+        && target_scale > 0.0
+}
 
+fn grid_plan(
+    candidates: &[Candidate],
+    target_work: Rect,
+    target_scale: f64,
+    config: &LayoutConfig,
+) -> Plan {
+    let mut ordered: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| c.can_move && valid_geometry(c, target_scale))
+        .collect();
+    let effective_min = |c: &Candidate| -> Size {
+        if !c.can_resize {
+            return Size::new(c.current.width().max(1), c.current.height().max(1));
+        }
+        if let Some(minimum) = c.min_size {
+            let ratio = if c.source_scale.is_finite() && c.source_scale > 0.0 {
+                target_scale / c.source_scale
+            } else {
+                1.0
+            };
+            Size::new(
+                (f64::from(minimum.width.max(1)) * ratio).ceil() as i32,
+                (f64::from(minimum.height.max(1)) * ratio).ceil() as i32,
+            )
+        } else {
+            config.fallback_min
+        }
+    };
+    let finish = |mut result: Plan| {
+        result.unplaced.extend(candidates.iter().filter_map(|c| {
+            if !c.can_move {
+                Some((c.id.clone(), Unplaced::NotMovable))
+            } else if !valid_geometry(c, target_scale) {
+                Some((c.id.clone(), Unplaced::InvalidGeometry))
+            } else {
+                None
+            }
+        }));
+        result
+    };
     let usable = inset(target_work, config.margin);
-    if usable.is_empty() || config.max_columns == 0 {
-        return Plan {
+    if ordered.is_empty() || usable.is_empty() || config.max_columns == 0 {
+        return finish(Plan {
             mode: LayoutMode::Grid,
             placements: Vec::new(),
             unplaced: ordered
@@ -378,12 +438,8 @@ fn grid_plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig)
                 .map(|c| (c.id.clone(), Unplaced::NoCapacity))
                 .collect(),
             cascaded: false,
-        };
+        });
     }
-
-    // Deterministic order: the original spatial order (top, then left, so a row
-    // keeps its left-to-right reading order on every platform), with the id as the
-    // tie-break. Focus does not reorder a grid the user asked for explicitly.
     ordered.sort_by_key(|c| {
         (
             !c.focused,
@@ -393,29 +449,27 @@ fn grid_plan(candidates: &[Candidate], target_work: Rect, config: &LayoutConfig)
             c.id.process_id,
         )
     });
-
-    let capacity = capacity(&usable, config, candidates, &effective_min);
-    if capacity == 0 || candidates.len() > capacity {
-        // The windows' own minimums do not lay out at those sizes. That is a
-        // preference, not a prohibition: `grid` ranks arrangements by how many
-        // windows they would squeeze below their own minimum and marks those places
-        // `clamped_to_min`, so it can still produce something usable. Cascade only
-        // when even the planner's floor cannot hold everyone, which is what the
-        // cascade is for.
+    let capacity = capacity(&usable, config, &ordered, &effective_min);
+    if capacity == 0 || ordered.len() > capacity {
         let floor = |_: &Candidate| config.fallback_min;
-        if crate::capacity(&usable, config, candidates, &floor) < candidates.len() {
-            return cascade(&ordered, &usable, config, &effective_min);
+        if crate::capacity(&usable, config, &ordered, &floor) < ordered.len() {
+            return finish(cascade(&ordered, &usable, config, &effective_min));
         }
     }
-
-    grid(&ordered, &usable, config, &effective_min, LayoutMode::Grid)
+    finish(grid(
+        &ordered,
+        &usable,
+        config,
+        &effective_min,
+        LayoutMode::Grid,
+    ))
 }
 
 /// How many windows fit at the minimum usable size.
 fn capacity(
     usable: &Rect,
     config: &LayoutConfig,
-    candidates: &[Candidate],
+    candidates: &[&Candidate],
     min_of: &impl Fn(&Candidate) -> Size,
 ) -> usize {
     // Use the largest minimum among the candidates: mixing sizes makes a
@@ -512,8 +566,16 @@ fn grid(
         let top = usable.top + row as i32 * (cell_h + config.gap);
 
         let min = min_of(candidate);
-        let width = cell_w.max(min.width);
-        let height = cell_h.max(min.height);
+        let width = if candidate.can_resize {
+            cell_w.max(min.width)
+        } else {
+            candidate.current.width()
+        };
+        let height = if candidate.can_resize {
+            cell_h.max(min.height)
+        } else {
+            candidate.current.height()
+        };
         let rect = Rect::new(left, top, left + width, top + height).clamp_into(usable);
 
         placements.push(Placement {
@@ -553,15 +615,23 @@ fn cascade(
             continue;
         }
         let min = min_of(candidate);
-        let width = min.width.min(usable.width());
-        let height = min.height.min(usable.height());
+        let width = if candidate.can_resize {
+            min.width
+        } else {
+            candidate.current.width()
+        };
+        let height = if candidate.can_resize {
+            min.height
+        } else {
+            candidate.current.height()
+        };
         let offset = index as i32 * step;
         let left = usable.left + offset;
         let top = usable.top + offset;
         placements.push(Placement {
             id: candidate.id.clone(),
             rect: Rect::new(left, top, left + width, top + height).clamp_into(usable),
-            clamped_to_min: false,
+            clamped_to_min: width > usable.width() || height > usable.height(),
             unchanged: false,
         });
     }
@@ -617,6 +687,7 @@ mod tests {
             native_id: n,
             process_id: 1,
             process_start: 1,
+            instance: 1,
         }
     }
 
@@ -634,6 +705,84 @@ mod tests {
         }
     }
 
+    #[test]
+    fn invalid_dpi_never_produces_a_write_plan() {
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            for config in [LayoutConfig::default(), grid_config()] {
+                let c = candidate(1, Rect::new(2000, 100, 2800, 700));
+                let result = plan(&[c], WORK, scale, &config);
+                assert!(result.placements.is_empty());
+                assert_eq!(result.unplaced, vec![(id(1), Unplaced::InvalidGeometry)]);
+            }
+        }
+    }
+    #[test]
+    fn titlebar_reachability_uses_logical_scale() {
+        let rect = Rect::new(0, 1000, 800, 1600);
+        assert!(is_usable_on_target_scaled(rect, WORK, 1.0));
+        assert!(!is_usable_on_target_scaled(rect, WORK, 1.5));
+        assert!(!is_usable_on_target_scaled(
+            Rect::new(0, -100, 800, 500),
+            WORK,
+            1.0
+        ));
+    }
+
+    #[test]
+    fn grid_never_resizes_fixed_windows_or_places_immovable_windows() {
+        let mut fixed = candidate(1, Rect::new(2000, 100, 2180, 220));
+        fixed.can_resize = false;
+        let mut immovable = candidate(2, Rect::new(2300, 100, 3000, 700));
+        immovable.can_move = false;
+        let result = plan(&[fixed, immovable], WORK, 1.0, &grid_config());
+        assert_eq!(result.placements.len(), 1);
+        assert_eq!(
+            (
+                result.placements[0].rect.width(),
+                result.placements[0].rect.height()
+            ),
+            (180, 120)
+        );
+        assert_eq!(result.unplaced, vec![(id(2), Unplaced::NotMovable)]);
+    }
+    #[test]
+    fn fixed_size_preserves_pixels_across_dpi() {
+        let mut c = candidate(1, Rect::new(2000, 100, 2600, 500));
+        c.can_resize = false;
+        c.source_scale = 1.5;
+        let result = plan(&[c], WORK, 1.0, &LayoutConfig::default());
+        assert_eq!(result.placements[0].rect.width(), 600);
+        assert_eq!(result.placements[0].rect.height(), 400);
+    }
+
+    #[test]
+    fn logical_size_converts_between_displays() {
+        let mut c = candidate(1, Rect::new(2000, 100, 3200, 1000));
+        c.source_scale = 1.5;
+        let result = plan(&[c], WORK, 1.0, &LayoutConfig::default());
+        assert_eq!(result.placements[0].rect.width(), 800);
+        assert_eq!(result.placements[0].rect.height(), 600);
+    }
+
+    #[test]
+    fn minimum_constraint_preserves_aspect_when_target_is_too_small() {
+        let mut c = candidate(1, Rect::new(2000, 100, 6000, 1100));
+        c.min_size = Some(Size::new(900, 700));
+        let result = plan(&[c], WORK, 1.0, &LayoutConfig::default());
+        let rect = result.placements[0].rect;
+        assert_eq!((rect.width(), rect.height()), (2800, 700));
+        assert!(result.placements[0].clamped_to_min);
+    }
+
+    #[test]
+    fn immovable_window_already_on_target_is_unchanged() {
+        let mut c = on_target(1).remove(0);
+        c.can_move = false;
+        let result = plan(&[c], WORK, 1.0, &LayoutConfig::default());
+        assert_eq!(result.placements.len(), 1);
+        assert!(result.placements[0].unchanged);
+        assert!(result.unplaced.is_empty());
+    }
     fn candidates(count: usize) -> Vec<Candidate> {
         (0..count)
             .map(|i| {
@@ -897,6 +1046,7 @@ mod column_choice_tests {
                     native_id: i as u64,
                     process_id: 1,
                     process_start: 1,
+                    instance: 1,
                 },
                 current: Rect::new(0, 0, 1200, 800),
                 min_size: None,

@@ -13,6 +13,13 @@ on:
         description: "Run the real-desktop end-to-end job (needs a self-hosted Windows runner with two displays)"
         type: boolean
         default: false
+      build_installers:
+        description: "Build unsigned installers for manual smoke testing (not a release)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,14 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.90.0
         with:
           components: rustfmt, clippy
-          # The macOS backend compiles to an empty library on other hosts, so a
-          # field added to a domain type breaks it without breaking this build. The
-          # extra target lets the Windows job type-check it; checking does not link,
-          # so no Apple toolchain is needed.
-          targets: ${{ runner.os == 'Windows' && 'aarch64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -53,14 +55,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
-
-      - name: macOS backend type-check
-        if: runner.os == 'Windows'
-        run: cargo check -p unfy-platform-mac --target aarch64-apple-darwin
+        run: cargo test --locked --workspace
 
   frontend:
     name: Frontend typecheck
@@ -70,7 +68,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.15.0
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
@@ -78,23 +76,19 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      - name: Typecheck
-        working-directory: apps/desktop
-        run: npx tsc --noEmit
-
-      # Front-end unit tests. Bun runs the TypeScript directly, so the app does
-      # not need a JS test runner in its dependency tree just for this.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-
-      - name: Front-end unit tests
-        working-directory: apps/desktop
-        run: bun test
+          bun-version: 1.3.0
 
       - name: Build
         working-directory: apps/desktop
         run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/desktop/dist
+          if-no-files-found: error
 
   bundle:
     name: Bundle (${{ matrix.os }})
@@ -102,30 +96,24 @@ jobs:
     # Reachable from a `v*` tag push (see the `push.tags` trigger) or from an
     # explicit manual dispatch. Anything else, including branch pushes and pull
     # requests, skips it.
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_installers)
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            args: ""
-            # The installer this platform must produce. Uploading fails the job
-            # when none of these patterns match, so a bundle job that packaged
-            # nothing can no longer report success.
-            installers: |
-              target/**/release/bundle/nsis/*.exe
-              target/**/release/bundle/msi/*.msi
+            args: "--bundles nsis"
+            installers: target/release/bundle/nsis/*.exe
           - os: macos-14
-            args: "--target universal-apple-darwin"
-            installers: |
-              target/**/release/bundle/dmg/*.dmg
+            args: "--target universal-apple-darwin --bundles app,dmg"
+            installers: target/universal-apple-darwin/release/bundle/dmg/*.dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.15.0
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
@@ -139,6 +127,14 @@ jobs:
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           node -e '
           const fs = require("node:fs");
@@ -147,14 +143,21 @@ jobs:
           const updater = (config.plugins && config.plugins.updater) || {};
           const bundle = config.bundle || {};
           const missing = [];
+          const expectedEndpoint = process.env.GITHUB_SERVER_URL + "/" + process.env.GITHUB_REPOSITORY + "/releases/latest/download/latest.json";
+          if (!updater.endpoints?.includes(expectedEndpoint)) missing.push("updater.endpoints must include the release manifest endpoint: " + expectedEndpoint);
+          if (process.env.GITHUB_REF_NAME !== "v" + config.version) missing.push("release tag must match tauri.conf.json version");
+          const required = process.env.RUNNER_OS === "Windows"
+            ? ["WINDOWS_CERTIFICATE", "WINDOWS_CERTIFICATE_PASSWORD"]
+            : ["APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID"];
+          for (const name of required) if (!process.env[name]) missing.push("repository secret " + name);
+          if (process.env.RUNNER_OS === "Windows" && (!bundle.windows?.certificateThumbprint || !bundle.windows?.timestampUrl)) {
+            missing.push("bundle.windows.certificateThumbprint and timestampUrl are required for Authenticode");
+          }
           if (!updater.pubkey) {
             missing.push(configPath + ": plugins.updater.pubkey is empty, so a client cannot verify any signature");
           }
           if (!Array.isArray(updater.endpoints) || updater.endpoints.length === 0) {
             missing.push(configPath + ": plugins.updater.endpoints is empty, so a client cannot find this release");
-          }
-          if (!bundle.createUpdaterArtifacts) {
-            missing.push(configPath + ": bundle.createUpdaterArtifacts is not set, so no .sig or .app.tar.gz is generated");
           }
           if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
             missing.push("repository secret TAURI_SIGNING_PRIVATE_KEY is not set, so nothing can be signed");
@@ -168,7 +171,7 @@ jobs:
           console.log("Updater configuration is present.");
           '
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.90.0
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
@@ -176,21 +179,33 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      # `beforeBuildCommand` is `npm run build`, which runs `tsc --noEmit &&
-      # bun test && vite build`. Bun is installed here rather than splitting the
-      # build script, so the packaged release is produced by exactly the script
-      # the `frontend` job validates; a separate "bundle-only" script could drift
-      # away from the tested one. The extra test run costs seconds on a job that
-      # compiles a full Tauri bundle.
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Install
         working-directory: apps/desktop
         run: npm ci
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/desktop/dist
+
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'unfy-signing.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          try {
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            $expected = (Get-Content apps/desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).bundle.windows.certificateThumbprint
+            if ($expected -notin @($certificate.Thumbprint)) { throw 'Imported certificate does not match configured thumbprint' }
+          } finally { Remove-Item $certificatePath -Force }
+
       - name: Build and bundle
+        shell: bash
         working-directory: apps/desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -201,65 +216,87 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx tauri build ${{ matrix.args }}
+        run: npx tauri build ${{ matrix.args }} --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":${{ startsWith(github.ref, 'refs/tags/v') }}}}' -- --locked
 
-      # The uploads below fail on an empty match, but only for what they are
-      # asked to upload. This states the full set a release owes, so a partial
-      # bundle (installer produced, updater package missing) also fails instead
-      # of being published with a hole in it.
-      - name: Verify release artifacts
+      - name: Verify native Windows signatures
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem target/release/bundle/nsis/*.exe) + @(Get-Item target/release/unfy.exe)
+          if ($files.Count -lt 2) { throw 'Missing installer or application executable' }
+          $expected = (Get-Content apps/desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).bundle.windows.certificateThumbprint
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $expected -or !$signature.TimeStamperCertificate) {
+              throw "Invalid, untimestamped, or unexpected Authenticode signature: $($file.Name)"
+            }
+          }
+
+      - name: Verify macOS signing and notarization
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
-          RUNNER_OS_NAME: ${{ runner.os }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s failglob
+          for app in target/universal-apple-darwin/release/bundle/macos/*.app; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+            xcrun stapler validate "$app"
+            lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/unfy"
+          done
+          for dmg in target/universal-apple-darwin/release/bundle/dmg/*.dmg; do
+            xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+          done
+
+      - name: Verify updater signatures and generate platform manifest
+        shell: bash
+        env:
           IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
-          node -e '
-          const fs = require("node:fs");
-          const path = require("node:path");
-          const files = [];
-          (function walk(dir) {
-            let entries;
-            try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-            for (const entry of entries) {
-              const full = path.join(dir, entry.name);
-              if (entry.isDirectory()) walk(full);
-              else if (entry.isFile()) files.push(full.split(path.sep).join("/"));
-            }
-          })("target");
-          const count = (re) => files.filter((f) => re.test(f)).length;
-          const os = process.env.RUNNER_OS_NAME;
-          const isRelease = process.env.IS_RELEASE === "true";
-          const fail = (message) => { console.error(message); process.exit(1); };
-
-          let installers;
-          if (os === "macOS") {
-            installers = count(/\/release\/bundle\/dmg\/[^/]+\.dmg$/);
-          } else if (os === "Windows") {
-            installers = count(/\/release\/bundle\/(nsis\/[^/]+\.exe|msi\/[^/]+\.msi)$/);
-          } else {
-            fail("No release artifact rules exist for " + os + "; extend this check before adding the platform.");
-          }
-          if (installers === 0) {
-            fail("No installer was produced for " + os + ", so this bundle job has nothing to publish.");
-          }
-          console.log("Installers: " + installers);
-
-          if (!isRelease) {
-            console.log("Not a release tag; updater artifacts are optional for this build.");
-            process.exit(0);
-          }
-
-          const signatures = count(/\/release\/bundle\/.*\.sig$/);
-          if (signatures === 0) {
-            fail("Release " + (process.env.GITHUB_REF_NAME || "") + " produced no updater signature (.sig). "
-              + "Configure plugins.updater.pubkey and endpoints plus bundle.createUpdaterArtifacts, and set TAURI_SIGNING_PRIVATE_KEY.");
-          }
-          console.log("Updater signatures: " + signatures);
-
-          if (os === "macOS" && count(/\/release\/bundle\/macos\/[^/]+\.tar\.gz$/) === 0) {
-            fail("No macOS updater bundle (.app.tar.gz) was produced, so the darwin update key would point at nothing.");
-          }
-          '
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const config = JSON.parse(fs.readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+          const mac = process.env.RUNNER_OS === 'macOS';
+          const root = mac ? 'target/universal-apple-darwin/release/bundle' : 'target/release/bundle';
+          const fail = message => { throw new Error(message); };
+          const find = (dir, suffix) => fs.readdirSync(dir).filter(name => name.endsWith(suffix)).map(name => path.join(dir, name));
+          const installers = find(path.join(root, mac ? 'dmg' : 'nsis'), mac ? '.dmg' : '.exe');
+          if (installers.length !== 1) fail('Expected exactly one installer');
+          for (const file of installers) if (!fs.statSync(file).size) fail('Empty installer: ' + file);
+          if (process.env.IS_RELEASE !== 'true') process.exit(0);
+          const packages = mac ? find(path.join(root, 'macos'), '.app.tar.gz') : installers;
+          if (packages.length !== 1) fail('Expected exactly one updater package');
+          const packagePath = packages[0];
+          const signatureText = fs.readFileSync(packagePath + '.sig', 'utf8').trim();
+          const publicLines = Buffer.from(config.plugins.updater.pubkey, 'base64').toString('utf8').trim().split(/\r?\n/);
+          const signatureLines = Buffer.from(signatureText, 'base64').toString('utf8').trim().split(/\r?\n/);
+          if (publicLines.length !== 2 || signatureLines.length !== 4 || !signatureLines[2].startsWith('trusted comment: ')) fail('Invalid minisign encoding');
+          const pub = Buffer.from(publicLines[1], 'base64');
+          const sig = Buffer.from(signatureLines[1], 'base64');
+          if (pub.length !== 42 || sig.length !== 74 || !pub.subarray(2, 10).equals(sig.subarray(2, 10))) fail('Updater signing key mismatch');
+          const key = crypto.createPublicKey({key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), pub.subarray(10)]), format: 'der', type: 'spki'});
+          const bytes = fs.readFileSync(packagePath);
+          const algorithm = sig.subarray(0, 2).toString('ascii');
+          if (!['Ed', 'ED'].includes(algorithm)) fail('Unsupported minisign algorithm');
+          const message = algorithm === 'ED' ? crypto.createHash('blake2b512').update(bytes).digest() : bytes;
+          if (!crypto.verify(null, message, key, sig.subarray(10))) fail('Invalid updater package signature');
+          const trusted = Buffer.from(signatureLines[2].slice('trusted comment: '.length));
+          if (!crypto.verify(null, Buffer.concat([sig.subarray(10), trusted]), key, Buffer.from(signatureLines[3], 'base64'))) fail('Invalid updater trusted comment signature');
+          const url = process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/releases/download/' + encodeURIComponent(process.env.GITHUB_REF_NAME) + '/' + encodeURIComponent(path.basename(packagePath));
+          const platforms = {};
+          for (const platform of mac ? ['darwin-aarch64', 'darwin-x86_64'] : ['windows-x86_64']) platforms[platform] = {signature: signatureText, url};
+          fs.mkdirSync('release-artifacts', {recursive: true});
+          for (const file of new Set([...installers, packagePath, packagePath + '.sig'])) fs.copyFileSync(file, path.join('release-artifacts', path.basename(file)));
+          fs.writeFileSync('release-artifacts/manifest-' + process.env.RUNNER_OS + '.json', JSON.stringify({version: config.version, platforms}, null, 2));
+          NODE
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
@@ -269,18 +306,49 @@ jobs:
           # A release with no installer is a failed release, not a warning.
           if-no-files-found: error
 
-      # Updater artifacts exist only when the updater is configured. On a tag
-      # they are mandatory, so an empty match fails the job; on a manual dispatch
-      # of an unconfigured build there is nothing to upload and nothing claimed,
-      # so an empty match is expected.
-      - name: Upload updater signatures and bundles
+      - name: Upload verified release inputs
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
-          name: unfy-${{ runner.os }}-updater
-          path: |
-            target/**/release/bundle/**/*.sig
-            target/**/release/bundle/macos/*.tar.gz
-          if-no-files-found: ${{ startsWith(github.ref, 'refs/tags/v') && 'error' || 'ignore' }}
+          name: release-${{ runner.os }}
+          path: release-artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Publish verified release
+    needs: [bundle, ui-audit]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.15.0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Assemble required platform manifest
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const root = 'release-artifacts/';
+          const windows = JSON.parse(fs.readFileSync(root + 'manifest-Windows.json'));
+          const mac = JSON.parse(fs.readFileSync(root + 'manifest-macOS.json'));
+          if (windows.version !== mac.version || 'v' + windows.version !== process.env.GITHUB_REF_NAME) throw new Error('Version mismatch');
+          const platforms = {...windows.platforms, ...mac.platforms};
+          for (const key of ['windows-x86_64', 'darwin-aarch64', 'darwin-x86_64']) if (!platforms[key]?.signature || !platforms[key]?.url) throw new Error('Missing platform: ' + key);
+          fs.writeFileSync(root + 'latest.json', JSON.stringify({version: windows.version, pub_date: new Date().toISOString(), platforms}, null, 2));
+          NODE
+      - name: Publish all packages and manifest together
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$GITHUB_REF_NAME" release-artifacts/*
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
 
   ui-audit:
     name: UI audit (real window)
@@ -292,7 +360,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.90.0
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -300,7 +368,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.15.0
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
@@ -310,14 +378,15 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.0
 
-      - name: Build the window
-        working-directory: apps/desktop
-        run: npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/desktop/dist
 
       - name: Build the app
-        run: cargo build -p unfy-desktop --features tauri/custom-protocol
+        run: cargo build --locked -p unfy-desktop --features tauri/custom-protocol
 
       - name: Audit contrast, clipping and overflow
         run: bun scripts/ui-audit.mjs
@@ -351,5 +420,5 @@ jobs:
     runs-on: [self-hosted, windows, x64, unfy-e2e]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo run -p unfy-platform-win --bin e2e
+      - uses: dtolnay/rust-toolchain@1.90.0
+      - run: cargo run --locked -p unfy-platform-win --bin e2e

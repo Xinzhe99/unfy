@@ -13,10 +13,9 @@
 //! record := len:u32le | crc32:u32le | kind:u8 | payload:json[len-1]
 //! ```
 //!
-//! `crc32` covers `kind` + `payload`, so a torn write at the tail is detected
-//! even when the length prefix itself survived. Recovery replays every record
-//! whose CRC matches and stops at the first mismatch, keeping the remainder as
-//! a `.corrupt` sidecar for diagnostics.
+//! `crc32` covers `kind` + `payload`. Recovery accepts an incomplete final
+//! record after a valid prefix, and rejects complete corrupt records. Reading
+//! recovery state never changes the file or creates diagnostic sidecars.
 //!
 //! # Why not a single JSON document
 //!
@@ -93,7 +92,7 @@ pub type Result<T, E = JournalError> = std::result::Result<T, E>;
 
 /// Current schema version. Bumped only for changes that old readers cannot
 /// interpret; the recovery path must keep reading every version it ever wrote.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// A single migration transaction on disk.
 #[derive(Debug)]
@@ -106,6 +105,10 @@ pub struct Journal {
     end: u64,
     /// Whether appended bytes still need a `sync_all` before they are trusted.
     dirty: bool,
+    closed: bool,
+    next_seq: u64,
+    intents: std::collections::HashMap<WindowId, u64>,
+    schema_version: u32,
 }
 
 /// What recovery found on disk.
@@ -139,6 +142,8 @@ pub struct RecoveredIntent {
     pub id: WindowId,
     pub target: Rect,
     pub mode: WindowMode,
+    #[serde(default)]
+    pub write_seq: u64,
 }
 
 impl RecoveredTransaction {
@@ -147,15 +152,16 @@ impl RecoveredTransaction {
     /// A transaction with no `Applied` result and no `Intent` record can be
     /// discarded without touching windows.
     pub fn may_have_moved_windows(&self) -> bool {
-        self.results.iter().any(|r| {
-            matches!(
-                r.outcome,
-                unfy_domain::WindowOutcome::Applied
-                    | unfy_domain::WindowOutcome::Restored
-                    | unfy_domain::WindowOutcome::FallbackVisible
-                    | unfy_domain::WindowOutcome::KeptUserChange
-            )
-        })
+        !self.intents.is_empty()
+            || self.results.iter().any(|r| {
+                matches!(
+                    r.outcome,
+                    unfy_domain::WindowOutcome::Applied
+                        | unfy_domain::WindowOutcome::Restored
+                        | unfy_domain::WindowOutcome::FallbackVisible
+                        | unfy_domain::WindowOutcome::KeptUserChange
+                )
+            })
     }
 
     pub fn preimage_for(&self, id: &WindowId) -> Option<&Preimage> {
@@ -168,9 +174,15 @@ impl RecoveredTransaction {
     /// behind, and it is the strongest argument for writing the intent before
     /// the platform call.
     pub fn has_unresolved_intent(&self) -> bool {
-        self.intents
-            .iter()
-            .any(|intent| !self.results.iter().any(|r| r.id == intent.id))
+        self.intents.iter().any(|intent| {
+            self.is_unresolved(&intent.id)
+                && self
+                    .results
+                    .iter()
+                    .rev()
+                    .find(|r| r.id == intent.id)
+                    .is_none_or(|result| result.outcome == unfy_domain::WindowOutcome::Unknown)
+        })
     }
 
     /// Every window that still needs an outcome: preimages minus resolutions.
@@ -231,8 +243,7 @@ impl Journal {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .open(&path)?;
 
         let mut journal = Journal {
@@ -241,6 +252,10 @@ impl Journal {
             transaction,
             end: 0,
             dirty: false,
+            closed: false,
+            next_seq: 1,
+            intents: std::collections::HashMap::new(),
+            schema_version: SCHEMA_VERSION,
         };
         journal.append(&Record::Begin {
             schema_version: SCHEMA_VERSION,
@@ -268,22 +283,31 @@ impl Journal {
     /// A torn tail is cut off so the next append starts on a record boundary.
     pub fn reopen(path: impl AsRef<Path>, transaction: Uuid) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
-
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-
-        // Walk to the last complete record so a torn tail cannot corrupt the
-        // records we append after it.
-        let mut offset = 0usize;
-        while offset < bytes.len() {
-            match Record::decode(&bytes[offset..]) {
-                Ok(Some((_, consumed))) => offset += consumed,
-                Ok(None) | Err(_) => break,
-            }
+        let recovered = recover(&path)?;
+        let Recovered::Unfinished(recovered) = recovered else {
+            return Err(JournalError::NotOpen);
+        };
+        if recovered.transaction != transaction {
+            return Err(JournalError::Corrupt {
+                offset: 0,
+                reason: "reopen transaction does not match Begin".into(),
+            });
         }
-        if offset < bytes.len() {
-            file.set_len(offset as u64)?;
+        let next_seq = recovered
+            .intents
+            .iter()
+            .map(|intent| intent.write_seq)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| JournalError::Corrupt {
+                offset: 0,
+                reason: "write sequence exhausted".into(),
+            })?;
+        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let offset = file.metadata()?.len() - recovered.truncated_bytes;
+        if recovered.truncated_bytes > 0 {
+            file.set_len(offset)?;
             file.sync_all()?;
         }
 
@@ -291,9 +315,22 @@ impl Journal {
             path,
             file,
             transaction,
-            end: offset as u64,
+            end: offset,
             dirty: false,
+            closed: false,
+            next_seq,
+            intents: recovered
+                .intents
+                .iter()
+                .map(|intent| (intent.id.clone(), intent.write_seq))
+                .collect(),
+            schema_version: recovered.schema_version,
         })
+    }
+
+    /// Older logs cannot prove the absence of a write; current logs can.
+    pub fn may_have_written(&self, id: &WindowId) -> bool {
+        self.schema_version < SCHEMA_VERSION || self.intents.contains_key(id)
     }
 
     /// Append one record to the file without forcing it to disk.
@@ -304,10 +341,14 @@ impl Journal {
     /// and the invariant only requires that *no window moves before its preimage
     /// is on disk*, not that every record is synced individually.
     fn append(&mut self, record: &Record) -> Result<()> {
+        if self.closed {
+            return Err(JournalError::AlreadyClosed(self.transaction));
+        }
         let bytes = record.encode()?;
         self.file.seek(SeekFrom::Start(self.end))?;
         self.file.write_all(&bytes)?;
         self.end += bytes.len() as u64;
+        self.file.set_len(self.end)?;
         self.dirty = true;
         Ok(())
     }
@@ -342,12 +383,20 @@ impl Journal {
     /// SetWindowPos" and "read the result" is still recoverable: recovery knows
     /// the window may have moved and to where.
     pub fn write_intent(&mut self, id: &WindowId, target: Rect, mode: WindowMode) -> Result<()> {
+        let write_seq = self.next_seq;
+        let next_seq = write_seq
+            .checked_add(1)
+            .ok_or_else(|| JournalError::Io("write sequence exhausted".into()))?;
         self.append(&Record::Intent {
             transaction: self.transaction,
             id: id.clone(),
             target,
             mode,
-        })
+            write_seq,
+        })?;
+        self.next_seq = next_seq;
+        self.intents.insert(id.clone(), write_seq);
+        Ok(())
     }
 
     /// Persist the observed outcome after the platform call and read-back.
@@ -355,6 +404,7 @@ impl Journal {
         self.append(&Record::Result {
             transaction: self.transaction,
             result: result.clone(),
+            write_seq: self.intents.get(&result.id).copied().unwrap_or(0),
         })
     }
 
@@ -377,24 +427,22 @@ impl Journal {
 
     /// Close the transaction. After this returns, recovery will treat the file
     /// as clean and the caller may delete it.
-    pub fn close(mut self) -> Result<()> {
-        self.append(&Record::Closed {
-            transaction: self.transaction,
-            closed_unix_ms: now_unix_ms(),
-        })?;
-        self.durable()?;
-        Ok(())
+    pub fn close(&mut self) -> Result<()> {
+        if !self.closed {
+            self.append(&Record::Closed {
+                transaction: self.transaction,
+                closed_unix_ms: now_unix_ms(),
+            })?;
+            self.closed = true;
+        }
+        self.durable()
     }
 
-    /// Close and delete the file. Only safe once every window is resolved.
+    /// A deletion failure is cleanup only: the durable Closed record is enough.
     pub fn close_and_remove(mut self) -> Result<()> {
-        self.append(&Record::Closed {
-            transaction: self.transaction,
-            closed_unix_ms: now_unix_ms(),
-        })?;
-        self.durable()?;
+        self.close()?;
         drop(self.file);
-        std::fs::remove_file(&self.path)?;
+        let _ = std::fs::remove_file(&self.path);
         Ok(())
     }
 
@@ -410,11 +458,11 @@ impl Journal {
 /// Anything else is `Unfinished`, including a file whose tail was torn.
 pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
     let path = path.as_ref();
-    if !path.exists() {
-        return Ok(Recovered::Clean);
-    }
-
-    let mut file = File::open(path)?;
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Recovered::Clean),
+        Err(error) => return Err(error.into()),
+    };
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
 
@@ -428,6 +476,7 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
     let mut closed = false;
     let mut truncated = 0u64;
     let mut saw_begin = false;
+    let mut last_seq = 0;
 
     while offset < bytes.len() {
         match Record::decode(&bytes[offset..]) {
@@ -461,6 +510,9 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
                                 reason: "duplicate Begin record".to_string(),
                             });
                         }
+                        if !(1..=SCHEMA_VERSION).contains(&v) {
+                            return Err(JournalError::SchemaMismatch(v));
+                        }
                         saw_begin = true;
                         transaction = Some(t);
                         schema_version = v;
@@ -476,6 +528,20 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
                             });
                         }
                         let _ = t;
+                        if preimage.visible_rect.right <= preimage.visible_rect.left
+                            || preimage.visible_rect.bottom <= preimage.visible_rect.top
+                            || preimage.display_work_area.right <= preimage.display_work_area.left
+                            || preimage.display_work_area.bottom <= preimage.display_work_area.top
+                            || !preimage.display_scale.x.is_finite()
+                            || preimage.display_scale.x <= 0.0
+                            || !preimage.display_scale.y.is_finite()
+                            || preimage.display_scale.y <= 0.0
+                        {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "invalid preimage geometry or scale".into(),
+                            });
+                        }
                         // Duplicate preimages are only legal when identical: a
                         // second, different preimage would overwrite the position
                         // the user actually started from.
@@ -496,6 +562,7 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
                         id,
                         target,
                         mode,
+                        write_seq,
                         transaction: _,
                     } => {
                         if !saw_begin {
@@ -510,16 +577,78 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
                                 reason: "Intent for a window with no preimage".to_string(),
                             });
                         }
-                        intents.push(RecoveredIntent { id, target, mode });
+                        if resolved.iter().any(|(window, _)| window == &id) {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Intent after resolution".into(),
+                            });
+                        }
+                        if write_seq > 0 {
+                            if write_seq <= last_seq {
+                                return Err(JournalError::Corrupt {
+                                    offset: offset as u64,
+                                    reason: "nonmonotonic write sequence".into(),
+                                });
+                            }
+                            last_seq = write_seq;
+                        } else if schema_version >= 3 {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "missing write sequence".into(),
+                            });
+                        }
+                        // Only the latest attempt can satisfy this window's intent.
+                        intents.retain(|intent: &RecoveredIntent| intent.id != id);
+                        results.retain(|result: &AppliedResult| result.id != id);
+                        intents.push(RecoveredIntent {
+                            id,
+                            target,
+                            mode,
+                            write_seq,
+                        });
                     }
                     Record::Result {
                         result,
+                        write_seq,
                         transaction: _,
                     } => {
                         if !saw_begin {
                             return Err(JournalError::Corrupt {
                                 offset: offset as u64,
                                 reason: "Result before Begin".to_string(),
+                            });
+                        }
+                        if !preimages.iter().any(|p| p.id == result.id)
+                            || resolved.iter().any(|(id, _)| id == &result.id)
+                        {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Result for an uncaptured or resolved window".into(),
+                            });
+                        }
+                        if write_seq
+                            != intents
+                                .iter()
+                                .find(|intent| intent.id == result.id)
+                                .map(|intent| intent.write_seq)
+                                .unwrap_or(0)
+                        {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "result does not match latest intent".into(),
+                            });
+                        }
+                        if schema_version >= 3
+                            && matches!(
+                                result.outcome,
+                                unfy_domain::WindowOutcome::Applied
+                                    | unfy_domain::WindowOutcome::Restored
+                            )
+                            && (write_seq == 0 || result.observed.is_none())
+                        {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "successful write lacks intent or observation".into(),
                             });
                         }
                         results.push(result);
@@ -541,6 +670,31 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
                                 reason: "Resolved for a window with no preimage".to_string(),
                             });
                         }
+                        if !matches!(
+                            resolution,
+                            unfy_domain::WindowOutcome::Restored
+                                | unfy_domain::WindowOutcome::Gone
+                                | unfy_domain::WindowOutcome::KeptUserChange
+                        ) {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "nonterminal resolution".into(),
+                            });
+                        }
+                        if schema_version >= 3
+                            && resolution != unfy_domain::WindowOutcome::KeptUserChange
+                            && results
+                                .iter()
+                                .rev()
+                                .find(|result| result.id == id)
+                                .is_none_or(|result| result.outcome != resolution)
+                        {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "resolution lacks a matching confirmed result".into(),
+                            });
+                        }
+                        resolved.retain(|(window, _)| window != &id);
                         resolved.push((id, resolution));
                     }
                     Record::Closed { .. } => {
@@ -556,59 +710,49 @@ pub fn recover(path: impl AsRef<Path>) -> Result<Recovered> {
                                 reason: "duplicate Closed record".to_string(),
                             });
                         }
+                        if schema_version >= 2
+                            && preimages
+                                .iter()
+                                .any(|p| !resolved.iter().any(|(id, _)| id == &p.id))
+                        {
+                            return Err(JournalError::Corrupt {
+                                offset: offset as u64,
+                                reason: "Closed with unresolved windows".into(),
+                            });
+                        }
                         closed = true;
                     }
                 }
                 offset += consumed;
             }
             Ok(None) => {
+                if !saw_begin || closed {
+                    return Err(JournalError::Corrupt {
+                        offset: offset as u64,
+                        reason: "incomplete record outside an open transaction".into(),
+                    });
+                }
                 // The buffer ends inside a record: an interrupted append. That is
                 // only a legal shape at the *tail*; everything before it parsed.
                 truncated = (bytes.len() - offset) as u64;
                 break;
             }
             Err(reason) => {
-                // A record that will not decode is either a torn append or a file
-                // that was damaged after the fact. They are distinguishable by
-                // position: a tail after a valid Begin and before Closed is the
-                // normal shape of an interrupted write, while anything before the
-                // first valid record - or after a Closed - cannot be explained by
-                // an interrupted append and must not be silently dropped.
-                if !saw_begin || closed {
-                    return Err(JournalError::Corrupt {
-                        offset: offset as u64,
-                        reason,
-                    });
-                }
-                truncated = (bytes.len() - offset) as u64;
-                break;
+                return Err(JournalError::Corrupt {
+                    offset: offset as u64,
+                    reason,
+                });
             }
         }
     }
 
-    if truncated > 0 {
-        let sidecar = path.with_extension("corrupt");
-        std::fs::write(&sidecar, &bytes[offset..])?;
-    }
-
     let Some(transaction) = transaction else {
-        // A file with no Begin is not a journal this version can interpret. It may
-        // be a partially created file (harmless) or garbage; either way it cannot
-        // describe a recovery obligation.
-        if bytes.is_empty() {
-            return Ok(Recovered::Clean);
-        }
+        // Empty or partial files are unknown recovery state, never proof of Closed.
         return Err(JournalError::Corrupt {
             offset: 0,
             reason: "no Begin record".to_string(),
         });
     };
-
-    if closed && !resolved.is_empty() {
-        // A clean close means every obligation was settled before the close; the
-        // records are kept only as history.
-        return Ok(Recovered::Clean);
-    }
 
     if closed {
         return Ok(Recovered::Clean);
@@ -630,4 +774,39 @@ fn now_unix_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_close_keeps_the_writer_retryable() {
+        let path = std::env::temp_dir().join(format!("unfy-close-{}.journal", Uuid::new_v4()));
+        let mut journal = Journal::begin(&path, "close retry").unwrap();
+        journal.file = File::open(&path).unwrap();
+        assert!(journal.close().is_err());
+        assert!(matches!(recover(&path).unwrap(), Recovered::Unfinished(_)));
+        journal.file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        journal.close().unwrap();
+        assert_eq!(recover(&path).unwrap(), Recovered::Clean);
+        assert!(journal
+            .write_intent(
+                &WindowId {
+                    native_id: 1,
+                    process_id: 1,
+                    process_start: 1,
+                    instance: 1
+                },
+                Rect::new(0, 0, 100, 100),
+                WindowMode::Normal
+            )
+            .is_err());
+        drop(journal);
+        std::fs::remove_file(path).unwrap();
+    }
 }

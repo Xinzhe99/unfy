@@ -1,3 +1,4 @@
+import { useEffect, useId, useState } from "react";
 import { t } from "../i18n";
 import { targetState } from "../lib/target";
 import { commitNumber } from "../lib/numeric";
@@ -9,10 +10,8 @@ import { Button, Card, Segmented, SettingRow } from "../components/ui";
 /**
  * Displays page.
  *
- * The picker shows a live screenshot of each monitor: a resolution list cannot
- * distinguish two identical panels, and the whole task is "which screen is the
- * remote showing". Nothing on this page moves a window — choosing a target only
- * persists an identity.
+ * Selecting a target during a gather requires confirmation because it moves
+ * already gathered windows while keeping their original recovery positions.
  */
 export function DisplaysPage({
   displays,
@@ -23,6 +22,8 @@ export function DisplaysPage({
   onSelect,
   onIdentify,
   onSave,
+  hasRecovery = false,
+  onRefreshThumbnails,
 }: {
   displays: DisplayDto[];
   settings: SettingsDto | null;
@@ -33,7 +34,11 @@ export function DisplaysPage({
   onIdentify: () => void;
   /** Advance the target to the next display, keeping the original baseline. */
   onSave: (patch: Partial<SettingsDto>) => void;
+  hasRecovery?: boolean;
+  onRefreshThumbnails?: () => void;
 }) {
+  const [proposedTarget, setProposedTarget] = useState<string | null>(null);
+  useEffect(() => { setProposedTarget(null); }, [target?.native_id, hasRecovery]);
   if (!settings) {
     return <p className="text-xs text-[var(--color-muted)]">{t("正在读取设置…")}</p>;
   }
@@ -50,6 +55,7 @@ export function DisplaysPage({
         aside={
           <div className="flex gap-1.5">
             <Button size="sm" onClick={onIdentify} disabled={busy}>{t("在屏幕上显示编号")}</Button>
+            <Button size="sm" onClick={onRefreshThumbnails} disabled={busy}>{t("刷新画面")}</Button>
           </div>
         }
       >
@@ -57,17 +63,28 @@ export function DisplaysPage({
           displays={displays}
           target={target}
           thumbnails={thumbnails}
-          onSelect={onSelect}
+          onSelect={(nativeId) => {
+            if (nativeId === target?.native_id && target.confirmed) return;
+            if (hasRecovery) setProposedTarget(nativeId);
+            else onSelect(nativeId);
+          }}
           disabled={busy}
         />
-        <p className="mt-2.5 text-[11px] leading-relaxed text-[var(--color-muted)]">{t("卡片上的数字与「在屏幕上显示编号」时出现的一致，用远程画面里的数字对照即可。")}</p>
+        {proposedTarget ? (
+          <div role="alertdialog" aria-label={t("更换目标显示器")} className="mt-3 space-y-2">
+            <p className="text-xs">{t("将已整理的窗口移到显示器 {number}，并保留最初的恢复位置。", { number: displays.find((display) => display.native_id === proposedTarget)?.number ?? "—" })}</p>
+            <Button autoFocus onClick={() => setProposedTarget(null)}>{t("取消")}</Button>
+            <Button disabled={busy || !displays.some((display) => display.native_id === proposedTarget)} onClick={() => { onSelect(proposedTarget); setProposedTarget(null); }}>{t("移到这块屏")}</Button>
+          </div>
+        ) : null}
+        <p className="mt-2.5 text-xs text-[var(--color-muted)]">{t("卡片显示 Unfy 编号，与屏幕上的编号一致。截图不可用时仍可按编号选择。")}</p>
         {targetGone ? (
           <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-warning)]">
             {t("保存的目标显示器已断开。在下面重新选择一块屏；确认之前 Unfy 不会搬动窗口。")}
           </p>
         ) : null}
-        {targetWeak ? (
-          <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-warning)]">{t("这块显示器的身份只能靠分辨率识别，恢复时会放回可见区域，而不是精确的原位置。")}</p>
+        {targetWeak && !target?.confirmed ? (
+          <p className="mt-2 text-xs text-[var(--color-warning)]">{t("这块显示器需要在当前桌面重新确认。请点击对应卡片；确认前不会整理窗口。")}</p>
         ) : null}
       </Card>
 
@@ -96,6 +113,7 @@ export function DisplaysPage({
 
             <SettingRow label={t("边距")} hint={t("窗口与屏幕边缘的距离")}>
               <NumberInput
+                label={t("边距")}
                 value={settings.margin}
                 min={0}
                 max={200}
@@ -109,6 +127,7 @@ export function DisplaysPage({
 
             <SettingRow label={t("窗口间距")} hint={t("相邻窗口之间的距离")}>
               <NumberInput
+                label={t("窗口间距")}
                 value={settings.gap}
                 min={0}
                 max={200}
@@ -136,8 +155,9 @@ function layoutDescription(mode: SettingsDto["layout_mode"]): string {
   }
 }
 
-function NumberInput({
+export function NumberInput({
   value,
+  label,
   min,
   max,
   suffix,
@@ -145,24 +165,25 @@ function NumberInput({
   onCommit,
 }: {
   value: number;
+  label: string;
   min: number;
   max: number;
   suffix: string;
   disabled: boolean;
   onCommit: (value: number) => void;
 }) {
-  // Commit on blur, not per keystroke: each save rewrites the file, so typing "20"
-  // would otherwise persist "2" first.
-  //
-  // The committed value is clamped, so the field has to show the clamped number:
-  // it used to keep whatever was typed, and typing 999 left "999" on screen while
-  // the setting held 200. Nothing else corrected it until the page was reloaded, so
-  // the number the user was looking at was not the number in effect.
+  const id = useId();
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => { setDraft(String(value)); }, [value]);
   return (
     <div className="flex items-center gap-1.5">
+      <label htmlFor={id} className="sr-only">{label}</label>
       <input
         type="number"
-        defaultValue={value}
+        id={id}
+        aria-label={label}
+        value={draft}
+        onChange={(event) => setDraft(event.currentTarget.value)}
         min={min}
         max={max}
         disabled={disabled}
@@ -170,7 +191,7 @@ function NumberInput({
           const commit = commitNumber(event.currentTarget.value, value, min, max);
           // Always write back, even when nothing changed: an empty or malformed
           // field would otherwise stay blank while a real value is in effect.
-          event.currentTarget.value = commit.display;
+          setDraft(String(value));
           if (commit.changed) onCommit(commit.value);
         }}
         className="h-7 w-16 rounded-[var(--radius-control)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 text-right text-xs tabular-nums outline-none focus:border-[var(--color-accent)]"

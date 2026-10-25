@@ -63,33 +63,25 @@ fn main() {
         .iter()
         .filter(|w| w.snapshot.mode == WindowMode::Minimized)
         .count();
-    let candidates: Vec<_> = raw
-        .iter()
-        .filter(|w| {
-            w.style_flags.visible
-                && !w.style_flags.tool_window
-                && !w.style_flags.cloaked
-                && w.snapshot.mode != WindowMode::Minimized
-                && w.owner.is_none()
-        })
-        .collect();
+    let candidates = windows.enumerate().expect("product inventory");
 
     println!(
         "\nwindows: {} total | visible={visible} tool={tool} cloaked={cloaked} owned={owned} minimized={minimized}",
         raw.len()
     );
-    println!("candidates after filters: {}", candidates.len());
-    for w in candidates.iter().take(8) {
-        let (l, t, r, b) = w.snapshot.border_inset();
+    println!("application inventory: {}", candidates.len());
+    for snapshot in candidates.iter().take(8) {
+        let (l, t, r, b) = snapshot.border_inset();
         println!(
-            "  hwnd={:#x} pid={} mode={:?} visible={}x{}+{}+{} inset=({l},{t},{r},{b})",
-            w.snapshot.id.native_id,
-            w.snapshot.id.process_id,
-            w.snapshot.mode,
-            w.snapshot.visible_rect.width(),
-            w.snapshot.visible_rect.height(),
-            w.snapshot.visible_rect.left,
-            w.snapshot.visible_rect.top,
+            "  hwnd={:#x} pid={} mode={:?} eligibility={:?} visible={}x{}+{}+{} inset=({l},{t},{r},{b})",
+            snapshot.id.native_id,
+            snapshot.id.process_id,
+            snapshot.mode,
+            windows.eligibility(&snapshot.id),
+            snapshot.visible_rect.width(),
+            snapshot.visible_rect.height(),
+            snapshot.visible_rect.left,
+            snapshot.visible_rect.top,
         );
     }
 
@@ -175,6 +167,7 @@ fn cross_process_move(displays: &WinDisplays, windows: &WinWindows) {
     let plan = WindowPlan {
         visible_rect: plan_rect,
         mode: WindowMode::Normal,
+        resize: true,
     };
     println!("  requested: {plan_rect:?}");
 
@@ -209,6 +202,7 @@ fn cross_process_move(displays: &WinDisplays, windows: &WinWindows) {
             let restore = WindowPlan {
                 visible_rect: snapshot.visible_rect,
                 mode: snapshot.mode,
+                resize: true,
             };
             let restored = windows
                 .apply(&snapshot.id, &restore)

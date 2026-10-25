@@ -10,7 +10,7 @@
 //! 2. Intent on disk **before** the platform call, so a crash between the call
 //!    and the read-back is still recoverable.
 //! 3. Result on disk after the read-back, whether it succeeded or not.
-//! 4. Restore before any new migration, before updating, before exit.
+//! 4. Keep the first preimage until a durable resolution and Closed record.
 //! 5. A read (preview, status) never mutates engine state.
 //!
 //! # Why the engine is generic
@@ -241,6 +241,13 @@ struct Transaction {
     /// The rectangle and mode each window was last placed at by us, used to tell
     /// a user move apart from our own write.
     last_applied: HashMap<WindowId, ObservedWindow>,
+    pending_writes: HashMap<WindowId, WindowPlan>,
+    /// Read back from disk at startup rather than opened by this process.
+    ///
+    /// The distinction is the whole difference between "a previous run crashed and
+    /// left windows displaced" and "the layout the user is looking at right now".
+    /// Both have unresolved preimages; only the first one is a warning.
+    adopted: bool,
 }
 
 /// What `classify` decided about one enumerated window.
@@ -319,6 +326,29 @@ impl<B: Backend> Engine<B> {
             .count()
     }
 
+    /// Whether the current transaction was read from disk at startup.
+    ///
+    /// Callers that surface "unfinished work" must ask this: the live transaction
+    /// of a gather that just succeeded also has unresolved preimages, and warning
+    /// about it is the difference between "the app crashed" and "the app is doing
+    /// what you asked".
+    pub fn adopted_transaction(&self) -> bool {
+        self.transaction.as_ref().is_some_and(|t| t.adopted)
+    }
+
+    /// Whether the adopted transaction stopped in the middle of a write.
+    ///
+    /// This is the precise crash signal. A journal whose windows were all written
+    /// and observed is a layout the user closed the app on - normal, expected, and
+    /// not something to warn about. A journal with an intent that never got a
+    /// result means the process died between submitting a move and reading it
+    /// back, so a window may be somewhere nobody chose.
+    pub fn interrupted_write(&self) -> bool {
+        self.transaction
+            .as_ref()
+            .is_some_and(|t| t.adopted && !t.pending_writes.is_empty())
+    }
+
     /// The transaction this engine currently owns, if any.
     pub fn current_transaction(&self) -> Option<uuid::Uuid> {
         self.transaction.as_ref().map(|t| t.id)
@@ -331,13 +361,8 @@ impl<B: Backend> Engine<B> {
             .iter()
             .map(|d| {
                 format!(
-                    "{}|{}x{}@{},{}|{:.3}",
-                    d.key.native_id,
-                    d.work_area.width(),
-                    d.work_area.height(),
-                    d.work_area.left,
-                    d.work_area.top,
-                    d.scale.x
+                    "{}|{:?}|{:?}|{:?}|{:?}|{}",
+                    d.key.native_id, d.key.quality, d.bounds, d.work_area, d.scale, d.primary
                 )
             })
             .collect();
@@ -377,9 +402,6 @@ impl<B: Backend> Engine<B> {
             return Ok(());
         }
         self.paused = false;
-        if self.transaction.is_some() && self.state != EngineState::Degraded {
-            self.state = EngineState::Active;
-        }
         tracing::info!(state = ?self.state, "engine resumed");
         Ok(())
     }
@@ -395,6 +417,9 @@ impl<B: Backend> Engine<B> {
     /// already put back must not be moved again because the process restarted.
     pub fn recover(&mut self, path: impl AsRef<std::path::Path>) -> Result<Recovered, EngineError> {
         let path = path.as_ref();
+        if self.transaction.is_some() {
+            return Err(EngineError::TransactionAlreadyOpen);
+        }
         let recovered = match unfy_journal::recover(path) {
             Ok(recovered) => recovered,
             Err(e) => {
@@ -407,14 +432,7 @@ impl<B: Backend> Engine<B> {
             return Ok(recovered);
         };
 
-        if !tx.has_open_obligation() {
-            // Every captured window already reached a terminal state. The file is
-            // only history; remove it so the next launch does not report work that
-            // no longer exists.
-            std::fs::remove_file(path).ok();
-            self.state = EngineState::Idle;
-            return Ok(Recovered::Clean);
-        }
+        // Even an empty or fully resolved transaction needs a durable Closed.
 
         let journal = match Journal::reopen(path, tx.transaction) {
             Ok(journal) => journal,
@@ -433,8 +451,57 @@ impl<B: Backend> Engine<B> {
         self.transaction = Some(Transaction {
             id: tx.transaction,
             journal,
-            last_applied: HashMap::new(),
+            adopted: true,
+            last_applied: tx
+                .results
+                .iter()
+                .filter(|result| result.outcome != WindowOutcome::Unknown)
+                .filter_map(|result| {
+                    result.observed.map(|observed| {
+                        (
+                            result.id.clone(),
+                            ObservedWindow {
+                                visible_rect: observed.visible_rect,
+                                mode: observed.mode,
+                            },
+                        )
+                    })
+                })
+                .collect(),
+            pending_writes: tx
+                .intents
+                .iter()
+                .filter(|intent| {
+                    tx.is_unresolved(&intent.id)
+                        && tx
+                            .results
+                            .iter()
+                            .rev()
+                            .find(|result| result.id == intent.id)
+                            .is_none_or(|result| result.outcome == WindowOutcome::Unknown)
+                })
+                .map(|intent| {
+                    (
+                        intent.id.clone(),
+                        WindowPlan {
+                            visible_rect: intent.target,
+                            mode: intent.mode,
+                            resize: true,
+                        },
+                    )
+                })
+                .collect(),
         });
+        self.outcomes = tx
+            .results
+            .iter()
+            .map(|r| (r.id.clone(), r.outcome))
+            .collect();
+        if !tx.has_open_obligation() {
+            self.close_transaction()?;
+            self.state = EngineState::Idle;
+            return Ok(Recovered::Clean);
+        }
         self.state = EngineState::Degraded;
 
         tracing::warn!(
@@ -458,8 +525,19 @@ impl<B: Backend> Engine<B> {
         dir: impl AsRef<std::path::Path>,
     ) -> Result<Option<uuid::Uuid>, EngineError> {
         let dir = dir.as_ref();
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return Ok(None);
+        if self.transaction.is_some() {
+            return Err(EngineError::TransactionAlreadyOpen);
+        }
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.state = EngineState::Idle;
+                return Ok(None);
+            }
+            Err(error) => {
+                self.state = EngineState::Error;
+                return Err(EngineError::JournalCorrupt(error.to_string()));
+            }
         };
 
         // Examine every journal. A file is never deleted because a newer one
@@ -467,40 +545,61 @@ impl<B: Backend> Engine<B> {
         // and the modification time says nothing about whether their obligations
         // were settled. Deleting a superseded journal was the reason a crashed
         // gather could silently lose the only record of where its windows were.
-        let mut unfinished: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+        let mut unfinished: Vec<PathBuf> = Vec::new();
         let mut failures = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "journal") {
-                continue;
-            }
-            match unfy_journal::recover(&path) {
-                Ok(Recovered::Clean) => {
-                    if std::fs::metadata(&path)
-                        .map(|m| m.len() > 0)
-                        .unwrap_or(false)
-                    {
-                        if let Err(e) = std::fs::remove_file(&path) {
-                            tracing::warn!(
-                                path = %path.display(),
-                                error = %e,
-                                "could not remove a closed journal"
-                            );
-                        }
-                    }
-                }
-                Ok(Recovered::Unfinished(tx)) => {
-                    if !tx.has_open_obligation() {
-                        std::fs::remove_file(&path).ok();
+        let mut directories = vec![entries];
+        while let Some(entries) = directories.pop() {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        failures.push(error.to_string());
                         continue;
                     }
-                    let at = entry
-                        .metadata()
-                        .and_then(|m| m.modified())
-                        .unwrap_or(std::time::UNIX_EPOCH);
-                    unfinished.push((at, path));
+                };
+                let path = entry.path();
+                match entry.file_type() {
+                    Ok(kind) if kind.is_dir() => {
+                        match std::fs::read_dir(&path) {
+                            Ok(entries) => directories.push(entries),
+                            Err(error) => failures.push(format!("{}: {error}", path.display())),
+                        }
+                        continue;
+                    }
+                    Ok(kind) if kind.is_symlink() => {
+                        failures.push(format!(
+                            "{}: journal symlink requires review",
+                            path.display()
+                        ));
+                        continue;
+                    }
+                    Err(error) => {
+                        failures.push(error.to_string());
+                        continue;
+                    }
+                    _ => {}
                 }
-                Err(e) => failures.push(format!("{}: {e}", path.display())),
+                if path.extension().is_none_or(|e| e != "journal") {
+                    continue;
+                }
+                match unfy_journal::recover(&path) {
+                    Ok(Recovered::Clean) => {
+                        if std::fs::metadata(&path)
+                            .map(|m| m.len() > 0)
+                            .unwrap_or(false)
+                        {
+                            if let Err(e) = std::fs::remove_file(&path) {
+                                tracing::warn!(
+                                    path = %path.display(),
+                                    error = %e,
+                                    "could not remove a closed journal"
+                                );
+                            }
+                        }
+                    }
+                    Ok(Recovered::Unfinished(_)) => unfinished.push(path),
+                    Err(e) => failures.push(format!("{}: {e}", path.display())),
+                }
             }
         }
 
@@ -509,18 +608,19 @@ impl<B: Backend> Engine<B> {
             return Err(EngineError::JournalCorrupt(failures.join("; ")));
         }
 
-        unfinished.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
-        let Some((_, newest)) = unfinished.first().cloned() else {
+        if unfinished.len() > 1 {
+            self.state = EngineState::Error;
+            return Err(EngineError::JournalCorrupt(
+                "multiple unfinished transactions require individual recovery review".into(),
+            ));
+        }
+        let Some(path) = unfinished.first() else {
+            if self.state == EngineState::Error {
+                self.state = EngineState::Idle;
+            }
             return Ok(None);
         };
-        if unfinished.len() > 1 {
-            tracing::warn!(
-                count = unfinished.len() - 1,
-                "more than one unfinished journal; the others are kept and will be adopted on a later launch"
-            );
-        }
-
-        match self.recover(&newest)? {
+        match self.recover(path)? {
             Recovered::Unfinished(tx) => Ok(Some(tx.transaction)),
             Recovered::Clean => Ok(None),
         }
@@ -546,6 +646,11 @@ impl<B: Backend> Engine<B> {
             .find(|d| &d.key == target)
             .cloned()
             .ok_or(EngineError::TargetDisplayMissing)?;
+        if !valid_display_geometry(&target_display) {
+            return Err(EngineError::Platform(
+                "target geometry or scale is unavailable".into(),
+            ));
+        }
 
         let windows = self
             .backend
@@ -555,10 +660,14 @@ impl<B: Backend> Engine<B> {
         let mut eligible = Vec::new();
         let mut skipped = Vec::new();
         let mut candidates = Vec::new();
+        let mut maximized = std::collections::HashSet::new();
         for window in windows {
             match self.classify(&window, &displays, target) {
                 Ok(Some(classified)) => {
                     let on_target = classified.display.key == *target;
+                    if classified.snapshot.mode == WindowMode::Maximized {
+                        maximized.insert(classified.snapshot.id.clone());
+                    }
                     candidates.push(Candidate {
                         id: classified.snapshot.id.clone(),
                         current: classified.snapshot.visible_rect,
@@ -567,9 +676,10 @@ impl<B: Backend> Engine<B> {
                         source_work: classified.display.work_area,
                         source_scale: classified.display.scale.x,
                         already_on_target: on_target
-                            && unfy_layout::is_usable_on_target(
+                            && unfy_layout::is_usable_on_target_scaled(
                                 classified.snapshot.visible_rect,
                                 target_display.work_area,
+                                target_display.scale.x,
                             ),
                         can_resize: classified.capabilities.can_resize,
                         can_move: classified.capabilities.can_move,
@@ -585,12 +695,19 @@ impl<B: Backend> Engine<B> {
             }
         }
 
-        let plan = unfy_layout::plan(
+        let mut plan = unfy_layout::plan(
             &candidates,
             target_display.work_area,
             target_display.scale.x,
             &self.config.layout,
         );
+        if self.config.layout.mode == unfy_layout::LayoutMode::MoveInto {
+            for placement in &mut plan.placements {
+                if !placement.unchanged && maximized.contains(&placement.id) {
+                    placement.rect = target_display.work_area;
+                }
+            }
+        }
 
         Ok(Preview {
             target: target.clone(),
@@ -608,8 +725,11 @@ impl<B: Backend> Engine<B> {
         &self,
         window: &WindowSnapshot,
         displays: &[DisplaySnapshot],
-        target: &DisplayKey,
+        _target: &DisplayKey,
     ) -> Result<Option<Classified>, SkipReason> {
+        if let Some(reason) = self.backend.eligibility(&window.id) {
+            return Err(reason);
+        }
         if self.is_excluded(window) {
             return Err(SkipReason::ExcludedApp);
         }
@@ -630,16 +750,28 @@ impl<B: Backend> Engine<B> {
         // backend cannot fill that field during enumeration without a second
         // round trip per window, and a stale value would make "already on target"
         // wrong in both directions.
+        let assigned = self.backend.display_for(&window.id).ok();
         let display = displays
             .iter()
-            .max_by_key(|d| d.bounds.intersection_area(&window.visible_rect))
+            .max_by(|a, b| {
+                a.bounds
+                    .intersection_area(&window.visible_rect)
+                    .cmp(&b.bounds.intersection_area(&window.visible_rect))
+                    .then_with(|| b.key.native_id.cmp(&a.key.native_id))
+            })
             .filter(|d| d.bounds.intersection_area(&window.visible_rect) > 0)
             .or_else(|| {
                 displays
                     .iter()
-                    .find(|d| d.key == window.display || d.key == *target)
+                    .find(|d| assigned.as_ref() == Some(&d.key) || d.key == window.display)
             })
             .ok_or(SkipReason::Invisible)?;
+        if !valid_display_geometry(display)
+            || window.visible_rect.right <= window.visible_rect.left
+            || window.visible_rect.bottom <= window.visible_rect.top
+        {
+            return Err(SkipReason::GeometryUnknown);
+        }
 
         Ok(Some(Classified {
             snapshot: window.clone(),
@@ -652,13 +784,13 @@ impl<B: Backend> Engine<B> {
 
     /// Move every eligible window onto `target`, starting a new transaction.
     pub fn migrate(&mut self, target: &DisplayKey) -> Result<MigrationReport, EngineError> {
-        self.gather(target, false)
+        self.gather(target, false, false)
     }
 
     /// Bring newly appeared windows into an existing transaction, keeping every
     /// first preimage already captured.
     pub fn gather_new(&mut self, target: &DisplayKey) -> Result<MigrationReport, EngineError> {
-        self.gather(target, true)
+        self.gather(target, true, false)
     }
 
     /// Re-plan the captured windows onto a different target.
@@ -671,11 +803,11 @@ impl<B: Backend> Engine<B> {
     pub fn retarget(&mut self, target: &DisplayKey) -> Result<RetargetReport, EngineError> {
         if self.transaction.is_none() {
             return Ok(RetargetReport {
-                migration: self.gather(target, false)?,
+                migration: self.gather(target, false, false)?,
             });
         }
         Ok(RetargetReport {
-            migration: self.gather(target, true)?,
+            migration: self.gather(target, true, true)?,
         })
     }
 
@@ -683,6 +815,7 @@ impl<B: Backend> Engine<B> {
         &mut self,
         target: &DisplayKey,
         allow_existing: bool,
+        retarget: bool,
     ) -> Result<MigrationReport, EngineError> {
         if self.state.may_write() {
             return Err(EngineError::InvalidTransition { from: self.state });
@@ -690,8 +823,17 @@ impl<B: Backend> Engine<B> {
         if self.state == EngineState::Error {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
-        if self.paused {
-            return Err(EngineError::Paused);
+        if self
+            .transaction
+            .as_ref()
+            .is_some_and(|tx| !tx.pending_writes.is_empty())
+        {
+            return Err(EngineError::InvalidTransition { from: self.state });
+        }
+        if self.preimages.keys().any(|id| {
+            !self.resolved.contains_key(id) && (id.instance == 0 || id.process_start == 0)
+        }) {
+            return Err(EngineError::InvalidTransition { from: self.state });
         }
         if !allow_existing && self.transaction.is_some() {
             return Err(EngineError::TransactionAlreadyOpen);
@@ -702,7 +844,24 @@ impl<B: Backend> Engine<B> {
         // gather is not.
 
         let t0 = std::time::Instant::now();
+        let planned_topology = self
+            .topology_signature()
+            .ok_or_else(|| EngineError::Platform("topology unavailable".into()))?;
         let preview = self.build_preview(target)?;
+        let target_work = self
+            .backend
+            .topology()
+            .map_err(|error| EngineError::Platform(error.to_string()))?
+            .into_iter()
+            .find(|display| &display.key == target)
+            .ok_or(EngineError::TargetDisplayMissing)?
+            .work_area;
+        if self.topology_signature().as_ref() != Some(&planned_topology) {
+            return Err(EngineError::Platform(
+                "topology changed while planning".into(),
+            ));
+        }
+        self.outcomes.clear();
         let t_preview = t0.elapsed().as_millis();
 
         let mut unplaced: Vec<WindowId> = preview
@@ -719,7 +878,11 @@ impl<B: Backend> Engine<B> {
             .plan
             .placements
             .iter()
-            .filter(|p| !p.unchanged)
+            .filter(|p| {
+                !p.unchanged
+                    && !self.resolved.contains_key(&p.id)
+                    && (retarget || !self.preimages.contains_key(&p.id))
+            })
             .cloned()
             .collect();
         let unchanged = preview.plan.placements.len() - placements.len();
@@ -771,7 +934,9 @@ impl<B: Backend> Engine<B> {
             self.transaction = Some(Transaction {
                 id: journal.transaction(),
                 journal,
+                adopted: false,
                 last_applied: HashMap::new(),
+                pending_writes: HashMap::new(),
             });
             started_here = true;
         }
@@ -818,9 +983,7 @@ impl<B: Backend> Engine<B> {
         // we may have just created and report honestly.
         if self.preimages.is_empty() {
             if started_here {
-                if let Some(transaction) = self.transaction.take() {
-                    let _ = transaction.journal.close_and_remove();
-                }
+                self.close_transaction()?;
                 self.state = EngineState::Idle;
             }
             return Ok(MigrationReport {
@@ -843,88 +1006,112 @@ impl<B: Backend> Engine<B> {
             .collect();
 
         let mut applied = Vec::new();
-        let mut settling: Vec<(WindowId, WindowPlan)> = Vec::new();
 
         const BATCH: usize = 16;
         let mut next = 0usize;
         while next < prepared.len() {
             let end = (next + BATCH).min(prepared.len());
             let batch = &prepared[next..end];
+            let mut submitted = Vec::with_capacity(batch.len());
 
-            let mut wrote_all = true;
-            if let Some(transaction) = self.transaction.as_mut() {
-                for placement in batch {
-                    let mode = self
-                        .preimages
-                        .get(&placement.id)
-                        .map(|p| p.mode)
-                        .unwrap_or(WindowMode::Normal);
-                    if transaction
-                        .journal
-                        .write_intent(&placement.id, placement.rect, mode)
-                        .is_err()
-                    {
-                        wrote_all = false;
-                        break;
+            let plans: Vec<_> = batch
+                .iter()
+                .map(|placement| {
+                    let mode = if self.config.layout.mode == unfy_layout::LayoutMode::MoveInto {
+                        self.preimages
+                            .get(&placement.id)
+                            .map(|p| p.mode)
+                            .unwrap_or(WindowMode::Normal)
+                    } else {
+                        WindowMode::Normal
+                    };
+                    let visible_rect = if mode == WindowMode::Maximized {
+                        target_work
+                    } else {
+                        placement.rect
+                    };
+                    let current = self
+                        .transaction
+                        .as_ref()
+                        .and_then(|transaction| transaction.last_applied.get(&placement.id))
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let preimage =
+                                self.preimages.get(&placement.id).expect("prepared window");
+                            ObservedWindow {
+                                visible_rect: preimage.visible_rect,
+                                mode: preimage.mode,
+                            }
+                        });
+                    let resize = self.backend.capabilities(&placement.id).can_resize
+                        && (current.mode != mode
+                            || current.visible_rect.width() != visible_rect.width()
+                            || current.visible_rect.height() != visible_rect.height());
+                    (
+                        placement,
+                        WindowPlan {
+                            visible_rect,
+                            mode,
+                            resize,
+                        },
+                    )
+                })
+                .collect();
+            for (placement, plan) in plans {
+                if self.backend.eligibility(&placement.id).is_some()
+                    || self.topology_signature().as_ref() != Some(&planned_topology)
+                {
+                    not_attempted.push(placement.id.clone());
+                    continue;
+                }
+                if let Some(last) = self
+                    .transaction
+                    .as_ref()
+                    .and_then(|t| t.last_applied.get(&placement.id))
+                {
+                    match self.backend.read_back(&placement.id) {
+                        Ok(current)
+                            if current.mode == last.mode
+                                && within_tolerance(
+                                    current.visible_rect,
+                                    last.visible_rect,
+                                    self.config.tolerance_px,
+                                ) => {}
+                        _ => {
+                            not_attempted.push(placement.id.clone());
+                            continue;
+                        }
+                    }
+                }
+                self.persist_intent(&placement.id, &plan)?;
+                match self.backend.apply_async(&placement.id, &plan) {
+                    Ok(()) => submitted.push((placement.id.clone(), plan)),
+                    Err(error) => {
+                        let outcome = match error {
+                            PlatformError::WindowGone => WindowOutcome::Gone,
+                            PlatformError::PermissionDenied | PlatformError::Unsupported => {
+                                WindowOutcome::Rejected
+                            }
+                            _ => WindowOutcome::Unknown,
+                        };
+                        self.record_result(&placement.id, outcome, None)?;
                     }
                 }
             }
-            let durable = self
-                .transaction
-                .as_mut()
-                .map(|t| t.journal.durable().is_ok())
-                .unwrap_or(false);
-            if !wrote_all || !durable {
-                self.state = EngineState::Error;
-                return Err(EngineError::JournalWrite(
-                    "could not persist the move intent; no further windows were touched"
-                        .to_string(),
-                ));
-            }
-
-            for placement in batch {
-                let mode = self
-                    .preimages
-                    .get(&placement.id)
-                    .map(|p| p.mode)
-                    .unwrap_or(WindowMode::Normal);
-                let plan = WindowPlan {
-                    visible_rect: placement.rect,
-                    mode,
-                };
-                let outcome = self.apply_once(&placement.id, &plan);
-                if outcome == WindowOutcome::Unknown {
-                    settling.push((placement.id.clone(), plan));
-                }
-                let observed = self.backend.read_back(&placement.id).ok();
-                if let Err(e) = self.record_result(&placement.id, outcome, observed) {
-                    self.state = EngineState::Error;
-                    return Err(e);
-                }
+            for (id, plan) in submitted {
+                let (outcome, observed) = self.observe_plan(&id, &plan);
+                self.record_result(&id, outcome, observed)?;
                 if let Some(progress) = self.config.on_progress.as_ref() {
                     progress(self.outcomes.len(), prepared.len());
                 }
                 if outcome == WindowOutcome::Applied {
-                    applied.push(placement.id.clone());
+                    applied.push(id);
                 }
             }
             next = end;
         }
 
         let t_apply = t1.elapsed().as_millis().saturating_sub(t_preimage);
-
-        // 5. One retry pass for windows that had not settled.
-        for (id, plan) in settling {
-            let outcome = self.apply_with_retry(&id, &plan);
-            let observed = self.backend.read_back(&id).ok();
-            if let Err(e) = self.record_result(&id, outcome, observed) {
-                self.state = EngineState::Error;
-                return Err(e);
-            }
-            if outcome == WindowOutcome::Applied && !applied.contains(&id) {
-                applied.push(id.clone());
-            }
-        }
 
         tracing::debug!(
             enumerate_and_plan_ms = t_preview,
@@ -934,10 +1121,15 @@ impl<B: Backend> Engine<B> {
             "gather phase timings"
         );
 
-        self.state = if applied.is_empty() {
-            EngineState::Degraded
-        } else {
+        self.state = if prepared
+            .iter()
+            .all(|p| self.outcomes.get(&p.id) == Some(&WindowOutcome::Applied))
+            && not_attempted.is_empty()
+            && unplaced.is_empty()
+        {
             EngineState::Active
+        } else {
+            EngineState::Degraded
         };
 
         let refused = self
@@ -992,24 +1184,37 @@ impl<B: Backend> Engine<B> {
             Err(_) => return Err(WindowOutcome::Unknown),
         };
 
-        let windows = self
-            .backend
-            .enumerate()
-            .map_err(|_| WindowOutcome::Unknown)?;
-        let snapshot = windows
-            .into_iter()
-            .find(|w| w.id == *id)
-            .ok_or(WindowOutcome::Gone)?;
+        let snapshot = self.backend.snapshot(id).map_err(|error| match error {
+            PlatformError::WindowGone => WindowOutcome::Gone,
+            _ => WindowOutcome::Unknown,
+        })?;
+        if snapshot.mode != observed.mode || snapshot.visible_rect != observed.visible_rect {
+            return Err(WindowOutcome::Unknown);
+        }
 
         let displays = self
             .backend
             .topology()
             .map_err(|_| WindowOutcome::Unknown)?;
+        let assigned = self.backend.display_for(id).ok();
         let display = displays
             .iter()
-            .max_by_key(|d| d.bounds.intersection_area(&observed.visible_rect))
-            .or_else(|| displays.iter().find(|d| d.key == snapshot.display))
+            .max_by(|a, b| {
+                a.bounds
+                    .intersection_area(&observed.visible_rect)
+                    .cmp(&b.bounds.intersection_area(&observed.visible_rect))
+                    .then_with(|| b.key.native_id.cmp(&a.key.native_id))
+            })
+            .filter(|display| display.bounds.intersection_area(&observed.visible_rect) > 0)
+            .or_else(|| {
+                displays
+                    .iter()
+                    .find(|d| assigned.as_ref() == Some(&d.key) || d.key == snapshot.display)
+            })
             .ok_or(WindowOutcome::Unknown)?;
+        if !valid_display_geometry(display) {
+            return Err(WindowOutcome::Unknown);
+        }
 
         Ok(Preimage {
             id: snapshot.id.clone(),
@@ -1042,115 +1247,92 @@ impl<B: Backend> Engine<B> {
             }),
         };
         if let Some(transaction) = self.transaction.as_mut() {
-            transaction
+            if let Err(error) = transaction
                 .journal
                 .write_result(&record)
-                .map_err(|e| EngineError::JournalWrite(e.to_string()))?;
-            if let Some(observed) = observed {
-                transaction.last_applied.insert(id.clone(), observed);
+                .and_then(|()| transaction.journal.durable())
+            {
+                self.state = EngineState::Error;
+                return Err(EngineError::JournalWrite(error.to_string()));
+            }
+            if outcome != WindowOutcome::Unknown {
+                transaction.pending_writes.remove(id);
+                if let Some(observed) = observed {
+                    transaction.last_applied.insert(id.clone(), observed);
+                }
             }
         }
         self.outcomes.insert(id.clone(), outcome);
         Ok(())
     }
 
-    /// Submit one window and read it back once, without sleeping.
-    fn apply_once(&self, id: &WindowId, plan: &WindowPlan) -> WindowOutcome {
+    /// Submit once and retain the exact observation used to classify the result.
+    fn apply_once(
+        &self,
+        id: &WindowId,
+        plan: &WindowPlan,
+    ) -> (WindowOutcome, Option<ObservedWindow>) {
         match self.backend.apply_async(id, plan) {
-            Ok(()) => {}
-            Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
-                return WindowOutcome::Rejected
+            Ok(()) => self.observe_plan(id, plan),
+            Err(PlatformError::WindowGone) => (WindowOutcome::Gone, None),
+            Err(PlatformError::PermissionDenied | PlatformError::Unsupported) => {
+                (WindowOutcome::Rejected, None)
             }
-            Err(PlatformError::WindowGone) => return WindowOutcome::Gone,
-            Err(_) => return WindowOutcome::Unknown,
-        }
-
-        match self.backend.read_back(id) {
-            Ok(observed) => {
-                if matches_plan(&observed, plan, self.config.tolerance_px) {
-                    WindowOutcome::Applied
-                } else {
-                    WindowOutcome::Unknown
-                }
-            }
-            Err(PlatformError::WindowGone) => WindowOutcome::Gone,
-            Err(_) => WindowOutcome::Unknown,
+            Err(_) => (WindowOutcome::Unknown, None),
         }
     }
 
-    /// Put a rejected window back to the size it had before we touched it.
-    fn revert_size(&self, id: &WindowId) {
-        let Some(preimage) = self.preimages.get(id) else {
-            return;
-        };
-        let Ok(observed) = self.backend.read_back(id) else {
-            return;
-        };
-        if same_geometry(&observed.visible_rect, &preimage.visible_rect) {
-            return;
-        }
-        let plan = WindowPlan {
-            visible_rect: Rect::new(
-                observed.visible_rect.left,
-                observed.visible_rect.top,
-                observed.visible_rect.left + preimage.visible_rect.width(),
-                observed.visible_rect.top + preimage.visible_rect.height(),
-            ),
-            mode: preimage.mode,
-        };
-        if self.backend.apply(id, &plan).is_err() {
-            tracing::debug!(window = ?id, "could not restore a rejected window's size");
-        }
-    }
-
-    /// Retry a window that did not settle on the first pass.
-    fn apply_with_retry(&self, id: &WindowId, plan: &WindowPlan) -> WindowOutcome {
-        let outcome = self.apply_with_retry_inner(id, plan);
-        if matches!(outcome, WindowOutcome::Rejected | WindowOutcome::Unknown) {
-            self.revert_size(id);
-        }
-        outcome
-    }
-
-    fn apply_with_retry_inner(&self, id: &WindowId, plan: &WindowPlan) -> WindowOutcome {
-        for attempt in 1..=self.config.max_attempts {
-            match self.backend.apply(id, plan) {
-                Ok(()) => {}
-                Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
-                    return WindowOutcome::Rejected
-                }
-                Err(PlatformError::WindowGone) => return WindowOutcome::Gone,
-                Err(_) => {
-                    if attempt == self.config.max_attempts {
-                        return WindowOutcome::Rejected;
-                    }
-                    continue;
-                }
-            }
-
+    fn observe_plan(
+        &self,
+        id: &WindowId,
+        plan: &WindowPlan,
+    ) -> (WindowOutcome, Option<ObservedWindow>) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let mut matched = false;
+        loop {
             match self.backend.read_back(id) {
                 Ok(observed) => {
-                    if matches_plan(&observed, plan, self.config.tolerance_px) {
-                        return WindowOutcome::Applied;
+                    let matches = matches_plan(&observed, plan, self.config.tolerance_px);
+                    if matches && matched {
+                        return (WindowOutcome::Applied, Some(observed));
                     }
-                    if attempt == self.config.max_attempts {
-                        return WindowOutcome::Rejected;
-                    }
-                    if attempt > 1 {
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            self.config.retry_delay_ms,
-                        ));
+                    matched = matches;
+                    if std::time::Instant::now() >= deadline {
+                        return (WindowOutcome::Unknown, Some(observed));
                     }
                 }
-                Err(PlatformError::WindowGone) => return WindowOutcome::Gone,
-                Err(_) => {
-                    if attempt == self.config.max_attempts {
-                        return WindowOutcome::Unknown;
-                    }
-                }
+                Err(PlatformError::WindowGone) => return (WindowOutcome::Gone, None),
+                Err(_) => return (WindowOutcome::Unknown, None),
             }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        WindowOutcome::Unknown
+    }
+
+    fn persist_intent(&mut self, id: &WindowId, plan: &WindowPlan) -> Result<(), EngineError> {
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(EngineError::InvalidTransition { from: self.state })?;
+        if let Err(error) = transaction
+            .journal
+            .write_intent(id, plan.visible_rect, plan.mode)
+            .and_then(|()| transaction.journal.durable())
+        {
+            self.state = EngineState::Error;
+            return Err(EngineError::JournalWrite(error.to_string()));
+        }
+        transaction.pending_writes.insert(id.clone(), *plan);
+        Ok(())
+    }
+
+    fn apply_journaled(
+        &mut self,
+        id: &WindowId,
+        plan: &WindowPlan,
+    ) -> Result<(WindowOutcome, Option<ObservedWindow>), EngineError> {
+        self.persist_intent(id, plan)?;
+        // Unknown asynchronous requests must settle before another write can begin.
+        Ok(self.apply_once(id, plan))
     }
 
     /// Whether the user asked us to leave this application alone.
@@ -1179,7 +1361,9 @@ impl<B: Backend> Engine<B> {
                 awaiting_original: Vec::new(),
             });
         }
-        if self.state == EngineState::Migrating || self.state == EngineState::Planning {
+        if (self.state == EngineState::Error && self.transaction.is_none())
+            || self.state.may_write()
+        {
             return Err(EngineError::InvalidTransition { from: self.state });
         }
 
@@ -1212,38 +1396,13 @@ impl<B: Backend> Engine<B> {
         let mut awaiting_original = Vec::new();
 
         for preimage in preimages {
-            let outcome = self.restore_one(&preimage, &displays);
-            let observed = self.backend.read_back(&preimage.id).ok();
-            let record = AppliedResult {
-                id: preimage.id.clone(),
-                outcome,
-                observed: observed.map(|o| ObservedRect {
-                    visible_rect: o.visible_rect,
-                    mode: o.mode,
-                }),
-            };
-
-            // A failed journal write stops the pass. Continuing would move more
-            // windows without a durable record of what happened to them.
-            if let Some(transaction) = self.transaction.as_mut() {
-                if let Err(e) = transaction.journal.write_result(&record) {
-                    self.state = EngineState::Error;
-                    return Err(EngineError::JournalWrite(e.to_string()));
-                }
-                if let Some(observed) = observed {
-                    transaction
-                        .last_applied
-                        .insert(preimage.id.clone(), observed);
-                }
-            }
+            let (outcome, observed) = self.restore_one(&preimage, &displays)?;
+            self.record_result(&preimage.id, outcome, observed)?;
             outcomes.insert(preimage.id.clone(), outcome);
 
             let settled = matches!(
                 outcome,
-                WindowOutcome::Restored
-                    | WindowOutcome::KeptUserChange
-                    | WindowOutcome::Gone
-                    | WindowOutcome::Skipped
+                WindowOutcome::Restored | WindowOutcome::KeptUserChange | WindowOutcome::Gone
             );
             if settled {
                 if let Err(e) = self.resolve(&preimage.id, outcome) {
@@ -1304,136 +1463,263 @@ impl<B: Backend> Engine<B> {
     }
 
     fn close_transaction(&mut self) -> Result<(), EngineError> {
-        let Some(transaction) = self.transaction.take() else {
-            self.preimages.clear();
-            self.resolved.clear();
+        let Some(transaction) = self.transaction.as_mut() else {
             return Ok(());
         };
-        // `close_and_remove` writes Closed and fsyncs before deleting. If the
-        // close fails the file stays and the caller must keep the obligations, so
-        // the transaction is put back rather than dropped.
-        match transaction.journal.close_and_remove() {
-            Ok(()) => {
-                self.preimages.clear();
-                self.resolved.clear();
-                Ok(())
-            }
-            Err(e) => {
-                self.state = EngineState::Error;
-                Err(EngineError::JournalWrite(e.to_string()))
-            }
+        if let Err(error) = transaction.journal.close() {
+            self.state = EngineState::Error;
+            return Err(EngineError::JournalWrite(error.to_string()));
         }
+        let path = transaction.journal.path().to_path_buf();
+        self.transaction = None;
+        self.preimages.clear();
+        self.resolved.clear();
+        if let Err(error) = std::fs::remove_file(&path) {
+            tracing::warn!(path = %path.display(), %error, "closed journal cleanup failed");
+        }
+        Ok(())
     }
 
-    fn restore_one(&self, preimage: &Preimage, displays: &[DisplaySnapshot]) -> WindowOutcome {
-        // A preimage written before process creation time was recorded cannot
-        // prove that the handle it names still belongs to the same window. Windows
-        // recycles `HWND` values, so writing the old rectangle could land on a
-        // completely different application. The record is kept and reported, and
-        // the user can explicitly discard it; silently "restoring" it is the one
-        // outcome that can destroy data.
-        if preimage.id.process_start == 0 {
-            tracing::warn!(
-                window = ?preimage.id,
-                "cannot prove window identity from this record; not writing"
-            );
-            return WindowOutcome::Unknown;
+    fn restore_one(
+        &mut self,
+        preimage: &Preimage,
+        displays: &[DisplaySnapshot],
+    ) -> Result<(WindowOutcome, Option<ObservedWindow>), EngineError> {
+        if preimage.id.process_start == 0 || preimage.id.instance == 0 {
+            return Ok((WindowOutcome::Unknown, None));
         }
-
-        let current = match self.backend.read_back(&preimage.id) {
+        if self
+            .transaction
+            .as_ref()
+            .is_some_and(|transaction| !transaction.journal.may_have_written(&preimage.id))
+        {
+            return Ok((WindowOutcome::KeptUserChange, None));
+        }
+        if !self
+            .backend
+            .topology()
+            .is_ok_and(|current| current == displays)
+        {
+            self.state = EngineState::Degraded;
+            return Err(EngineError::Platform(
+                "topology changed during restore".into(),
+            ));
+        }
+        let mut current = match self.backend.read_back(&preimage.id) {
             Ok(observed) => observed,
-            Err(PlatformError::WindowGone) => return WindowOutcome::Gone,
-            Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
-                return WindowOutcome::Skipped
-            }
-            Err(_) => return WindowOutcome::Unknown,
+            Err(PlatformError::WindowGone) => return Ok((WindowOutcome::Gone, None)),
+            Err(_) => return Ok((WindowOutcome::Unknown, None)),
         };
-
-        // If the user changed the window after we placed it, keep their change.
-        // Both the rectangle and the mode matter: maximising a window we tiled is
-        // an external change even though the rectangle may coincide.
-        if let Some(transaction) = self.transaction.as_ref() {
-            if let Some(last) = transaction.last_applied.get(&preimage.id) {
-                let moved = !within_tolerance(
-                    current.visible_rect,
-                    last.visible_rect,
-                    self.config.tolerance_px,
-                );
-                let restated = current.mode != last.mode;
-                if moved || restated {
-                    let reachable = displays.iter().any(|d| {
-                        current.visible_rect.reachable_in(
-                            &d.work_area,
-                            self.config.min_reachable.width,
-                            self.config.min_reachable.height,
-                        )
-                    });
-                    if reachable {
-                        return WindowOutcome::KeptUserChange;
-                    }
-                }
+        if let Some(plan) = self
+            .transaction
+            .as_ref()
+            .and_then(|tx| tx.pending_writes.get(&preimage.id))
+            .copied()
+        {
+            // An unconfirmed gather request must not block the restore. One
+            // observation is enough to learn whether it landed; re-submitting it on
+            // every attempt turned a window that cannot fit its cell into a
+            // permanent obligation, because the read-back could never match the
+            // plan and the original position was never attempted. The outcome is
+            // still recorded, so the journal keeps the evidence.
+            let (outcome, observed) = self.observe_plan(&preimage.id, &plan);
+            if let Some(transaction) = self.transaction.as_mut() {
+                transaction.pending_writes.remove(&preimage.id);
+            }
+            self.record_result(&preimage.id, outcome, observed)?;
+            if let Some(observed) = observed {
+                current = observed;
             }
         }
-
-        let original_display = displays
-            .iter()
-            .find(|d| d.key.native_id == preimage.display_native_id);
-
-        let target = match original_display {
-            Some(display) if display.key.quality.is_restorable() => {
-                if same_geometry(&display.work_area, &preimage.display_work_area) {
-                    preimage.visible_rect
-                } else {
-                    rescale_between(
-                        preimage.visible_rect,
-                        preimage.display_work_area,
-                        preimage.display_scale,
-                        display.work_area,
-                        display.scale,
-                    )
-                }
-            }
-            _ => {
-                // Original display gone or identity too weak: put it in a visible
-                // place rather than at a coordinate that no longer exists, and
-                // keep the original baseline so a later restore can finish.
-                let Some(fallback) = displays.iter().find(|d| d.primary).or(displays.first())
-                else {
-                    return WindowOutcome::Unknown;
-                };
-                let rect = preimage.visible_rect.clamp_into(&fallback.work_area);
-                let plan = WindowPlan {
-                    visible_rect: rect,
-                    mode: preimage.mode,
-                };
-                return match self.backend.apply(&preimage.id, &plan) {
-                    Ok(()) => WindowOutcome::FallbackVisible,
-                    Err(PlatformError::WindowGone) => WindowOutcome::Gone,
-                    Err(PlatformError::PermissionDenied) | Err(PlatformError::Unsupported) => {
-                        WindowOutcome::Skipped
+        let reachable = |observed: ObservedWindow| {
+            displays.iter().any(|d| {
+                unfy_layout::is_usable_on_target_scaled(
+                    observed.visible_rect,
+                    d.work_area,
+                    d.scale.x,
+                )
+            })
+        };
+        if let Some(last) = self
+            .transaction
+            .as_ref()
+            .and_then(|t| t.last_applied.get(&preimage.id))
+            .copied()
+        {
+            if (!within_tolerance(
+                current.visible_rect,
+                last.visible_rect,
+                self.config.tolerance_px,
+            ) || current.mode != last.mode)
+                && reachable(current)
+            {
+                // A transient application correction is not evidence of an external change.
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                return Ok(match self.backend.read_back(&preimage.id) {
+                    Ok(stable)
+                        if within_tolerance(
+                            stable.visible_rect,
+                            current.visible_rect,
+                            self.config.tolerance_px,
+                        ) && stable.mode == current.mode =>
+                    {
+                        (WindowOutcome::KeptUserChange, Some(stable))
                     }
-                    Err(_) => WindowOutcome::Unknown,
-                };
+                    Ok(observed) => (WindowOutcome::Unknown, Some(observed)),
+                    Err(PlatformError::WindowGone) => (WindowOutcome::Gone, None),
+                    Err(_) => (WindowOutcome::Unknown, None),
+                });
             }
+        }
+        let original = displays.iter().find(|d| {
+            d.key.native_id == preimage.display_native_id
+                && d.key.quality.is_restorable()
+                && preimage.display_quality.is_restorable()
+        });
+        let Some(display) = original else {
+            if reachable(current) {
+                return Ok((WindowOutcome::FallbackVisible, Some(current)));
+            }
+            let Some(fallback) = displays.iter().find(|d| d.primary).or(displays.first()) else {
+                return Ok((WindowOutcome::Unknown, Some(current)));
+            };
+            let plan = WindowPlan {
+                visible_rect: current.visible_rect.clamp_into(&fallback.work_area),
+                mode: current.mode,
+                resize: false,
+            };
+            let (outcome, observed) = self.apply_journaled(&preimage.id, &plan)?;
+            return Ok((
+                if outcome == WindowOutcome::Applied {
+                    WindowOutcome::FallbackVisible
+                } else {
+                    outcome
+                },
+                observed,
+            ));
         };
-
+        let same_topology = display.work_area == preimage.display_work_area
+            && display.scale == preimage.display_scale;
+        if !valid_display_geometry(display) {
+            return Ok((WindowOutcome::Unknown, Some(current)));
+        }
+        if same_topology
+            && !unfy_layout::is_usable_on_target_scaled(
+                preimage.visible_rect,
+                display.work_area,
+                display.scale.x,
+            )
+        {
+            if reachable(current) {
+                return Ok((WindowOutcome::FallbackVisible, Some(current)));
+            }
+            let fallback = WindowPlan {
+                visible_rect: current.visible_rect.clamp_into(&display.work_area),
+                mode: current.mode,
+                resize: false,
+            };
+            let (outcome, observed) = self.apply_journaled(&preimage.id, &fallback)?;
+            return Ok((
+                if outcome == WindowOutcome::Applied {
+                    WindowOutcome::FallbackVisible
+                } else {
+                    outcome
+                },
+                observed,
+            ));
+        }
         let plan = WindowPlan {
-            visible_rect: target,
+            visible_rect: if same_topology {
+                preimage.visible_rect
+            } else if preimage.mode == WindowMode::Maximized {
+                display.work_area
+            } else {
+                rescale_between(
+                    preimage.visible_rect,
+                    preimage.display_work_area,
+                    preimage.display_scale,
+                    display.work_area,
+                    display.scale,
+                )
+                .clamp_into(&display.work_area)
+            },
             mode: preimage.mode,
+            resize: self.backend.capabilities(&preimage.id).can_resize,
         };
-        match self.apply_with_retry(&preimage.id, &plan) {
-            WindowOutcome::Applied => WindowOutcome::Restored,
-            other => other,
+        let expected_native = match &preimage.native_placement {
+            Some(placement) if same_topology => {
+                Some(std::borrow::Cow::Borrowed(placement.as_slice()))
+            }
+            Some(placement) => match self.backend.transform_native_placement(
+                placement,
+                preimage.display_work_area,
+                preimage.display_scale,
+                display,
+            ) {
+                Ok(transformed) => Some(std::borrow::Cow::Owned(transformed)),
+                Err(_) => return Ok((WindowOutcome::Unknown, Some(current))),
+            },
+            None => None,
+        };
+        let (outcome, observed) = if let Some(placement) = &expected_native {
+            self.persist_intent(&preimage.id, &plan)?;
+            match self
+                .backend
+                .restore_native_state(&preimage.id, placement, preimage.topmost)
+            {
+                Ok(()) => self.observe_plan(&preimage.id, &plan),
+                Err(PlatformError::WindowGone) => (WindowOutcome::Gone, None),
+                Err(_) => (WindowOutcome::Unknown, None),
+            }
+        } else {
+            self.apply_journaled(&preimage.id, &plan)?
+        };
+        if outcome != WindowOutcome::Applied {
+            return Ok((outcome, observed));
+        }
+        // This final snapshot verifies hidden normal placement and topmost too.
+        // Its geometry is the observation written to the journal and report.
+        match self.backend.snapshot(&preimage.id) {
+            Ok(snapshot) => {
+                let observed = ObservedWindow {
+                    visible_rect: snapshot.visible_rect,
+                    mode: snapshot.mode,
+                };
+                let native_matches = expected_native.as_ref().is_none_or(|expected| {
+                    snapshot.native_placement.as_ref().is_some_and(|actual| {
+                        self.backend.native_placement_matches(actual, expected)
+                    })
+                });
+                let verified = matches_plan(&observed, &plan, self.config.tolerance_px)
+                    && snapshot.topmost == preimage.topmost
+                    && native_matches;
+                Ok((
+                    if verified {
+                        WindowOutcome::Restored
+                    } else {
+                        WindowOutcome::Unknown
+                    },
+                    Some(observed),
+                ))
+            }
+            Err(PlatformError::WindowGone) => Ok((WindowOutcome::Gone, None)),
+            Err(_) => Ok((WindowOutcome::Unknown, None)),
         }
     }
 
     /// Find windows that are not reachable in the current topology and move
     /// them into a visible work area.
     ///
-    /// This is the only operation that works without a transaction: it is the
-    /// safety net for windows left off-screen by a display change, another tool,
-    /// or a previous crash.
+    /// Every rescue is journaled, including windows not gathered previously.
     pub fn rescue_offscreen(&mut self) -> Result<Vec<(WindowId, Rect)>, EngineError> {
+        if self.state == EngineState::Error || self.state.may_write() {
+            return Err(EngineError::InvalidTransition { from: self.state });
+        }
+        if self.preimages.keys().any(|id| {
+            !self.resolved.contains_key(id) && (id.instance == 0 || id.process_start == 0)
+        }) {
+            return Err(EngineError::InvalidTransition { from: self.state });
+        }
         let displays = self
             .backend
             .topology()
@@ -1445,18 +1731,22 @@ impl<B: Backend> Engine<B> {
 
         let mut rescued = Vec::new();
         for window in windows {
-            if !window.is_migratable() {
+            if !window.is_migratable() || self.resolved.contains_key(&window.id) {
+                continue;
+            }
+            if self.backend.eligibility(&window.id).is_some()
+                || self
+                    .transaction
+                    .as_ref()
+                    .is_some_and(|tx| tx.pending_writes.contains_key(&window.id))
+            {
                 continue;
             }
             if self.is_excluded(&window) {
                 continue;
             }
             let reachable = displays.iter().any(|d| {
-                window.visible_rect.reachable_in(
-                    &d.work_area,
-                    self.config.min_reachable.width,
-                    self.config.min_reachable.height,
-                )
+                unfy_layout::is_usable_on_target_scaled(window.visible_rect, d.work_area, d.scale.x)
             });
             if reachable {
                 continue;
@@ -1465,51 +1755,75 @@ impl<B: Backend> Engine<B> {
             let Some(fallback) = displays.iter().find(|d| d.primary).or(displays.first()) else {
                 continue;
             };
+            if !valid_display_geometry(fallback) {
+                continue;
+            }
             let rect = window.visible_rect.clamp_into(&fallback.work_area);
             let plan = WindowPlan {
                 visible_rect: rect,
                 mode: window.mode,
+                resize: false,
             };
 
-            // A rescue of a window this transaction already moved is still one of
-            // our writes. Recording it prevents the next restore from mistaking it
-            // for a user drag.
-            if self.preimages.contains_key(&window.id) {
-                if let Some(transaction) = self.transaction.as_mut() {
-                    if transaction
-                        .journal
-                        .write_intent(&window.id, rect, window.mode)
-                        .is_err()
-                    {
+            if !self.preimages.contains_key(&window.id) {
+                let preimage = match self.capture_preimage(&window.id) {
+                    Ok(preimage) => preimage,
+                    Err(outcome) => {
+                        self.outcomes.insert(window.id.clone(), outcome);
                         continue;
                     }
-                    if transaction.journal.durable().is_err() {
-                        continue;
-                    }
+                };
+                if self.transaction.is_none() {
+                    let id = uuid::Uuid::new_v4();
+                    let path = self.config.journal_dir.join(format!("{id}.journal"));
+                    let journal =
+                        Journal::begin_named(path, id, "offscreen rescue").map_err(|error| {
+                            self.state = EngineState::Error;
+                            EngineError::JournalWrite(error.to_string())
+                        })?;
+                    self.transaction = Some(Transaction {
+                        id,
+                        journal,
+                        adopted: false,
+                        last_applied: HashMap::new(),
+                        pending_writes: HashMap::new(),
+                    });
+                }
+                let transaction = self.transaction.as_mut().expect("rescue transaction");
+                if let Err(error) = transaction
+                    .journal
+                    .write_preimage(&preimage)
+                    .and_then(|()| transaction.journal.durable())
+                {
+                    self.state = EngineState::Error;
+                    return Err(EngineError::JournalWrite(error.to_string()));
+                }
+                self.preimages.insert(window.id.clone(), preimage);
+            }
+            if !self
+                .backend
+                .topology()
+                .is_ok_and(|current| current == displays)
+                || self.backend.eligibility(&window.id).is_some()
+            {
+                self.state = EngineState::Degraded;
+                return Err(EngineError::Platform(
+                    "topology or window eligibility changed during rescue".into(),
+                ));
+            }
+            let (outcome, observed) = self.apply_journaled(&window.id, &plan)?;
+            let outcome = if outcome == WindowOutcome::Applied {
+                WindowOutcome::FallbackVisible
+            } else {
+                outcome
+            };
+            self.record_result(&window.id, outcome, observed)?;
+            if outcome == WindowOutcome::FallbackVisible {
+                if let Some(observed) = observed {
+                    rescued.push((window.id, observed.visible_rect));
                 }
             }
-
-            match self.backend.apply(&window.id, &plan) {
-                Ok(()) => {
-                    if self.preimages.contains_key(&window.id) {
-                        if let Ok(observed) = self.backend.read_back(&window.id) {
-                            if let Some(transaction) = self.transaction.as_mut() {
-                                transaction.last_applied.insert(window.id.clone(), observed);
-                                let _ = transaction.journal.write_result(&AppliedResult {
-                                    id: window.id.clone(),
-                                    outcome: WindowOutcome::FallbackVisible,
-                                    observed: Some(ObservedRect {
-                                        visible_rect: observed.visible_rect,
-                                        mode: observed.mode,
-                                    }),
-                                });
-                            }
-                        }
-                    }
-                    rescued.push((window.id, rect));
-                }
-                Err(_) => continue,
-            }
+            self.state = EngineState::Degraded;
         }
         Ok(rescued)
     }
@@ -1520,6 +1834,11 @@ impl<B: Backend> Engine<B> {
     /// resolved in the journal *before* the file is closed, so a crash mid-way
     /// cannot reopen windows the user had accepted.
     pub fn keep_current_layout(&mut self) -> Result<(), EngineError> {
+        if (self.state == EngineState::Error && self.transaction.is_none())
+            || self.state.may_write()
+        {
+            return Err(EngineError::InvalidTransition { from: self.state });
+        }
         if self.transaction.is_none() {
             self.preimages.clear();
             self.resolved.clear();
@@ -1533,7 +1852,10 @@ impl<B: Backend> Engine<B> {
             .cloned()
             .collect();
         for id in ids {
-            self.resolve(&id, WindowOutcome::KeptUserChange)?;
+            if let Err(error) = self.resolve(&id, WindowOutcome::KeptUserChange) {
+                self.state = EngineState::Error;
+                return Err(error);
+            }
         }
         self.close_transaction()?;
         self.state = EngineState::Idle;
@@ -1556,10 +1878,6 @@ fn within_tolerance(a: Rect, b: Rect, tolerance: i32) -> bool {
 fn matches_plan(observed: &ObservedWindow, plan: &WindowPlan, tolerance: i32) -> bool {
     within_tolerance(observed.visible_rect, plan.visible_rect, tolerance)
         && observed.mode == plan.mode
-}
-
-fn same_geometry(a: &Rect, b: &Rect) -> bool {
-    a == b
 }
 
 /// Convenience for callers that want to know whether a display identity is good
@@ -1590,3 +1908,51 @@ impl PendingWork {
 
 #[allow(dead_code)]
 fn unused_capabilities(_: Capabilities, _: Unplaced) {}
+
+fn valid_display_geometry(display: &DisplaySnapshot) -> bool {
+    display.work_area.right > display.work_area.left
+        && display.work_area.bottom > display.work_area.top
+        && display.scale.x.is_finite()
+        && display.scale.x > 0.0
+        && display.scale.y.is_finite()
+        && display.scale.y > 0.0
+}
+#[cfg(test)]
+mod recovery_state_tests {
+    use super::*;
+    use unfy_platform::fake::{FakeBackend, FakeBehaviour};
+
+    #[test]
+    fn resuming_an_open_transaction_never_clears_error() {
+        let mut backend = FakeBackend::with_two_displays();
+        backend.add_window(
+            1,
+            Rect::new(100, 100, 700, 600),
+            "fake-display-a",
+            WindowMode::Normal,
+            FakeBehaviour::Compliant,
+        );
+        let mut engine = Engine::new(
+            backend,
+            EngineConfig {
+                journal_dir: std::env::temp_dir()
+                    .join(format!("unfy-error-{}", uuid::Uuid::new_v4())),
+                ..Default::default()
+            },
+        );
+        engine
+            .migrate(&DisplayKey {
+                native_id: "fake-display-b".into(),
+                quality: IdentityQuality::Strong,
+            })
+            .unwrap();
+        let transaction = engine.current_transaction();
+        engine.state = EngineState::Error;
+        engine.pause().unwrap();
+        engine.resume().unwrap();
+        assert_eq!(engine.state(), EngineState::Error);
+        assert_eq!(engine.current_transaction(), transaction);
+        assert_eq!(engine.unresolved_window_count(), 1);
+        engine.keep_current_layout().unwrap();
+    }
+}

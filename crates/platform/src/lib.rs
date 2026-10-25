@@ -31,6 +31,10 @@ pub enum PlatformError {
     PermissionDenied,
     #[error("operation not supported by this window")]
     Unsupported,
+    #[error("window identity cannot be proven")]
+    IdentityUncertain,
+    #[error("window did not respond before the deadline")]
+    TimedOut,
     #[error("display no longer exists")]
     DisplayGone,
     #[error("platform call failed: {0}")]
@@ -70,6 +74,8 @@ pub struct WindowPlan {
     /// Desired visible rectangle in physical pixels.
     pub visible_rect: Rect,
     pub mode: WindowMode,
+    /// False for move-only windows: the backend must not issue a size request.
+    pub resize: bool,
 }
 
 /// Display topology access.
@@ -89,6 +95,19 @@ pub trait WindowBackend {
     /// Enumerate candidate top-level windows. Implementations may over-report;
     /// the engine applies the skip rules.
     fn enumerate(&self) -> Result<Vec<WindowSnapshot>>;
+
+    /// Snapshot one proven identity without re-enumerating unrelated windows.
+    fn snapshot(&self, id: &WindowId) -> Result<WindowSnapshot> {
+        self.enumerate()?
+            .into_iter()
+            .find(|window| window.id == *id)
+            .ok_or(PlatformError::IdentityUncertain)
+    }
+
+    /// A platform-specific exclusion that must also be checked at submission.
+    fn eligibility(&self, _id: &WindowId) -> Option<unfy_domain::SkipReason> {
+        None
+    }
 
     fn capabilities(&self, id: &WindowId) -> Capabilities;
 
@@ -112,8 +131,32 @@ pub trait WindowBackend {
 
     fn read_back(&self, id: &WindowId) -> Result<ObservedWindow>;
 
-    /// Restore a previously captured native placement blob.
-    fn restore_native(&self, id: &WindowId, placement: &[u8]) -> Result<()>;
+    /// Restore native placement and z-order facts together, then let the caller
+    /// verify the final rectangle and mode. Unsupported backends use geometry.
+    fn restore_native_state(
+        &self,
+        _id: &WindowId,
+        _placement: &[u8],
+        _topmost: bool,
+    ) -> Result<()> {
+        Err(PlatformError::Unsupported)
+    }
+
+    /// Compare native state while ignoring platform request-only flags.
+    fn native_placement_matches(&self, actual: &[u8], expected: &[u8]) -> bool {
+        actual == expected
+    }
+
+    /// Transform the captured native state without observing or mutating the window.
+    fn transform_native_placement(
+        &self,
+        _placement: &[u8],
+        _source_work: Rect,
+        _source_scale: Scale,
+        _target: &DisplaySnapshot,
+    ) -> Result<Vec<u8>> {
+        Err(PlatformError::Unsupported)
+    }
 }
 
 /// A provider + backend pair for one platform.

@@ -7,9 +7,8 @@
 //!   believe it lives at 96 DPI;
 //! * visible rectangles come from `DWMWA_EXTENDED_FRAME_BOUNDS`, never from
 //!   `GetWindowRect`, which includes ~7 px of invisible resize border per side;
-//! * a maximized window is moved by restoring, moving and re-maximizing, because
-//!   `SetWindowPos` on a maximized window is silently overwritten by Chromium's
-//!   `OnWindowPosChanging` handler.
+//! * mode transitions use asynchronous native placement, retaining the normal
+//!   restore rectangle without activating ShowWindow calls.
 
 mod displays;
 mod dpi;
@@ -17,7 +16,7 @@ mod labels;
 mod thumbnails;
 mod windows_impl;
 
-pub use displays::{display_at, WinDisplays};
+pub use displays::{display_at, identify_window, WinDisplays};
 pub use windows_impl::{capture_placement, nudge_window, RawWindow, WinWindows, WindowStyleFlags};
 
 use unfy_platform::{DisplayProvider, Platform, WindowBackend};
@@ -74,6 +73,49 @@ impl WindowBackend for WinPlatform {
         self.windows.capabilities(id)
     }
 
+    fn snapshot(
+        &self,
+        id: &unfy_domain::WindowId,
+    ) -> unfy_platform::Result<unfy_domain::WindowSnapshot> {
+        self.windows.snapshot(id)
+    }
+
+    fn eligibility(&self, id: &unfy_domain::WindowId) -> Option<unfy_domain::SkipReason> {
+        self.windows.eligibility(id)
+    }
+
+    fn apply_async(
+        &self,
+        id: &unfy_domain::WindowId,
+        plan: &unfy_platform::WindowPlan,
+    ) -> unfy_platform::Result<()> {
+        self.windows.apply_async(id, plan)
+    }
+
+    fn restore_native_state(
+        &self,
+        id: &unfy_domain::WindowId,
+        placement: &[u8],
+        topmost: bool,
+    ) -> unfy_platform::Result<()> {
+        self.windows.restore_native_state(id, placement, topmost)
+    }
+
+    fn native_placement_matches(&self, actual: &[u8], expected: &[u8]) -> bool {
+        self.windows.native_placement_matches(actual, expected)
+    }
+
+    fn transform_native_placement(
+        &self,
+        placement: &[u8],
+        source_work: unfy_domain::Rect,
+        source_scale: unfy_domain::Scale,
+        target: &unfy_domain::DisplaySnapshot,
+    ) -> unfy_platform::Result<Vec<u8>> {
+        self.windows
+            .transform_native_placement(placement, source_work, source_scale, target)
+    }
+
     fn apply(
         &self,
         id: &unfy_domain::WindowId,
@@ -87,14 +129,6 @@ impl WindowBackend for WinPlatform {
         id: &unfy_domain::WindowId,
     ) -> unfy_platform::Result<unfy_platform::ObservedWindow> {
         self.windows.read_back(id)
-    }
-
-    fn restore_native(
-        &self,
-        id: &unfy_domain::WindowId,
-        placement: &[u8],
-    ) -> unfy_platform::Result<()> {
-        self.windows.restore_native(id, placement)
     }
 }
 

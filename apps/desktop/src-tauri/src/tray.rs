@@ -70,15 +70,27 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 /// automation, so nothing else exercises it.
 pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
-        ID_GATHER => run_and_notify(app, "gather"),
-        ID_RESTORE => run_and_notify(app, "restore"),
-        ID_RESCUE => run_and_notify(app, "rescue"),
-        ID_PAUSE => toggle_pause(app),
+        ID_GATHER | ID_RESTORE | ID_RESCUE => {
+            let action = match id {
+                ID_GATHER => "gather",
+                ID_RESTORE => "restore",
+                _ => "rescue",
+            };
+            let handle = app.clone();
+            std::thread::spawn(move || run_and_notify(&handle, action));
+        }
+        ID_PAUSE => {
+            let handle = app.clone();
+            std::thread::spawn(move || toggle_pause(&handle));
+        }
         ID_IDENTIFY => {
             let _ = crate::commands::identify_displays(Some(4));
         }
         ID_SETTINGS => show_settings(app),
-        ID_QUIT => quit(app),
+        ID_QUIT => {
+            let handle = app.clone();
+            std::thread::spawn(move || quit(&handle));
+        }
         _ => {}
     }
 }
@@ -179,10 +191,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         Ok(engine) => (
             engine.state(),
             engine.is_paused(),
-            engine.captured_window_count(),
-            // Read here so the cycle item can be enabled only when cycling means
-            // something. A topology query is a few microseconds and the menu is
-            // rebuilt only on state changes.
+            engine.unresolved_window_count(),
             unfy_platform::DisplayProvider::topology(engine.backend())
                 .map(|d| d.len())
                 .unwrap_or(0),
@@ -190,7 +199,9 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         Err(_) => (unfy_domain::EngineState::Error, false, 0, 0),
     };
 
-    let has_layout = engine_state.has_pending_work() || pending > 0;
+    let has_layout = engine_state.has_pending_work()
+        || pending > 0
+        || engine_state == unfy_domain::EngineState::Error;
 
     let text = locale_text(app);
     let gather_label = if has_layout {
@@ -199,10 +210,13 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         text.gather
     };
 
-    let enabled = menu_enabled(paused, has_layout, display_count);
+    let mut enabled = menu_enabled(paused, has_layout, display_count);
+    if crate::commands::in_maintenance(&state) || engine_state == unfy_domain::EngineState::Error {
+        enabled.gather = false;
+    }
     let gather = MenuItem::with_id(app, ID_GATHER, gather_label, enabled.gather, None::<&str>)?;
     let restore = MenuItem::with_id(app, ID_RESTORE, text.restore, enabled.restore, None::<&str>)?;
-    let rescue = MenuItem::with_id(app, ID_RESCUE, text.rescue, true, None::<&str>)?;
+    let rescue = MenuItem::with_id(app, ID_RESCUE, text.rescue, enabled.gather, None::<&str>)?;
     let pause = CheckMenuItem::with_id(
         app,
         ID_PAUSE,
@@ -246,15 +260,11 @@ pub struct MenuEnabled {
     pub pause: bool,
 }
 
-pub fn menu_enabled(paused: bool, has_layout: bool, display_count: usize) -> MenuEnabled {
-    // `display_count` is kept in the signature because the display-dependent
-    // gather label needs it; the explicit cycle item is gone, and cycling lives in
-    // the target submenu where the user can see which display they are choosing.
-    let _ = display_count;
+pub fn menu_enabled(_paused: bool, has_layout: bool, display_count: usize) -> MenuEnabled {
     MenuEnabled {
-        gather: !paused,
+        gather: display_count > 0,
         restore: has_layout,
-        pause: has_layout,
+        pause: true,
     }
 }
 
@@ -378,17 +388,8 @@ fn restore_now<R: Runtime>(app: &AppHandle<R>) -> Result<unfy_engine::RestoreRep
 }
 
 fn run_rescue<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let count = {
-        let state = app.state::<AppState>();
-        let mut engine = state.engine.lock().map_err(|e| e.to_string())?;
-        engine
-            .rescue_offscreen()
-            .map(|rescued| rescued.len())
-            .map_err(|e| e.to_string())?
-    };
-    if count > 0 {
-        record(app, crate::activity::Kind::Rescue, count, 0, "tray");
-    }
+    let state = app.state::<AppState>();
+    crate::commands::rescue_offscreen(state)?;
     Ok(())
 }
 
@@ -415,26 +416,21 @@ fn toggle_settings<R: Runtime>(app: &AppHandle<R>) {
 /// alive and the error is surfaced. The user can retry from the tray.
 fn quit<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<AppState>();
-    // Close admission *before* anything else. A hotkey or a queued command that
-    // starts a gather during the restore below would create new recovery work the
-    // process is about to abandon.
-    state
-        .maintenance
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    // Stop the detector before the restore: an automatic action must not fire
-    // while the exit pass runs.
-    crate::monitor::stop();
-    // A pending delayed restore is irrelevant now: the user is quitting, and the
-    // exit restore below runs immediately.
-    if let Ok(mut schedule) = state.schedule.lock() {
-        schedule.cancel();
-    }
+    let guard = match crate::commands::MaintenanceGuard::acquire(&state) {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
 
     // The exit path ignores the configured delay: the user is waiting for the
     // process to end, not for a timer.
     let blocked = match restore_now(app) {
         // Nothing was captured, or everything went back: exit.
-        Ok(report) if report.is_complete() => false,
+        Ok(report) if report.is_complete() => match state.engine.lock() {
+            Ok(engine) => {
+                crate::commands::recovery_status(&engine, state.settings_error.is_some()).present
+            }
+            Err(_) => true,
+        },
         Ok(report) => {
             tracing::warn!(pending = report.pending.len(), "restore incomplete");
             true
@@ -446,12 +442,6 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
     };
 
     if blocked {
-        // The user must be able to act on the failure, so admission is reopened:
-        // leaving it closed would make every retry from the window fail with
-        // "maintenance" and turn one bad window into an unquittable app.
-        state
-            .maintenance
-            .store(false, std::sync::atomic::Ordering::SeqCst);
         let _ = app.emit(
             "unfy://exit-blocked",
             serde_json::json!({ "reason": "restore_incomplete" }),
@@ -459,6 +449,8 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
         show_settings(app);
         return;
     }
+    crate::monitor::stop();
+    guard.keep_closed();
     app.exit(0);
 }
 
@@ -473,12 +465,10 @@ mod icon_tests {
     use super::menu_enabled;
 
     #[test]
-    fn restore_and_pause_need_a_layout_to_act_on() {
-        // Without a layout there is nothing to restore and nothing to pause; an enabled
-        // item would be a button that does nothing.
+    fn automation_can_pause_before_a_layout_exists() {
         let idle = menu_enabled(false, false, 2);
         assert!(!idle.restore);
-        assert!(!idle.pause);
+        assert!(idle.pause);
 
         let gathered = menu_enabled(false, true, 2);
         assert!(gathered.restore);
@@ -486,20 +476,15 @@ mod icon_tests {
     }
 
     #[test]
-    fn pausing_disables_gather_but_not_restore() {
-        // Paused means "stop moving windows", not "stranded where you are": restoring
-        // must stay available, which is the whole point of pausing before a restore.
+    fn pausing_automation_keeps_manual_actions_available() {
         let paused = menu_enabled(true, true, 2);
-        assert!(!paused.gather);
+        assert!(paused.gather);
         assert!(paused.restore);
         assert!(paused.pause);
     }
 
     #[test]
     fn restore_needs_a_layout_regardless_of_display_count() {
-        // The explicit cycle item was removed: cycling is part of the target
-        // submenu, where the destination is visible before the click. Restore is
-        // driven by the recovery record, not by how many displays exist.
         assert!(!menu_enabled(false, false, 0).restore);
         assert!(!menu_enabled(false, false, 1).restore);
         assert!(menu_enabled(false, true, 2).restore);

@@ -24,6 +24,7 @@ export interface TargetDto {
   native_id: string;
   label: string;
   present: boolean;
+  confirmed: boolean;
   /** User-facing number; the saved value when the display is currently absent. */
   number: number | null;
 }
@@ -43,6 +44,7 @@ export interface StatusDto {
   last_error: MessageDto | null;
   paused: boolean;
   captured_windows: number;
+  recovery_blockers: number;
   /** The settings file could not be read; defaults are in effect. */
   settings_recovered: boolean;
 }
@@ -101,6 +103,13 @@ export interface PreviewDto {
   target_work: RectDto;
 }
 
+export interface WindowResultDto {
+  window_id: string;
+  app_name: string | null;
+  outcome: "applied" | "restored" | "kept_user_change" | "fallback_visible" | "rejected" | "gone" | "skipped" | "unknown";
+  reason: string | null;
+}
+
 export interface MigrationDto {
   transaction: string;
   applied: number;
@@ -116,6 +125,7 @@ export interface MigrationDto {
   state: EngineStateName;
   /** Names of applications that refused to move. */
   refused_apps: string[];
+  results: WindowResultDto[];
 }
 
 export interface RestoreDto {
@@ -132,13 +142,18 @@ export interface RestoreDto {
   state: EngineStateName;
   /** Applications whose windows are still unresolved. */
   pending_apps: string[];
+  results: WindowResultDto[];
 }
 
 export interface SettingsDto {
   layout_mode: "default" | "grid";
   margin: number;
   gap: number;
+  /** Persisted preference, separate from OS registration below. */
   autostart: boolean;
+  autostart_actual: boolean | null;
+  autostart_error: string | null;
+  migration_notice: boolean;
   theme: "system" | "light" | "dark";
   /** Interface language; `system` follows the OS. */
   language: "system" | "zh" | "en";
@@ -158,14 +173,28 @@ export interface SettingsDto {
   target: TargetDto | null;
   /** Live detector verdict. Not persisted. */
   remote_active: boolean;
+  remote_unknown: boolean;
   remote_evidence: MessageDto | null;
 }
 
+export type SaveSettingsRequest = Partial<Omit<SettingsDto, "migration_notice" | "autostart_actual" | "autostart_error">> & {
+  dismiss_migration_notice?: boolean;
+};
+
 export interface PendingWorkDto {
   present: boolean;
+  /** Journals that cannot currently be read safely. */
+  blockers: number;
+  transactions: { id: string; windows: number }[];
   windows: number;
   may_have_moved: boolean;
   truncated_bytes: number;
+  /**
+   * The unresolved windows belong to a layout this run is still holding, not to a
+   * crashed run. Same count, different meaning: a successful gather is live, and
+   * warning that it "did not finish" is wrong.
+   */
+  live: boolean;
 }
 
 export interface DiagnosticsDto {
@@ -176,8 +205,6 @@ export interface DiagnosticsDto {
 export interface PauseDto {
   paused: boolean;
   state: EngineStateName;
-  /** Resume also ran a restore that the pause had deferred. */
-  restored_deferred: boolean;
 }
 
 export interface HotkeyStatusDto {
@@ -199,7 +226,7 @@ export interface UpdateStatusDto {
 }
 
 export interface UpdateCheckDto {
-  outcome: "up_to_date" | "deferred" | "installed" | "failed";
+  outcome: "available" | "up_to_date" | "deferred" | "installed" | "failed";
   /** The failure reason, empty unless `outcome` is `failed`. */
   detail: string;
 }
@@ -242,7 +269,7 @@ export interface ActivityEntryDto {
 }
 
 export interface DisplayThumbnailDto {
-  /** True when the capture is solid black: the display is showing nothing. */
+  /** Capture is solid black; this does not imply a disconnected display. */
   blank: boolean;
   native_id: string;
   /** `data:image/png;base64,...` ready for an `<img src>`. */
@@ -263,9 +290,12 @@ export const api = {
   preview: () => invoke<PreviewDto>("preview"),
   migrate: () => invoke<MigrationDto>("migrate"),
   restore: () => invoke<RestoreDto>("restore"),
+  cancelAutoRestore: () => invoke<void>("cancel_auto_restore"),
+  restoreRecoveryTransaction: (transaction: string) =>
+    invoke<RestoreDto>("restore_recovery_transaction", { transaction }),
   rescueOffscreen: () => invoke<number>("rescue_offscreen"),
   getSettings: () => invoke<SettingsDto>("get_settings"),
-  saveSettings: (request: Partial<SettingsDto>) =>
+  saveSettings: (request: SaveSettingsRequest) =>
     invoke<SettingsDto>("save_settings", { request }),
   setTargetDisplay: (nativeId: string) =>
     invoke<void>("set_target_display", { nativeId }),
@@ -277,6 +307,7 @@ export const api = {
   openPermissionSettings: () => invoke<boolean>("open_permission_settings"),
   updateStatus: () => invoke<UpdateStatusDto>("update_status"),
   checkUpdate: () => invoke<UpdateCheckDto>("check_update"),
+  installUpdate: () => invoke<UpdateCheckDto>("install_update"),
   setPaused: (paused: boolean) => invoke<PauseDto>("set_paused", { paused }),
   hotkeyStatus: () => invoke<HotkeyStatusDto>("hotkey_status"),
   identifyDisplays: (seconds?: number) =>
@@ -302,7 +333,6 @@ export const api = {
    * so they are told the resolved locale instead of resolving it a second way.
    */
   setUiLocale: (locale: string) => invoke<void>("set_ui_locale", { locale }),
-  /** Move the target to the next display and re-gather onto it. */
   /** Forget the activity history (spec P0-15). */
   clearActivity: () => invoke<void>("clear_activity"),
   /** Exactly what an export would contain, without writing it. */
@@ -337,6 +367,13 @@ export const skipLabels: Record<string, string> = {
   permission_denied: "权限不足",
   minimized: "已最小化",
   excluded_app: "已排除此应用",
+  already_on_target: "已在目标屏",
+  owner_group_unsupported: "此窗口组无法安全一起移动",
+  other_desktop: "窗口位于其他桌面，请切回后再试",
+  desktop_unknown: "无法确认窗口所在桌面，尚未移动",
+  identity_uncertain: "无法确认窗口身份，尚未移动",
+  geometry_unknown: "无法读取窗口位置，尚未移动",
+  suspected_fullscreen: "疑似全屏窗口，请退出全屏后再试",
 };
 
 export function skipLabel(reason: string): string {
@@ -422,24 +459,21 @@ export function renderNotice(note: MessageDto): string {
  */
 export function errorMessage(error: unknown): string {
   const raw = String(error);
-  // Retargeting refuses when the restore it runs first left windows behind.
-  // Saying "整理失败" would hide the actionable part: those windows are still
-  // out, and trying again is the fix.
   const incomplete = raw.match(/restore_incomplete:(\d+)/);
   if (incomplete) {
     return t(
-      "还有 {count} 个窗口没能恢复原位，已停止重新整理。请再点一次「恢复本次布局」，或先关闭这些窗口。",
+      "还有 {count} 个窗口没能恢复原位。恢复记录已保留，请查看结果并重试恢复。",
       { count: incomplete[1]! },
     );
   }
   if (raw.includes("already_active")) {
-    return t("窗口仍处于整理状态。请先点「恢复本次布局」，再重新整理到新的目标屏。");
+    return t("当前整理仍有恢复记录，请查看当前状态后继续操作。");
   }
   if (raw.includes("restore_cancelled")) {
     return t("已取消这次恢复，因为期间开始了新的整理。");
   }
   if (raw.includes("paused")) {
-    return t("自动整理已暂停。在托盘菜单或概览页取消暂停后重试。");
+    return t("自动整理已暂停；手动整理与恢复仍可使用。");
   }
   if (raw.includes("TargetDisplayMissing") || raw.includes("no_displays")) {
     return t("目标显示器当前不可用，请在「显示器」页重新选择。");
@@ -447,7 +481,7 @@ export function errorMessage(error: unknown): string {
   if (raw.includes("PermissionDenied") || raw.includes("permission")) {
     return t("系统拒绝了窗口操作权限，请检查授权后重试。");
   }
-  return raw;
+  return humanError(raw);
 }
 
 /** Format a byte count for the diagnostics line. */

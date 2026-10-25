@@ -33,12 +33,25 @@ use unfy_platform::{
     Capabilities, DisplayProvider, ObservedWindow, PlatformError, Result as PlatformResult,
     WindowBackend, WindowPlan,
 };
-use unfy_platform_win::WinPlatform;
+use unfy_platform_win::{identify_window, WinPlatform};
 
 /// Default number of host windows. Enough to force a multi-row grid.
 const DEFAULT_WINDOWS: usize = 6;
 
 fn main() {
+    let identity_args: Vec<String> = std::env::args().collect();
+    if identity_args.get(1).is_some_and(|arg| arg == "--identity") {
+        let id = WindowId {
+            native_id: identity_args[2].parse().expect("native id"),
+            process_id: identity_args[3].parse().expect("process id"),
+            process_start: identity_args[4].parse().expect("process creation time"),
+            instance: identity_args[5].parse().expect("window instance"),
+        };
+        WinPlatform::new()
+            .read_back(&id)
+            .expect("persisted identity must be readable in a new process");
+        return;
+    }
     if std::env::args().any(|arg| arg == "--host") {
         host_main();
         return;
@@ -92,7 +105,39 @@ fn main() {
     let scope = Scope::new(host.ids.clone());
     let mut engine = Engine::new(Scoped::new(WinPlatform::new(), scope), config);
 
+    for id in &host.ids {
+        let status = Command::new(std::env::current_exe().expect("executable"))
+            .args([
+                "--identity".to_string(),
+                id.native_id.to_string(),
+                id.process_id.to_string(),
+                id.process_start.to_string(),
+                id.instance.to_string(),
+            ])
+            .status()
+            .expect("identity observer");
+        assert!(
+            status.success(),
+            "cross-process window token must survive backend restart"
+        );
+        let mut stale = id.clone();
+        stale.instance ^= 1;
+        assert!(
+            matches!(
+                engine.backend().inner.read_back(&stale),
+                Err(PlatformError::IdentityUncertain)
+            ),
+            "same HWND and process with wrong lifetime token must be rejected"
+        );
+    }
     let before = host.rects(&engine);
+    let before_states: HashMap<_, _> = engine
+        .backend()
+        .enumerate()
+        .expect("initial states")
+        .into_iter()
+        .map(|snapshot| (snapshot.id.clone(), snapshot))
+        .collect();
     assert_eq!(before.len(), windows, "host windows must be enumerable");
     println!("\ncaptured {} windows", before.len());
     for (id, rect) in &before {
@@ -107,19 +152,23 @@ fn main() {
     let _ = engine.preview(&target.key).expect("preview");
     let preview_ms = preview_started.elapsed().as_millis();
 
+    let foreground = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
     let started = std::time::Instant::now();
     let report = engine
         .migrate(&target.key)
         .expect("migration must not fail outright");
     let migrate_ms = started.elapsed().as_millis();
+    assert_eq!(
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() },
+        foreground,
+        "gather must not activate a host window"
+    );
     println!(
         "\ntiming: enumerate {enumerate_ms} ms, preview {preview_ms} ms, migrate {migrate_ms} ms ({windows} host windows)"
     );
-    // The engine moves every eligible window on the desktop, not only the ones
-    // this harness created. That is correct product behaviour, but it means the
-    // assertions below must be scoped to the host's own handles.
+    // Every enumerated and written ID is the complete identity of a host window.
     println!(
-        "\nmigration: applied={} rejected={} skipped={} (desktop-wide)",
+        "\nmigration: applied={} rejected={} skipped={} (scoped host only)",
         report.applied.len(),
         report.rejected_count(),
         report.skipped.len()
@@ -128,15 +177,16 @@ fn main() {
         .keys()
         .filter(|id| report.applied.iter().any(|a| a == *id))
         .count();
-    // Above the target display's capacity the planner deliberately leaves the
-    // overflow in place rather than producing unusable slivers, so at 100
-    // windows on 1920x1032 only the placed ones can be asserted. The invariant
-    // that still holds for every window: it did not end up invisible.
+    // MoveInto allows overlap; every host window must be planned.
+    assert!(
+        report.unplaced.is_empty(),
+        "default gather must not impose grid capacity"
+    );
     let placed = windows - report.unplaced.len();
     assert_eq!(
         moved_ours, placed,
-        "every *placed* host window must be in the applied set ({} of {windows} placed)",
-        placed
+        "every placed host window must be applied ({placed} of {windows}); skipped={:?}; outcomes={:?}",
+        report.skipped, report.outcomes
     );
     println!(
         "placed {placed} of {windows} host windows; {} left in place by capacity",
@@ -177,12 +227,19 @@ fn main() {
         failures.join("\n  ")
     );
     println!("migration PASS: every window is inside the target work area");
+    for snapshot in engine.backend().enumerate().expect("migrated states") {
+        assert_eq!(
+            snapshot.mode, before_states[&snapshot.id].mode,
+            "default gather must preserve window mode"
+        );
+    }
 
     // The default mode must not touch a window that is already usable on the
     // target. Retargeting onto the same display is the cheapest way to prove it:
     // every window is already there, so `unchanged` must account for all of them
     // and nothing may be written.
     let before_noop = host.rects(&engine);
+    let writes_before_noop = engine.backend().writes.get();
     let noop = engine
         .retarget(&target.key)
         .expect("a retarget onto the same display must not fail");
@@ -200,16 +257,21 @@ fn main() {
         before_noop, after_noop,
         "an idempotent retarget must not change any rectangle"
     );
+    assert_eq!(
+        engine.backend().writes.get(),
+        writes_before_noop,
+        "unchanged means zero native submissions, including restore"
+    );
     println!("idempotence PASS: {windows} windows already on target were left alone");
 
     let restore_started = std::time::Instant::now();
     let restore = engine.restore().expect("restore must not fail outright");
     let restore_ms = restore_started.elapsed().as_millis();
     println!("restore wall time: {restore_ms} ms");
-    // Other applications on this desktop are also part of the migration, and
-    // some of them refuse to be moved. That is reported honestly rather than
-    // hidden, so the assertion must be scoped to the windows this harness owns;
-    // a foreign window left in `pending` is not a Unfy failure.
+    assert!(
+        restore.pending.iter().all(|id| before.contains_key(id)),
+        "restore must never acquire responsibility for an unscoped window"
+    );
     let ours_pending = restore
         .pending
         .iter()
@@ -252,6 +314,30 @@ fn main() {
         drift.join("\n  ")
     );
     println!("restore PASS: every window returned to its original rectangle (tolerance 4 px)");
+    for snapshot in engine.backend().enumerate().expect("restored states") {
+        let original = &before_states[&snapshot.id];
+        assert_eq!(snapshot.mode, original.mode, "restore must restore mode");
+        assert_eq!(
+            snapshot.topmost, original.topmost,
+            "restore must preserve topmost group"
+        );
+        if let (Some(actual), Some(expected)) =
+            (&snapshot.native_placement, &original.native_placement)
+        {
+            assert!(
+                engine
+                    .backend()
+                    .inner
+                    .native_placement_matches(actual, expected),
+                "restore must restore the hidden normal rectangle as well as visible geometry"
+            );
+        }
+    }
+    assert_eq!(
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() },
+        foreground,
+        "restore must not activate a host window"
+    );
 
     // A journal may only be deleted once every window reaches a safe terminal
     // state. An unresolved window keeps it alive, which is the correct behaviour:
@@ -284,6 +370,55 @@ fn main() {
             "an unresolved transaction must not be recorded as clean"
         );
         println!("journal PASS: unresolved transaction kept for later recovery");
+    }
+
+    if let Some(maximized) = before_states
+        .values()
+        .find(|snapshot| snapshot.mode == unfy_domain::WindowMode::Maximized)
+    {
+        let mut grid = Engine::new(
+            Scoped::new(WinPlatform::new(), Scope::new(vec![maximized.id.clone()])),
+            EngineConfig {
+                journal_dir: journal_dir.join("maximized-grid"),
+                layout: unfy_layout::LayoutConfig {
+                    mode: unfy_layout::LayoutMode::Grid,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let tiled = grid.migrate(&target.key).expect("grid gather");
+        assert_eq!(
+            tiled.applied,
+            vec![maximized.id.clone()],
+            "maximized window must fit its grid cell"
+        );
+        assert_eq!(
+            grid.backend().read_back(&maximized.id).unwrap().mode,
+            unfy_domain::WindowMode::Normal
+        );
+        assert_eq!(
+            unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() },
+            foreground
+        );
+        assert!(grid.restore().expect("grid restore").is_complete());
+        let restored = grid
+            .backend()
+            .enumerate()
+            .unwrap()
+            .pop()
+            .expect("restored maximized host");
+        assert_eq!(restored.mode, maximized.mode);
+        assert_eq!(restored.visible_rect, maximized.visible_rect);
+        assert!(grid.backend().inner.native_placement_matches(
+            restored.native_placement.as_ref().unwrap(),
+            maximized.native_placement.as_ref().unwrap()
+        ));
+        assert_eq!(
+            unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() },
+            foreground
+        );
+        println!("grid mode PASS: maximized window normalized and restored without activation");
     }
 
     host.stop();
@@ -324,6 +459,7 @@ impl MigrationCounts for unfy_engine::MigrationReport {
 struct Scoped {
     inner: WinPlatform,
     ids: Vec<WindowId>,
+    writes: std::cell::Cell<usize>,
 }
 
 impl Scoped {
@@ -331,13 +467,12 @@ impl Scoped {
         Self {
             inner,
             ids: scope.ids,
+            writes: std::cell::Cell::new(0),
         }
     }
 
     fn in_scope(&self, id: &WindowId) -> bool {
-        self.ids
-            .iter()
-            .any(|candidate| candidate.native_id == id.native_id)
+        self.ids.contains(id)
     }
 }
 
@@ -370,9 +505,49 @@ impl DisplayProvider for Scoped {
 
 impl WindowBackend for Scoped {
     fn enumerate(&self) -> PlatformResult<Vec<WindowSnapshot>> {
-        let mut windows = self.inner.enumerate()?;
-        windows.retain(|window| self.in_scope(&window.id));
-        Ok(windows)
+        self.ids.iter().map(|id| self.inner.snapshot(id)).collect()
+    }
+
+    fn snapshot(&self, id: &WindowId) -> PlatformResult<WindowSnapshot> {
+        if !self.in_scope(id) {
+            return Err(PlatformError::IdentityUncertain);
+        }
+        self.inner.snapshot(id)
+    }
+
+    fn eligibility(&self, id: &WindowId) -> Option<unfy_domain::SkipReason> {
+        if !self.in_scope(id) {
+            return Some(unfy_domain::SkipReason::IdentityUncertain);
+        }
+        self.inner.eligibility(id)
+    }
+
+    fn restore_native_state(
+        &self,
+        id: &WindowId,
+        placement: &[u8],
+        topmost: bool,
+    ) -> PlatformResult<()> {
+        if !self.in_scope(id) {
+            return Err(PlatformError::IdentityUncertain);
+        }
+        self.writes.set(self.writes.get() + 1);
+        self.inner.restore_native_state(id, placement, topmost)
+    }
+
+    fn native_placement_matches(&self, actual: &[u8], expected: &[u8]) -> bool {
+        self.inner.native_placement_matches(actual, expected)
+    }
+
+    fn transform_native_placement(
+        &self,
+        placement: &[u8],
+        source_work: Rect,
+        source_scale: unfy_domain::Scale,
+        target: &DisplaySnapshot,
+    ) -> PlatformResult<Vec<u8>> {
+        self.inner
+            .transform_native_placement(placement, source_work, source_scale, target)
     }
 
     fn capabilities(&self, id: &WindowId) -> Capabilities {
@@ -386,6 +561,11 @@ impl WindowBackend for Scoped {
         if !self.in_scope(id) {
             return Err(PlatformError::WindowGone);
         }
+        self.writes.set(self.writes.get() + 1);
+        assert!(
+            self.inner.capabilities(id).can_resize || !plan.resize,
+            "fixed-size windows must receive a move-only plan"
+        );
         self.inner.apply(id, plan)
     }
 
@@ -393,6 +573,11 @@ impl WindowBackend for Scoped {
         if !self.in_scope(id) {
             return Err(PlatformError::WindowGone);
         }
+        self.writes.set(self.writes.get() + 1);
+        assert!(
+            self.inner.capabilities(id).can_resize || !plan.resize,
+            "fixed-size windows must receive a move-only plan"
+        );
         self.inner.apply_async(id, plan)
     }
 
@@ -402,21 +587,12 @@ impl WindowBackend for Scoped {
         }
         self.inner.read_back(id)
     }
-
-    fn restore_native(&self, id: &WindowId, placement: &[u8]) -> PlatformResult<()> {
-        if !self.in_scope(id) {
-            return Err(PlatformError::WindowGone);
-        }
-        self.inner.restore_native(id, placement)
-    }
 }
 
 /// A child process that owns N plain windows and reports their handles.
 struct Host {
     child: Child,
     ids: Vec<WindowId>,
-    /// Rectangles captured immediately after creation, before any migration.
-    originals: HashMap<WindowId, Rect>,
 }
 
 impl Host {
@@ -441,11 +617,13 @@ impl Host {
             let Ok(native_id) = value.parse::<u64>() else {
                 continue;
             };
-            ids.push(WindowId {
-                native_id,
-                process_id: child.id(),
-                process_start: 0,
-            });
+            ids.push(
+                identify_window(native_id, child.id()).unwrap_or_else(|error| {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("host identity must be provable: {error}");
+                }),
+            );
             // Break *after* the push: waiting for one more line would block
             // forever because the child only prints `count` handles and then
             // sits in its message loop with the pipe still open.
@@ -456,28 +634,18 @@ impl Host {
 
         std::thread::sleep(std::time::Duration::from_millis(400));
 
-        Ok(Self {
-            child,
-            ids,
-            originals: HashMap::new(),
-        })
+        Ok(Self { child, ids })
     }
 
     /// Read the current rectangle of every host window via the platform backend.
     fn rects(&mut self, engine: &Engine<Scoped>) -> HashMap<WindowId, Rect> {
         let mut out = HashMap::new();
-        for snapshot in engine.backend().enumerate().unwrap_or_default() {
-            if self
-                .ids
-                .iter()
-                .any(|id| id.native_id == snapshot.id.native_id)
-            {
-                if self.originals.is_empty() {
-                    self.originals
-                        .insert(snapshot.id.clone(), snapshot.visible_rect);
-                }
-                out.insert(snapshot.id, snapshot.visible_rect);
-            }
+        for snapshot in engine.backend().enumerate().expect("scoped enumeration") {
+            assert!(
+                self.ids.contains(&snapshot.id),
+                "foreign identity entered scope"
+            );
+            out.insert(snapshot.id, snapshot.visible_rect);
         }
         out
     }
@@ -504,9 +672,10 @@ fn host_main() {
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW, ShowWindow,
-        TranslateMessage, CS_HREDRAW, CS_VREDRAW, MSG, SW_SHOWNOACTIVATE, WNDCLASSW,
-        WS_OVERLAPPEDWINDOW,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
+        GetMessageW, GetPropW, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW,
+        CS_VREDRAW, MSG, SW_SHOWNA, SW_SHOWNOACTIVATE, WNDCLASSW, WS_MAXIMIZE, WS_MAXIMIZEBOX,
+        WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
     };
 
     unsafe extern "system" fn wndproc(
@@ -540,22 +709,88 @@ fn host_main() {
             // completely; the engine re-tiles them anyway.
             let x = origin_x + (index % 3) * 120;
             let y = origin_y + (index / 3) * 120;
-            let hwnd = CreateWindowExW(
-                Default::default(),
-                w!("UnfyE2EHost"),
-                w!("Unfy E2E host"),
-                WS_OVERLAPPEDWINDOW,
-                x,
-                y,
-                640,
-                480,
-                None,
-                None,
-                Some(instance.into()),
-                None,
-            )
-            .expect("create window");
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let fixed = index == 1;
+            let style = if fixed {
+                WS_OVERLAPPEDWINDOW & !WS_THICKFRAME & !WS_MAXIMIZEBOX
+            } else if index == 2 {
+                WS_OVERLAPPEDWINDOW | WS_MAXIMIZE
+            } else {
+                WS_OVERLAPPEDWINDOW
+            };
+            let (width, height) = if fixed { (180, 120) } else { (640, 480) };
+            let create = || {
+                CreateWindowExW(
+                    Default::default(),
+                    w!("UnfyE2EHost"),
+                    w!("Unfy E2E host"),
+                    style,
+                    x,
+                    y,
+                    width,
+                    height,
+                    None,
+                    None,
+                    Some(instance.into()),
+                    None,
+                )
+                .expect("create window")
+            };
+            let mut hwnd = create();
+            if index == 0 {
+                let old = identify_window(hwnd.0 as usize as u64, std::process::id())
+                    .expect("assign first lifetime");
+                assert_ne!(old.instance, 0);
+                DestroyWindow(hwnd).expect("destroy lifetime probe");
+                hwnd = create();
+                assert!(
+                    GetPropW(hwnd, w!("Unfy.WindowInstance.v1")).is_invalid(),
+                    "a newly created window must not inherit a destroyed window's property"
+                );
+                let new = identify_window(hwnd.0 as usize as u64, std::process::id())
+                    .expect("assign second lifetime");
+                assert_ne!(
+                    old.instance, new.instance,
+                    "each window lifetime gets its own token"
+                );
+                assert!(
+                    WinPlatform::new().read_back(&old).is_err(),
+                    "destroyed identity must not resolve"
+                );
+                println!("identity lifetime PASS: destroyed property not inherited");
+            }
+            let foreground = GetForegroundWindow();
+            let _ = ShowWindow(
+                hwnd,
+                if index == 2 {
+                    SW_SHOWNA
+                } else {
+                    SW_SHOWNOACTIVATE
+                },
+            );
+            assert_eq!(
+                GetForegroundWindow(),
+                foreground,
+                "host setup must not steal focus"
+            );
+            if index == 0 {
+                // Keep a hidden owned helper alive even on systems without an IME.
+                // It must not exclude its otherwise movable owner from the gather.
+                let _hidden_owned = CreateWindowExW(
+                    Default::default(),
+                    w!("UnfyE2EHost"),
+                    w!("Unfy hidden helper"),
+                    WS_OVERLAPPEDWINDOW,
+                    x,
+                    y,
+                    80,
+                    80,
+                    Some(hwnd),
+                    None,
+                    Some(instance.into()),
+                    None,
+                )
+                .expect("hidden owned helper");
+            }
             handles.push(hwnd);
             println!("hwnd={}", hwnd.0 as usize);
             std::io::stdout().flush().ok();

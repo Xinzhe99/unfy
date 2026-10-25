@@ -87,16 +87,6 @@ impl WindowOutcome {
 /// Why a window was skipped. Surfaced verbatim in the UI, so each variant maps
 /// to one Chinese sentence in `apps/desktop`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-/// Why a window was skipped, in the cases a user can actually observe.
-///
-/// Seven variants were removed here after an audit: `OwnWindow`, `ToolWindow`,
-/// `ShellWindow`, `ModalChild`, `ZeroSize` and `OtherVirtualDesktop` were never
-/// constructed anywhere. Their filtering happens in the platform layer, which
-/// drops the process's own windows, hidden windows, tool windows and cloaked
-/// windows before the engine is handed a list at all - so a reason the engine
-/// could never produce also produced a wire code and a translated label the user
-/// could never see. `Invisible` remains because it is reachable: it is what
-/// `classify` reports for a window whose display cannot be found.
 pub enum SkipReason {
     Invisible,
     Fullscreen,
@@ -104,6 +94,12 @@ pub enum SkipReason {
     Minimized,
     /// The user excluded this application from automation.
     ExcludedApp,
+    OwnerGroupUnsupported,
+    OtherDesktop,
+    DesktopUnknown,
+    IdentityUncertain,
+    GeometryUnknown,
+    SuspectedFullscreen,
 }
 
 impl SkipReason {
@@ -114,6 +110,12 @@ impl SkipReason {
             SkipReason::PermissionDenied => "permission_denied",
             SkipReason::Minimized => "minimized",
             SkipReason::ExcludedApp => "excluded_app",
+            SkipReason::OwnerGroupUnsupported => "owner_group_unsupported",
+            SkipReason::OtherDesktop => "other_desktop",
+            SkipReason::DesktopUnknown => "desktop_unknown",
+            SkipReason::IdentityUncertain => "identity_uncertain",
+            SkipReason::GeometryUnknown => "geometry_unknown",
+            SkipReason::SuspectedFullscreen => "suspected_fullscreen",
         }
     }
 }
@@ -214,6 +216,12 @@ mod tests {
             SkipReason::PermissionDenied,
             SkipReason::Minimized,
             SkipReason::ExcludedApp,
+            SkipReason::OwnerGroupUnsupported,
+            SkipReason::OtherDesktop,
+            SkipReason::DesktopUnknown,
+            SkipReason::IdentityUncertain,
+            SkipReason::GeometryUnknown,
+            SkipReason::SuspectedFullscreen,
         ];
         let mut codes: Vec<_> = all.iter().map(|r| r.code()).collect();
         codes.sort_unstable();

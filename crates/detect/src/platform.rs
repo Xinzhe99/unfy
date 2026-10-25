@@ -1,55 +1,84 @@
 //! Platform observations for the detector.
 //!
-//! Windows is the only implementation today; macOS and Linux return "no
-//! evidence", which makes the detector inert rather than wrong there.
-//!
-//! Each function answers one question and returns plain data. A failure to
-//! observe is reported as "no evidence", never as an error that stops the poll:
-//! losing the ability to read the module list must not crash the app, and it must
-//! not silently look like "a remote session just ended" either. The caller
-//! distinguishes the two by comparing against the previous state.
+//! Failed queries remain unavailable; they never become empty successful polls.
+//! RDP membership, process names and sockets are diagnostic candidates only.
 
 use unfy_domain::DisplaySnapshot;
 
-use crate::{is_known_tool, is_virtual_display, known_ports, Observation};
+use crate::{is_known_tool, is_virtual_display, known_ports, ports_for, Observation, RdpSession};
 
-/// Whether this process is associated with a Terminal Services client session.
-///
-/// Two independent signals, because `SM_REMOTESESSION` is documented to
-/// misreport under RemoteFX vGPU: the system metric, and the session's protocol
-/// type. Either one being remote is enough.
-pub fn rdp_session() -> bool {
+/// Query only the session hosting this process. Console membership is not inbound
+/// RDP evidence; transitional states and failed queries remain unknown.
+pub fn rdp_session() -> Option<Option<RdpSession>> {
     use windows::Win32::System::RemoteDesktop::{
-        WTSClientProtocolType, WTSQuerySessionInformationW, WTS_CURRENT_SERVER_HANDLE,
-        WTS_CURRENT_SESSION,
+        ProcessIdToSessionId, WTSActive, WTSClientProtocolType, WTSConnectState, WTSDisconnected,
+        WTSGetActiveConsoleSessionId, WTSSessionInfoEx, WTSINFOEXW, WTS_CONNECTSTATE_CLASS,
+        WTS_SESSIONSTATE_UNLOCK,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION};
+    let mut id = 0;
+    unsafe { ProcessIdToSessionId(std::process::id(), &mut id) }.ok()?;
+    let protocol: u16 = query_session(id, WTSClientProtocolType)?;
+    if protocol != 2 {
+        return Some(None);
+    }
+    if unsafe { WTSGetActiveConsoleSessionId() } == id {
+        return None;
+    }
+    let state: WTS_CONNECTSTATE_CLASS = query_session(id, WTSConnectState)?;
+    if state == WTSActive {
+        let info: WTSINFOEXW = query_session(id, WTSSessionInfoEx)?;
+        if info.Level != 1 {
+            return None;
+        }
+        let session = unsafe { info.Data.WTSInfoExLevel1 };
+        if session.SessionId != id
+            || session.SessionState != WTSActive
+            || session.SessionFlags != WTS_SESSIONSTATE_UNLOCK as i32
+        {
+            return None;
+        }
+        Some(Some(RdpSession {
+            id,
+            connected: true,
+        }))
+    } else if state == WTSDisconnected {
+        Some(Some(RdpSession {
+            id,
+            connected: false,
+        }))
+    } else {
+        None
+    }
+}
 
-    let metric = unsafe { GetSystemMetrics(SM_REMOTESESSION) } != 0;
-
-    // `WTSClientProtocolType`: 0 = console, 2 = RDP. The buffer is freed by the
-    // API, not by us, so it is leaked into a local variable and released with
-    // `WTSFreeMemory`.
+fn query_session<T: Copy>(
+    id: u32,
+    class: windows::Win32::System::RemoteDesktop::WTS_INFO_CLASS,
+) -> Option<T> {
+    use windows::Win32::System::RemoteDesktop::{
+        WTSFreeMemory, WTSQuerySessionInformationW, WTS_CURRENT_SERVER_HANDLE,
+    };
     let mut buffer = windows::core::PWSTR::null();
-    let mut bytes: u32 = 0;
+    let mut bytes = 0;
     let queried = unsafe {
         WTSQuerySessionInformationW(
             Some(WTS_CURRENT_SERVER_HANDLE),
-            WTS_CURRENT_SESSION,
-            WTSClientProtocolType,
+            id,
+            class,
             &mut buffer,
             &mut bytes,
         )
     };
-    let mut protocol_remote = false;
-    if queried.is_ok() && !buffer.is_null() {
-        if bytes as usize >= std::mem::size_of::<u16>() {
-            protocol_remote = unsafe { std::ptr::read_unaligned(buffer.0) } == 2;
-        }
-        unsafe { windows::Win32::System::RemoteDesktop::WTSFreeMemory(buffer.0.cast()) };
+    let result =
+        if queried.is_ok() && !buffer.is_null() && bytes as usize >= std::mem::size_of::<T>() {
+            Some(unsafe { std::ptr::read_unaligned(buffer.0.cast::<T>()) })
+        } else {
+            None
+        };
+    if !buffer.is_null() {
+        unsafe { WTSFreeMemory(buffer.0.cast()) };
     }
-
-    metric || protocol_remote
+    result
 }
 
 /// Names of virtual display devices among the current topology.
@@ -68,14 +97,14 @@ pub fn virtual_displays(displays: &[DisplaySnapshot]) -> Vec<String> {
 }
 
 /// Running processes that belong to known remote-control tools.
-pub fn remote_tools_running() -> Vec<String> {
+pub fn remote_tools_running() -> Option<Vec<String>> {
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
 
     let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
-        return Vec::new();
+        return None;
     };
 
     let mut found = Vec::new();
@@ -84,8 +113,8 @@ pub fn remote_tools_running() -> Vec<String> {
         ..Default::default()
     };
 
-    let mut has_entry = unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok();
-    while has_entry {
+    let mut next = unsafe { Process32FirstW(snapshot, &mut entry) };
+    while next.is_ok() {
         let end = entry
             .szExeFile
             .iter()
@@ -95,13 +124,16 @@ pub fn remote_tools_running() -> Vec<String> {
         if let Some(tool) = is_known_tool(&name) {
             found.push(tool.to_string());
         }
-        has_entry = unsafe { Process32NextW(snapshot, &mut entry) }.is_ok();
+        next = unsafe { Process32NextW(snapshot, &mut entry) };
     }
 
     let _ = unsafe { windows::Win32::Foundation::CloseHandle(snapshot) };
+    if next.err()?.code() != windows::Win32::Foundation::ERROR_NO_MORE_FILES.to_hresult() {
+        return None;
+    }
     found.sort();
     found.dedup();
-    found
+    Some(found)
 }
 
 /// Known tools holding an established TCP connection on one of their own ports.
@@ -109,21 +141,15 @@ pub fn remote_tools_running() -> Vec<String> {
 /// Only *established* connections to the tool's documented port count. A
 /// listening socket does not: every tool that is merely installed listens on
 /// startup, which would make "installed" indistinguishable from "in use".
-pub fn remote_tools_connected() -> Vec<String> {
+pub fn remote_tools_connected() -> Option<Vec<String>> {
     use windows::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, MIB_TCP_STATE_ESTAB, TCP_TABLE_OWNER_PID_ALL,
     };
     use windows::Win32::Networking::WinSock::AF_INET;
 
-    let ports = known_ports();
-    if ports.is_empty() {
-        return Vec::new();
-    }
-
     let mut size: u32 = 0;
-    // First call sizes the buffer; the documented return is
-    // ERROR_INSUFFICIENT_BUFFER, which windows-rs surfaces as an error.
-    unsafe {
+    // GetExtendedTcpTable returns a Win32 status code, including on its sizing call.
+    let sizing = unsafe {
         GetExtendedTcpTable(
             None,
             &mut size,
@@ -133,8 +159,11 @@ pub fn remote_tools_connected() -> Vec<String> {
             0,
         )
     };
-    if size == 0 {
-        return Vec::new();
+    if sizing != 0 && sizing != windows::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER.0 {
+        return None;
+    }
+    if size < std::mem::size_of::<u32>() as u32 {
+        return None;
     }
 
     let mut buffer = vec![0u8; size as usize];
@@ -150,18 +179,22 @@ pub fn remote_tools_connected() -> Vec<String> {
     };
     if ok != 0 {
         // Non-zero is a Win32 error code (no ERROR_SUCCESS).
-        return Vec::new();
+        return None;
     }
 
     // The table starts with a row count, then a packed array of rows.
     let count = u32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
     let header = std::mem::size_of::<u32>();
+    if size as usize > buffer.len() || (size as usize) < header {
+        return None;
+    }
     let row_size = std::mem::size_of::<MIB_TCPROW_OWNER_PID>();
-    if header + count * row_size > buffer.len() {
-        return Vec::new();
+    if count > (size as usize - header) / row_size {
+        return None;
     }
 
-    let mut owning_pids: Vec<u32> = Vec::new();
+    let mut found = Vec::new();
+    let known = known_ports();
     for index in 0..count {
         let offset = header + index * row_size;
         let row: MIB_TCPROW_OWNER_PID =
@@ -172,26 +205,22 @@ pub fn remote_tools_connected() -> Vec<String> {
         // Ports are stored in network byte order in the low 16 bits.
         let local_port = u16::from_be((row.dwLocalPort & 0xffff) as u16);
         let remote_port = u16::from_be((row.dwRemotePort & 0xffff) as u16);
+        if !known.contains(&local_port) && !known.contains(&remote_port) {
+            continue;
+        }
+        let name = executable_name(row.dwOwningPid)?;
+        let Some(tool) = is_known_tool(&name) else {
+            continue;
+        };
+        let ports = ports_for(tool);
         if ports.contains(&local_port) || ports.contains(&remote_port) {
-            owning_pids.push(row.dwOwningPid);
+            found.push(tool.to_string());
         }
     }
 
-    if owning_pids.is_empty() {
-        return Vec::new();
-    }
-
-    owning_pids.sort_unstable();
-    owning_pids.dedup();
-
-    let mut found: Vec<String> = owning_pids
-        .into_iter()
-        .filter_map(executable_name)
-        .filter_map(|name| is_known_tool(&name).map(str::to_string))
-        .collect();
     found.sort();
     found.dedup();
-    found
+    Some(found)
 }
 
 fn executable_name(pid: u32) -> Option<String> {
@@ -227,12 +256,20 @@ fn executable_name(pid: u32) -> Option<String> {
 
 /// One poll: every observation the detector consumes.
 pub fn observe(displays: &[DisplaySnapshot]) -> Observation {
+    let (Some(rdp_session), Some(tools_running), Some(tools_connected)) = (
+        rdp_session(),
+        remote_tools_running(),
+        remote_tools_connected(),
+    ) else {
+        return Observation::default();
+    };
     Observation {
         available: true,
-        rdp_active: rdp_session(),
+        rdp_active: rdp_session.is_some(),
+        rdp_session,
         virtual_displays: virtual_displays(displays),
-        tools_running: remote_tools_running(),
-        tools_connected: remote_tools_connected(),
+        tools_running,
+        tools_connected,
     }
 }
 
@@ -241,10 +278,19 @@ pub fn observe(displays: &[DisplaySnapshot]) -> Observation {
 /// Contains tool names and display labels only: no window titles, no user name,
 /// no addresses.
 pub fn summary(observation: &Observation) -> String {
+    if !observation.available {
+        return "remote-session observation unavailable".to_string();
+    }
     if observation.is_empty() {
         return "no remote-session evidence".to_string();
     }
     let mut parts: Vec<String> = Vec::new();
+    if let Some(session) = observation.rdp_session {
+        parts.push(format!(
+            "session={} connected={}",
+            session.id, session.connected
+        ));
+    }
     if observation.rdp_active {
         parts.push("rdp".to_string());
     }

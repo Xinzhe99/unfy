@@ -149,6 +149,7 @@ fn a_window_that_cannot_be_snapshotted_is_never_written() {
         native_id: 9,
         process_id: 1009,
         process_start: 1,
+        instance: 1,
     };
     assert!(
         !report.outcomes.contains_key(&denied)
@@ -368,6 +369,7 @@ fn a_record_without_process_identity_is_never_written() {
         native_id: 1,
         process_id: 1001,
         process_start: 0,
+        instance: 0,
     };
     let original = Rect::new(100, 100, 900, 700);
 
@@ -421,4 +423,341 @@ fn a_record_without_process_identity_is_never_written() {
     engine.keep_current_layout().expect("discard explicitly");
     assert_eq!(engine.state(), EngineState::Idle);
     assert_eq!(engine.unresolved_window_count(), 0);
+}
+
+fn recovered_preimage(id: WindowId, rect: Rect) -> unfy_journal::Preimage {
+    unfy_journal::Preimage {
+        id,
+        display_native_id: "fake-display-a".into(),
+        display_quality: IdentityQuality::Strong,
+        display_work_area: Rect::new(0, 0, 2560, 1400),
+        display_scale: Scale { x: 1.5, y: 1.5 },
+        visible_rect: rect,
+        outer_rect: rect,
+        mode: WindowMode::Normal,
+        topmost: false,
+        native_placement: None,
+    }
+}
+
+#[test]
+fn recovered_last_write_protects_a_later_external_move() {
+    let dir = journal_dir("recovered-last-write");
+    let path = dir.join("pending.journal");
+    let mut backend = FakeBackend::with_two_displays();
+    let external = Rect::new(2800, 100, 3400, 600);
+    let id = backend.add_window(
+        1,
+        external,
+        "fake-display-b",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    let mut journal = unfy_journal::Journal::begin(&path, "last write").unwrap();
+    journal
+        .write_preimage(&recovered_preimage(
+            id.clone(),
+            Rect::new(100, 100, 700, 600),
+        ))
+        .unwrap();
+    let owned = Rect::new(3000, 300, 3600, 800);
+    journal
+        .write_intent(&id, owned, WindowMode::Normal)
+        .unwrap();
+    journal
+        .write_result(&unfy_journal::AppliedResult {
+            id: id.clone(),
+            outcome: WindowOutcome::Applied,
+            observed: Some(unfy_journal::ObservedRect {
+                visible_rect: owned,
+                mode: WindowMode::Normal,
+            }),
+        })
+        .unwrap();
+    journal.durable().unwrap();
+    journal.abandon();
+    let mut engine = Engine::new(backend, config("recovered-last-write-engine"));
+    engine.recover(&path).unwrap();
+    let report = engine.restore().unwrap();
+    assert_eq!(
+        report.outcomes.get(&id),
+        Some(&WindowOutcome::KeptUserChange)
+    );
+    assert_eq!(
+        engine.backend().read_back(&id).unwrap().visible_rect,
+        external
+    );
+    assert!(report.is_complete());
+}
+
+#[test]
+fn retarget_never_reopens_a_durable_resolution() {
+    let dir = journal_dir("resolved-retarget");
+    let path = dir.join("pending.journal");
+    let backend = scenario();
+    let windows = backend.enumerate().unwrap();
+    let mut journal = unfy_journal::Journal::begin(&path, "resolved retarget").unwrap();
+    for window in &windows {
+        journal
+            .write_preimage(&recovered_preimage(window.id.clone(), window.visible_rect))
+            .unwrap();
+    }
+    let kept = &windows[0];
+    journal
+        .write_resolved(&kept.id, WindowOutcome::KeptUserChange)
+        .unwrap();
+    journal.durable().unwrap();
+    journal.abandon();
+    let mut engine = Engine::new(backend, config("resolved-retarget-engine"));
+    engine.recover(&path).unwrap();
+    engine.retarget(&target()).unwrap();
+    assert_eq!(
+        engine.backend().read_back(&kept.id).unwrap().visible_rect,
+        kept.visible_rect
+    );
+    assert_eq!(engine.unresolved_window_count(), 1);
+    assert!(engine.restore().unwrap().is_complete());
+}
+
+#[test]
+fn a_failed_recovery_scan_keeps_all_mutations_blocked() {
+    let path = journal_dir("scan-failure").join("file");
+    std::fs::write(&path, b"not a directory").unwrap();
+    let mut engine = Engine::new(scenario(), config("scan-failure-engine"));
+    assert!(engine.recover_latest(&path).is_err());
+    engine.pause().unwrap();
+    engine.resume().unwrap();
+    assert_eq!(engine.state(), EngineState::Error);
+    assert!(engine.restore().is_err());
+    assert!(engine.keep_current_layout().is_err());
+    assert!(engine.migrate(&target()).is_err());
+}
+
+#[test]
+fn rescue_captures_a_preimage_and_keeps_unknown_results_pending() {
+    let mut backend = FakeBackend::with_two_displays();
+    let id = backend.add_window(
+        1,
+        Rect::new(9000, 9000, 9600, 9500),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::SelfCorrecting,
+    );
+    let mut engine = Engine::new(backend, config("rescue-pending"));
+    assert!(engine.rescue_offscreen().unwrap().is_empty());
+    assert_eq!(engine.unresolved_window_count(), 1);
+    let path = engine
+        .config()
+        .journal_dir
+        .join(format!("{}.journal", engine.current_transaction().unwrap()));
+    let unfy_journal::Recovered::Unfinished(tx) = unfy_journal::recover(&path).unwrap() else {
+        panic!("unfinished");
+    };
+    assert_eq!(tx.preimages[0].id, id);
+    assert_eq!(tx.results[0].outcome, WindowOutcome::Unknown);
+    assert!(!tx.intents.is_empty());
+}
+
+#[test]
+fn grid_normalizes_maximized_windows_and_restores_their_mode() {
+    let mut backend = FakeBackend::with_two_displays();
+    let id = backend.add_window(
+        1,
+        Rect::new(0, 0, 2560, 1400),
+        "fake-display-a",
+        WindowMode::Maximized,
+        FakeBehaviour::Compliant,
+    );
+    let mut engine = Engine::new(
+        backend,
+        EngineConfig {
+            layout: unfy_layout::LayoutConfig {
+                mode: unfy_layout::LayoutMode::Grid,
+                ..Default::default()
+            },
+            ..config("grid-maximized")
+        },
+    );
+    assert_eq!(engine.migrate(&target()).unwrap().applied_count(), 1);
+    assert_eq!(
+        engine.backend().read_back(&id).unwrap().mode,
+        WindowMode::Normal
+    );
+    assert!(engine.restore().unwrap().is_complete());
+    assert_eq!(
+        engine.backend().read_back(&id).unwrap().mode,
+        WindowMode::Maximized
+    );
+}
+
+struct ReadbackBackend {
+    inner: FakeBackend,
+    denied: std::cell::Cell<bool>,
+    bounce: bool,
+    submitted: std::cell::Cell<usize>,
+    observations: std::cell::Cell<usize>,
+    original: Rect,
+}
+
+impl ReadbackBackend {
+    fn new(bounce: bool) -> Self {
+        let mut inner = FakeBackend::with_two_displays();
+        let original = Rect::new(100, 100, 700, 600);
+        inner.add_window(
+            1,
+            original,
+            "fake-display-a",
+            WindowMode::Normal,
+            FakeBehaviour::Compliant,
+        );
+        Self {
+            inner,
+            denied: false.into(),
+            bounce,
+            submitted: 0.into(),
+            observations: 0.into(),
+            original,
+        }
+    }
+}
+
+impl DisplayProvider for ReadbackBackend {
+    fn topology(&self) -> unfy_platform::Result<Vec<unfy_domain::DisplaySnapshot>> {
+        self.inner.topology()
+    }
+    fn scale_of(&self, key: &DisplayKey) -> unfy_platform::Result<Scale> {
+        self.inner.scale_of(key)
+    }
+    fn display_for(&self, id: &WindowId) -> unfy_platform::Result<DisplayKey> {
+        self.inner.display_for(id)
+    }
+}
+
+impl WindowBackend for ReadbackBackend {
+    fn enumerate(&self) -> unfy_platform::Result<Vec<unfy_domain::WindowSnapshot>> {
+        self.inner.enumerate()
+    }
+    fn capabilities(&self, id: &WindowId) -> unfy_platform::Capabilities {
+        self.inner.capabilities(id)
+    }
+    fn apply(&self, id: &WindowId, plan: &unfy_platform::WindowPlan) -> unfy_platform::Result<()> {
+        self.submitted.set(self.submitted.get() + 1);
+        self.inner.apply(id, plan)
+    }
+    fn read_back(&self, id: &WindowId) -> unfy_platform::Result<unfy_platform::ObservedWindow> {
+        if self.denied.get() {
+            return Err(unfy_platform::PlatformError::PermissionDenied);
+        }
+        if self.bounce && self.submitted.get() > 0 {
+            let observations = self.observations.get();
+            self.observations.set(observations + 1);
+            if observations > 0 {
+                return Ok(unfy_platform::ObservedWindow {
+                    visible_rect: self.original,
+                    mode: WindowMode::Normal,
+                });
+            }
+        }
+        self.inner.read_back(id)
+    }
+}
+
+#[test]
+fn a_first_hit_followed_by_rebound_is_not_reported_as_success() {
+    let mut engine = Engine::new(ReadbackBackend::new(true), config("readback-rebound"));
+    let report = engine.migrate(&target()).unwrap();
+    assert_eq!(report.applied_count(), 0);
+    assert_eq!(
+        report.outcomes.values().copied().collect::<Vec<_>>(),
+        vec![WindowOutcome::Unknown]
+    );
+    assert_eq!(
+        engine.backend().submitted.get(),
+        1,
+        "an outstanding request must not be retried"
+    );
+    let path = engine
+        .config()
+        .journal_dir
+        .join(format!("{}.journal", report.transaction));
+    let unfy_journal::Recovered::Unfinished(tx) = unfy_journal::recover(path).unwrap() else {
+        panic!("unfinished");
+    };
+    assert_eq!(
+        tx.results.last().unwrap().observed.unwrap().visible_rect,
+        engine.backend().original
+    );
+    assert!(tx.has_unresolved_intent());
+}
+
+#[test]
+fn permission_loss_never_resolves_a_restore_obligation() {
+    let mut engine = Engine::new(ReadbackBackend::new(false), config("restore-permission"));
+    let gathered = engine.migrate(&target()).unwrap();
+    engine.backend().denied.set(true);
+    let restored = engine.restore().unwrap();
+    assert_eq!(restored.pending.len(), 1);
+    assert_eq!(engine.unresolved_window_count(), 1);
+    assert_eq!(engine.backend().submitted.get(), 1);
+    let path = engine
+        .config()
+        .journal_dir
+        .join(format!("{}.journal", gathered.transaction));
+    let unfy_journal::Recovered::Unfinished(tx) = unfy_journal::recover(path).unwrap() else {
+        panic!("unfinished");
+    };
+    assert!(tx.resolved.is_empty());
+}
+
+#[test]
+fn unproven_native_restore_never_falls_back_to_geometry_success() {
+    for changed_geometry in [false, true] {
+        let backend = ReadbackBackend::new(false);
+        let window = backend.enumerate().unwrap().pop().unwrap();
+        let mut preimage = recovered_preimage(window.id.clone(), window.visible_rect);
+        preimage.native_placement = Some(vec![1, 2, 3]);
+        if changed_geometry {
+            let mut displays = backend.inner.displays();
+            displays[0].work_area.right -= 100;
+            backend.inner.set_displays(displays);
+        }
+        let path = journal_dir("unproven-native").join("pending.journal");
+        let mut journal = unfy_journal::Journal::begin(&path, "native restore").unwrap();
+        journal.write_preimage(&preimage).unwrap();
+        journal
+            .write_intent(&window.id, window.visible_rect, window.mode)
+            .unwrap();
+        journal.durable().unwrap();
+        journal.abandon();
+        let mut engine = Engine::new(backend, config("unproven-native-engine"));
+        engine.recover(&path).unwrap();
+        let report = engine.restore().unwrap();
+        assert_eq!(report.pending, vec![window.id]);
+        assert_eq!(engine.backend().submitted.get(), 0);
+        assert_eq!(engine.unresolved_window_count(), 1);
+    }
+}
+
+#[test]
+fn captured_but_never_submitted_windows_are_not_restored_over_user_changes() {
+    let backend = ReadbackBackend::new(false);
+    let window = backend.enumerate().unwrap().pop().unwrap();
+    let path = journal_dir("captured-only").join("pending.journal");
+    let mut journal = unfy_journal::Journal::begin(&path, "captured only").unwrap();
+    journal
+        .write_preimage(&recovered_preimage(
+            window.id.clone(),
+            Rect::new(400, 400, 1000, 900),
+        ))
+        .unwrap();
+    journal.durable().unwrap();
+    journal.abandon();
+    let mut engine = Engine::new(backend, config("captured-only-engine"));
+    engine.recover(&path).unwrap();
+    assert!(engine.restore().unwrap().is_complete());
+    assert_eq!(engine.backend().submitted.get(), 0);
+    assert_eq!(
+        engine.backend().read_back(&window.id).unwrap().visible_rect,
+        window.visible_rect
+    );
 }

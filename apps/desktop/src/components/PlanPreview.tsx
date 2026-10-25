@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { PreviewDto, RectDto } from "../api";
+import type { PreviewDto } from "../api";
 import { skipLabel } from "../api";
 
 /**
@@ -85,7 +85,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
     duplicates.set(placement.app_name, (duplicates.get(placement.app_name) ?? 0) + 1);
   }
 
-  if (placed === 0 && preview.skipped.length === 0) {
+  if (placed === 0 && preview.skipped.length === 0 && preview.unplaced.length === 0) {
     return (
       <p className="rounded-[var(--radius-control)] border border-dashed border-[var(--color-border-strong)] px-4 py-6 text-center text-xs text-[var(--color-muted)]">
         {t("没有可整理的窗口")}
@@ -108,7 +108,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
             maxHeight: 300,
           }}
           role="img"
-          aria-label={t("布局预览：{placed} 个窗口排入 {width}×{height} 的区域", {
+          aria-label={t(preview.mode === "grid" ? "布局预览：{placed} 个窗口排入 {width}×{height} 的区域" : "移动预览：{placed} 个窗口按原大小移到 {width}×{height} 的区域", {
             placed,
             width: work.width,
             height: work.height,
@@ -133,7 +133,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
                   squeezed window, why it is drawn dashed. */}
               <title>{`${placement.app_name || t("窗口 {number}", { number: index + 1 })}${
                 placement.clamped
-                  ? t("：比它的格子需要更大，会压到相邻窗口")
+                  ? t(preview.mode === "grid" ? "：比它的格子需要更大，会压到相邻窗口" : "：已调整到可操作区域，可能超出屏幕边缘")
                   : ""
               }`}</title>
               <rect
@@ -213,7 +213,7 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
         <span>
           {t("将移动 {count} 个窗口", { count: placed })}
         </span>
-        {preview.cascaded && preview.mode === "default" ? (
+        {preview.mode === "default" ? (
           <span>
             {t("窗口按原大小移入，允许叠放；用任务栏或窗口切换访问。")}
           </span>
@@ -238,8 +238,17 @@ export function PlanPreview({ preview }: { preview: PreviewDto }) {
             })}
           </span>
         ) : null}
+        {squeezed > 0 && preview.mode === "default" ? <span>{t("{count} 个窗口会调整到可操作区域，保留大小。", { count: squeezed })}</span> : null}
       </div>
 
+      <ol className="space-y-1 text-xs">
+        {preview.placements.map((placement, index) => (
+          <li key={placement.window_id} className="flex min-w-0 gap-2">
+            <span className="shrink-0 tabular-nums">{index + 1}.</span>
+            <span className="min-w-0 break-all" title={placement.app_name}>{placement.app_name || t("窗口 {number}", { number: index + 1 })}{(duplicates.get(placement.app_name) ?? 0) > 1 ? ` #${index + 1}` : ""}</span>
+          </li>
+        ))}
+      </ol>
       {preview.skipped.length > 0 ? <SkippedList skipped={preview.skipped} /> : null}
     </div>
   );
@@ -278,9 +287,8 @@ function SkippedList({ skipped }: { skipped: PreviewDto["skipped"] }) {
   const byReason = new Map<string, Map<string, number>>();
   for (const item of skipped) {
     const apps = byReason.get(item.reason) ?? new Map<string, number>();
-    if (item.app_name) {
-      apps.set(item.app_name, (apps.get(item.app_name) ?? 0) + 1);
-    }
+    const name = item.app_name || item.window_id;
+    apps.set(name, (apps.get(name) ?? 0) + 1);
     byReason.set(item.reason, apps);
   }
 
@@ -335,7 +343,3 @@ function countOf(apps: Map<string, number>): number {
   return total;
 }
 
-/** Convert a rect to a CSS-friendly string; used by tests and future overlays. */
-export function rectLabel(rect: RectDto): string {
-  return `${rect.width}×${rect.height} @ ${rect.left},${rect.top}`;
-}

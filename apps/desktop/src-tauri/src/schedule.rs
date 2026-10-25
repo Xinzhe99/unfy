@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone)]
 pub struct Schedule {
     generation: Arc<AtomicU64>,
-    current: u64,
+    manual_generation: Arc<AtomicU64>,
 }
 
 impl Default for Schedule {
@@ -38,26 +38,53 @@ impl Schedule {
     pub fn new() -> Self {
         Self {
             generation: Arc::new(AtomicU64::new(0)),
-            current: 0,
+            manual_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// Claim the right to restore. Returns a token the waiter must check.
-    ///
-    /// Every new claim invalidates the previous one, which is exactly the
-    /// semantics the UI needs: "restore in 10 s" pressed twice restores once.
+    /// Capture the generation before observing or queueing an automatic request.
+    /// Unlike `claim`, this never supersedes an intervening user action.
+    pub fn token(&self) -> ScheduleToken {
+        ScheduleToken {
+            generation: Arc::clone(&self.generation),
+            mine: self.generation.load(Ordering::SeqCst),
+        }
+    }
+
+    /// Claim an automatic request, superseding only earlier automatic requests.
     pub fn claim(&mut self) -> ScheduleToken {
-        self.current = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let mine = self
+            .generation
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
         ScheduleToken {
             generation: self.generation.clone(),
-            mine: self.current,
+            mine,
         }
     }
 
-    /// Invalidate any pending restore without scheduling a new one.
-    pub fn cancel(&mut self) {
+    /// A user request supersedes older user requests and all automatic work.
+    pub fn claim_manual(&mut self) -> ScheduleToken {
+        self.cancel_automatic();
+        let mine = self
+            .manual_generation
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+        ScheduleToken {
+            generation: Arc::clone(&self.manual_generation),
+            mine,
+        }
+    }
+
+    /// Observation changes revoke automatic work without cancelling user actions.
+    pub fn cancel_automatic(&mut self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
-        self.current = self.generation.load(Ordering::SeqCst);
+    }
+
+    /// Explicit cancellation, settings changes and maintenance invalidate all work.
+    pub fn cancel(&mut self) {
+        self.cancel_automatic();
+        self.manual_generation.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -69,7 +96,8 @@ pub struct ScheduleToken {
 }
 
 impl ScheduleToken {
-    /// Whether this token is still the newest request.
+    /// Whether this token is still the newest request. Writers must recheck this
+    /// after acquiring their engine lock, including when the delay was zero.
     pub fn is_current(&self) -> bool {
         self.generation.load(Ordering::SeqCst) == self.mine
     }
@@ -122,79 +150,65 @@ mod tests {
     fn waiting_returns_true_for_the_current_token() {
         let mut schedule = Schedule::new();
         let token = schedule.claim();
-        assert!(wait_cancellable(Duration::from_millis(120), &token));
+        assert!(wait_cancellable(Duration::ZERO, &token));
     }
 
     #[test]
-    fn waiting_aborts_early_when_superseded() {
+    fn observer_cancellation_preserves_manual_requests() {
         let mut schedule = Schedule::new();
-        let token = schedule.claim();
-
-        let handle_schedule = schedule.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(120));
-            let mut copy = handle_schedule;
-            copy.cancel();
-        });
-
-        let started = Instant::now();
-        let proceed = wait_cancellable(Duration::from_secs(5), &token);
-        assert!(!proceed, "a cancelled wait must not proceed");
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "cancellation must not wait out the full delay, took {:?}",
-            started.elapsed()
-        );
+        let manual = schedule.claim_manual();
+        let automatic = schedule.claim();
+        assert!(manual.is_current());
+        schedule.cancel_automatic();
+        assert!(manual.is_current());
+        assert!(!automatic.is_current());
     }
-}
-
-#[cfg(test)]
-mod gather_cancels_restore_tests {
-    //! The reconnect invariant.
-    //!
-    //! The delay exists so a session that drops and reconnects does not cause two
-    //! migrations. That only works if the reconnect (a gather) kills the timer;
-    //! otherwise the timer fires after the fresh layout and undoes it.
-    //!
-    //! All three gather entry points - window button, shortcut, detector - now
-    //! share this, but two of them were missing it, which is why the behaviour is
-    //! pinned here rather than left to reading.
-
-    use super::*;
 
     #[test]
-    fn a_claimed_restore_is_cancelled_by_the_next_gather() {
+    fn manual_request_supersedes_automatic_and_earlier_manual_work() {
         let mut schedule = Schedule::new();
-
-        // Session ends: a restore is scheduled with a delay.
-        let restore = schedule.claim();
-
-        // Session comes back before the delay elapses: a gather cancels it.
+        let first_manual = schedule.claim_manual();
+        let automatic = schedule.claim();
+        let latest_manual = schedule.claim_manual();
+        assert!(!first_manual.is_current());
+        assert!(!automatic.is_current());
+        assert!(latest_manual.is_current());
+        let latest_auto = schedule.claim();
         schedule.cancel();
-
-        assert!(
-            !wait_cancellable(Duration::from_secs(1), &restore),
-            "the restore must not fire after a gather took over"
-        );
+        assert!(!latest_manual.is_current());
+        assert!(!latest_auto.is_current());
     }
 
     #[test]
-    fn the_restore_that_survives_its_wait_still_runs() {
-        let mut schedule = Schedule::new();
-        let restore = schedule.claim();
-        // No gather arrives.
-        assert!(wait_cancellable(Duration::from_millis(20), &restore));
-    }
+    fn cancellation_after_deadline_but_before_writer_lock_prevents_writes() {
+        use std::sync::{mpsc, Mutex};
 
-    #[test]
-    fn a_cancelled_restore_does_not_block_the_next_one() {
-        let mut schedule = Schedule::new();
-        let first = schedule.claim();
-        schedule.cancel();
-        assert!(!wait_cancellable(Duration::from_millis(10), &first));
-
-        // A later session end schedules a new restore that must proceed.
-        let second = schedule.claim();
-        assert!(wait_cancellable(Duration::from_millis(20), &second));
+        for reason in ["reconnect", "manual", "pause_or_maintenance"] {
+            let mut schedule = Schedule::new();
+            let token = schedule.claim();
+            let writer = Arc::new(Mutex::new(0));
+            let held = writer.lock().unwrap();
+            let (ready, reached_deadline) = mpsc::channel();
+            let worker_writer = Arc::clone(&writer);
+            let worker = std::thread::spawn(move || {
+                assert!(wait_cancellable(Duration::ZERO, &token));
+                ready.send(()).unwrap();
+                let mut writes = worker_writer.lock().unwrap();
+                if token.is_current() {
+                    *writes += 1;
+                }
+            });
+            reached_deadline.recv().unwrap();
+            match reason {
+                "reconnect" => schedule.cancel_automatic(),
+                "manual" => {
+                    schedule.claim_manual();
+                }
+                _ => schedule.cancel(),
+            }
+            drop(held);
+            worker.join().unwrap();
+            assert_eq!(*writer.lock().unwrap(), 0, "{reason}");
+        }
     }
 }

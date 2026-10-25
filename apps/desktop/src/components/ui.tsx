@@ -31,7 +31,7 @@ const variantClass: Record<Variant, string> = {
 };
 
 const sizeClass: Record<Size, string> = {
-  sm: "h-7 px-2.5 text-xs gap-1.5",
+  sm: "h-8 px-2.5 text-xs gap-1.5",
   md: "h-8 px-3 text-[13px] gap-1.5",
 };
 
@@ -205,6 +205,16 @@ export function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
+      onKeyDown={(event) => {
+        if (disabled || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const index = Math.max(0, options.findIndex((option) => option.value === value));
+        const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + options.length) % options.length;
+        const next = options[nextIndex];
+        if (!next) return;
+        onChange(next.value);
+        event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[nextIndex]?.focus();
+      }}
       // Only the selected option changes when disabled: it drops from `fg` to
       // `muted`. Unselected options are muted already and stay as they are.
       //
@@ -225,6 +235,7 @@ export function Segmented<T extends string>({
             type="button"
             role="radio"
             aria-checked={active}
+            tabIndex={active ? 0 : -1}
             disabled={disabled}
             onClick={() => onChange(option.value)}
             className={`rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors ${

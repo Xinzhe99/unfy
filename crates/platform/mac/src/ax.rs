@@ -1,44 +1,32 @@
-//! Accessibility (AX) window control.
-//!
-//! # Why the raw FFI instead of a wrapper crate
-//!
-//! The AX C API is small and stable: five functions and a handful of attribute
-//! constants. Binding it directly keeps the unsafe surface visible and auditable
-//! in one file instead of spreading it across a dependency.
-//!
-//! # Threading
-//!
-//! AX calls are synchronous IPC to the target application. A hung target makes
-//! the call block, so every call goes through [`with_timeout`], which sets
-//! `AXUIElementSetMessagingTimeout` for the duration. Without that, one frozen
-//! app freezes the whole migration.
-
-#![allow(non_upper_case_globals)]
+//! Accessibility window access. All retained AX references live and die on one
+//! worker thread; callers exchange only Rust values. Each IPC call has a timeout.
 
 use std::ffi::c_void;
+use std::sync::{mpsc, OnceLock};
 
+use core_foundation::array::CFArray;
+use core_foundation::base::{CFGetTypeID, CFType, CFTypeRef, TCFType};
+use core_foundation::boolean::CFBoolean;
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::number::CFNumber;
+use core_foundation::string::{CFString, CFStringRef};
 use unfy_domain::{DisplayKey, IdentityQuality, Rect, Size, WindowId, WindowMode, WindowSnapshot};
 use unfy_platform::{
     Capabilities, ObservedWindow, PlatformError, Result, WindowBackend, WindowPlan,
 };
 
-use core_foundation::array::CFArray;
-use core_foundation::base::{CFTypeRef, TCFType};
-use core_foundation::dictionary::CFDictionary;
-use core_foundation::number::CFNumber;
-use core_foundation::string::{CFString, CFStringRef};
-
-/// `kAXErrorSuccess`.
 const AX_SUCCESS: i32 = 0;
-/// `kAXErrorAttributeUnsupported`.
 const AX_ERROR_ATTRIBUTE_UNSUPPORTED: i32 = -25205;
-/// `kAXErrorAPIDisabled`.
+const AX_ERROR_NO_VALUE: i32 = -25212;
 const AX_ERROR_API_DISABLED: i32 = -25211;
+const AX_ERROR_CANNOT_COMPLETE: i32 = -25204;
+const AX_VALUE_CG_POINT: u32 = 1;
+const AX_VALUE_CG_SIZE: u32 = 2;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateApplication(pid: i32) -> CFTypeRef;
-    fn AXUIElementCreateSystemWide() -> CFTypeRef;
+    fn AXUIElementGetTypeID() -> usize;
     fn AXUIElementCopyAttributeValue(
         element: CFTypeRef,
         attribute: CFStringRef,
@@ -56,509 +44,651 @@ extern "C" {
     ) -> i32;
     fn AXUIElementSetMessagingTimeout(element: CFTypeRef, timeout: f32) -> i32;
     fn AXValueCreate(value_type: u32, value: *const c_void) -> CFTypeRef;
+    fn AXValueGetTypeID() -> usize;
     fn AXValueGetValue(value: CFTypeRef, value_type: u32, out: *mut c_void) -> u8;
     fn AXIsProcessTrusted() -> u8;
     fn AXIsProcessTrustedWithOptions(options: CFTypeRef) -> u8;
 }
 
-/// `kAXValueCGPointType`.
-const AX_VALUE_CG_POINT: u32 = 1;
-/// `kAXValueCGSizeType`.
-const AX_VALUE_CG_SIZE: u32 = 2;
-
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Default)]
 struct CGPoint {
     x: f64,
     y: f64,
 }
-
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Default)]
 struct CGSize {
     width: f64,
     height: f64,
 }
 
-/// Whether this process currently holds Accessibility permission.
 pub fn is_trusted() -> bool {
     unsafe { AXIsProcessTrusted() != 0 }
 }
 
-/// Show the system prompt asking the user to grant Accessibility permission.
-///
-/// The prompt is asynchronous, so the return value is the *current* state.
 pub fn request_trust() -> bool {
-    let key = CFString::from_static_string("AXTrustedCheckOptionPrompt");
-    let value = core_foundation::boolean::CFBoolean::true_value();
-    let options: CFDictionary<CFString, core_foundation::boolean::CFBoolean> =
-        CFDictionary::from_CFType_pairs(&[(key, value)]);
-    unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as CFTypeRef) != 0 }
+    let options = CFDictionary::from_CFType_pairs(&[(
+        CFString::from_static_string("AXTrustedCheckOptionPrompt"),
+        CFBoolean::true_value(),
+    )]);
+    unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) != 0 }
 }
 
-/// An AX window handle plus the process it belongs to.
-#[derive(Debug, Clone)]
-struct AxWindow {
-    element: CFTypeRef,
-    id: WindowId,
-    snapshot: WindowSnapshot,
+type Reply<T> = mpsc::Sender<Result<T>>;
+enum Request {
+    Enumerate(Reply<Vec<WindowSnapshot>>),
+    Snapshot(WindowId, Reply<WindowSnapshot>),
+    Capabilities(WindowId, Reply<Capabilities>),
+    Apply(WindowId, WindowPlan, Reply<()>),
+    ReadBack(WindowId, Reply<ObservedWindow>),
 }
 
-/// AX-backed window backend.
+/// This handle is Send + Sync without transferring CF or Objective-C objects.
 #[derive(Debug, Default)]
 pub struct AccessibilityBackend {
-    /// Cache of window elements, keyed by our `WindowId`. Rebuilt on enumerate.
-    windows: std::sync::Mutex<Vec<AxWindow>>,
+    worker: OnceLock<Result<mpsc::Sender<Request>>>,
 }
 
 impl AccessibilityBackend {
-    pub fn new() -> Self {
-        Self::default()
+    fn request<T>(&self, make: impl FnOnce(Reply<T>) -> Request) -> Result<T> {
+        let worker = self
+            .worker
+            .get_or_init(|| {
+                let (sender, receiver) = mpsc::channel();
+                std::thread::Builder::new()
+                    .name("unfy-accessibility".into())
+                    .spawn(move || {
+                        let mut state = AxState::default();
+                        while let Ok(request) = receiver.recv() {
+                            objc2::rc::autoreleasepool(|_| match request {
+                                Request::Enumerate(reply) => {
+                                    let _ = reply.send(state.enumerate());
+                                }
+                                Request::Snapshot(id, reply) => {
+                                    let _ = reply.send(state.snapshot(&id));
+                                }
+                                Request::Capabilities(id, reply) => {
+                                    let _ = reply.send(state.capabilities(&id));
+                                }
+                                Request::Apply(id, plan, reply) => {
+                                    let _ = reply.send(state.apply(&id, &plan));
+                                }
+                                Request::ReadBack(id, reply) => {
+                                    let _ = reply.send(state.read_back(&id));
+                                }
+                            });
+                        }
+                        // Dropping state here releases every retained reference on its owner thread.
+                    })
+                    .map_err(|error| PlatformError::Os(format!("start AX worker: {error}")))?;
+                Ok(sender)
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let (reply, result) = mpsc::channel();
+        worker
+            .send(make(reply))
+            .map_err(|_| PlatformError::Os("AX worker stopped".into()))?;
+        // Do not abandon a submitted write: its completion must remain attributable.
+        result
+            .recv()
+            .map_err(|_| PlatformError::Os("AX worker stopped before reply".into()))?
     }
-
-    /// Refresh the window cache. Called by `enumerate` and by `apply` when a
-    /// cached element is stale.
-    fn refresh(&self) -> Result<Vec<WindowSnapshot>> {
-        if !is_trusted() {
-            return Err(PlatformError::PermissionDenied);
-        }
-
-        let mut snapshots = Vec::new();
-        let mut cache = Vec::new();
-
-        let system = unsafe { AXUIElementCreateSystemWide() };
-        if system.is_null() {
-            return Err(PlatformError::Os("AXUIElementCreateSystemWide".into()));
-        }
-        unsafe { CFRelease(system) };
-
-        let own_pid = std::process::id() as i32;
-        for pid in running_application_pids() {
-            // The app must never gather its own settings window.
-            if pid == own_pid {
-                continue;
-            }
-            let app = unsafe { AXUIElementCreateApplication(pid) };
-            if app.is_null() {
-                continue;
-            }
-            unsafe { AXUIElementSetMessagingTimeout(app, 0.4) };
-
-            let windows = match copy_attribute(app, "AXWindows") {
-                Some(value) => value,
-                None => {
-                    unsafe { CFRelease(app) };
-                    continue;
-                }
-            };
-
-            // `AXUIElementCopyAttributeValue` returns a +1 reference. Wrapping it
-            // under the *get* rule leaked one array per application per poll, which
-            // is a slow memory climb in a process that polls every two seconds.
-            // The window elements inside the array are owned by the array, so each
-            // one is retained before the array is released.
-            let array_ref = windows;
-            let array: CFArray<CFTypeRef> =
-                unsafe { CFArray::wrap_under_create_rule(array_ref as _) };
-            for element in array.iter() {
-                let element = *element;
-                if element.is_null() {
-                    continue;
-                }
-                let Some(mut window) = read_window(element, pid) else {
-                    continue;
-                };
-                // Retain the element for the lifetime of the cache entry; the
-                // array's own reference dies with the array.
-                let retained = unsafe { CFRetain(element) };
-                window.element = retained;
-                snapshots.push(window.snapshot.clone());
-                cache.push(window);
-            }
-            drop(array);
-            unsafe { CFRelease(app) };
-        }
-
-        {
-            let mut guard = self
-                .windows
-                .lock()
-                .map_err(|_| PlatformError::Os("window cache poisoned".into()))?;
-            for old in guard.drain(..) {
-                if !old.element.is_null() {
-                    unsafe { CFRelease(old.element) };
-                }
-            }
-            *guard = cache;
-        }
-        Ok(snapshots)
-    }
-
-    fn with_window<T>(&self, id: &WindowId, f: impl FnOnce(&AxWindow) -> Result<T>) -> Result<T> {
-        let cache = self
-            .windows
-            .lock()
-            .map_err(|_| PlatformError::Os("poisoned".into()))?;
-        let window = cache
-            .iter()
-            .find(|w| w.id == *id)
-            .ok_or(PlatformError::WindowGone)?;
-        f(window)
-    }
-}
-
-fn read_window(element: CFTypeRef, pid: i32) -> Option<AxWindow> {
-    let position = copy_point(element, "AXPosition")?;
-    let size = copy_size(element, "AXSize")?;
-    if size.width <= 0.0 || size.height <= 0.0 {
-        return None;
-    }
-
-    let minimized = copy_bool(element, "AXMinimized").unwrap_or(false);
-    let fullscreen = copy_bool(element, "AXFullScreen").unwrap_or(false);
-
-    // A window whose subrole is not AXStandardWindow is usually a sheet, a
-    // panel, or a dialog attached to another window.
-    let subrole = copy_string(element, "AXSubrole").unwrap_or_default();
-    let standard = subrole.is_empty() || subrole == "AXStandardWindow";
-
-    if !standard {
-        return None;
-    }
-
-    let mode = if minimized {
-        WindowMode::Minimized
-    } else if fullscreen {
-        WindowMode::Fullscreen
-    } else {
-        WindowMode::Normal
-    };
-
-    let rect = Rect::new(
-        position.x.round() as i32,
-        position.y.round() as i32,
-        (position.x + size.width).round() as i32,
-        (position.y + size.height).round() as i32,
-    );
-
-    // AX has no per-window stable identifier in the public SDK. The best
-    // available identity is (pid, element pointer, first observed rect); the
-    // pointer is stable for the lifetime of the window, which is all the engine
-    // needs within one session.
-    let id = WindowId {
-        native_id: element as usize as u64,
-        process_id: pid as u32,
-        process_start: 0,
-    };
-
-    Some(AxWindow {
-        element,
-        id: id.clone(),
-        snapshot: WindowSnapshot {
-            app_name: app_name_for(pid),
-            id,
-            display: DisplayKey {
-                native_id: String::new(),
-                quality: IdentityQuality::Weak,
-            },
-            visible_rect: rect,
-            outer_rect: rect,
-            mode,
-            native_placement: None,
-            topmost: false,
-            // `AXMinSize` is what the application itself enforces, the macOS
-            // equivalent of `WM_GETMINMAXINFO`. Not every application publishes it,
-            // and `None` means unknown rather than "no minimum".
-            min_size: copy_size(element, "AXMinSize")
-                .map(|size| Size::new(size.width.round() as i32, size.height.round() as i32)),
-            // `AXFocused` is on the window; `AXMain` is the fallback, because an
-            // application can move focus to a panel that reports only one of them.
-            // The `PrimarySide` layout gives this window the large pane.
-            focused: copy_bool(element, "AXFocused")
-                .or_else(|| copy_bool(element, "AXMain"))
-                .unwrap_or(false),
-        },
-    })
 }
 
 impl WindowBackend for AccessibilityBackend {
     fn enumerate(&self) -> Result<Vec<WindowSnapshot>> {
-        self.refresh()
+        self.request(Request::Enumerate)
+    }
+    fn snapshot(&self, id: &WindowId) -> Result<WindowSnapshot> {
+        self.request(|reply| Request::Snapshot(id.clone(), reply))
+    }
+    fn capabilities(&self, id: &WindowId) -> Capabilities {
+        self.request(|reply| Request::Capabilities(id.clone(), reply))
+            .unwrap_or_default()
+    }
+    fn apply(&self, id: &WindowId, plan: &WindowPlan) -> Result<()> {
+        self.request(|reply| Request::Apply(id.clone(), *plan, reply))
+    }
+    fn read_back(&self, id: &WindowId) -> Result<ObservedWindow> {
+        self.request(|reply| Request::ReadBack(id.clone(), reply))
+    }
+}
+
+struct AxWindow {
+    element: CFType,
+    id: WindowId,
+}
+
+struct AxState {
+    windows: Vec<AxWindow>,
+    next_id: u64,
+    instance: u64,
+}
+
+impl Default for AxState {
+    fn default() -> Self {
+        let uuid = core_foundation::uuid::CFUUID::new();
+        let bytes =
+            unsafe { core_foundation::uuid::CFUUIDGetUUIDBytes(uuid.as_concrete_TypeRef()) };
+        let instance = u64::from_be_bytes([
+            bytes.byte0,
+            bytes.byte1,
+            bytes.byte2,
+            bytes.byte3,
+            bytes.byte4,
+            bytes.byte5,
+            bytes.byte10,
+            bytes.byte11,
+        ]);
+        Self {
+            windows: Vec::new(),
+            next_id: 0,
+            instance,
+        }
+    }
+}
+
+impl AxState {
+    fn enumerate(&mut self) -> Result<Vec<WindowSnapshot>> {
+        if !is_trusted() {
+            return Err(PlatformError::PermissionDenied);
+        }
+        if self.instance == 0 {
+            return Err(PlatformError::IdentityUncertain);
+        }
+        let mut snapshots = Vec::new();
+        let apps = objc2_app_kit::NSWorkspace::sharedWorkspace().runningApplications();
+        for app in apps.iter() {
+            let pid = app.processIdentifier();
+            if pid <= 0 || pid as u32 == std::process::id() {
+                continue;
+            }
+            // Missing launch time cannot establish continuity across PID reuse.
+            let Some(launch) = app.launchDate() else {
+                continue;
+            };
+            let started = launch.timeIntervalSince1970() * 10_000_000.0;
+            if !started.is_finite() || started <= 0.0 {
+                continue;
+            }
+            let process_start = started as u64;
+            let application = owned(
+                unsafe { AXUIElementCreateApplication(pid) },
+                "create AX application",
+            )?;
+            let windows = match copy_attribute(&application, "AXWindows") {
+                Ok(value) => value,
+                Err(PlatformError::Unsupported) => continue,
+                Err(error) => return Err(error),
+            };
+            let array = windows
+                .downcast_into::<CFArray>()
+                .ok_or_else(|| invalid_type("AXWindows"))?;
+            let app_name = app
+                .localizedName()
+                .map(|name| name.to_string())
+                .unwrap_or_default();
+            for element in array.iter() {
+                let raw = *element;
+                if raw.is_null() || unsafe { CFGetTypeID(raw) != AXUIElementGetTypeID() } {
+                    continue;
+                }
+                let element = unsafe { CFType::wrap_under_get_rule(raw) };
+                // CFEqual compares AX object identity, unlike the address of a new wrapper.
+                let id = if let Some(window) = self.windows.iter().find(|window| {
+                    window.id.process_id == pid as u32
+                        && window.id.process_start == process_start
+                        && window.element == element
+                }) {
+                    window.id.clone()
+                } else {
+                    self.next_id = self
+                        .next_id
+                        .checked_add(1)
+                        .ok_or_else(|| PlatformError::Os("AX logical ID exhausted".into()))?;
+                    let id = WindowId {
+                        native_id: self.next_id,
+                        process_id: pid as u32,
+                        process_start,
+                        instance: self.instance,
+                    };
+                    self.windows.push(AxWindow {
+                        element: element.clone(),
+                        id: id.clone(),
+                    });
+                    id
+                };
+                match read_snapshot(&element, id, app_name.clone()) {
+                    Ok(snapshot) => snapshots.push(snapshot),
+                    Err(PlatformError::Unsupported) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        // Keep retained identities when an app is temporarily inaccessible or on another Space.
+        Ok(snapshots)
     }
 
-    fn capabilities(&self, id: &WindowId) -> Capabilities {
-        let Ok(cache) = self.windows.lock() else {
-            return Capabilities::default();
-        };
-        let Some(window) = cache.iter().find(|w| w.id == *id) else {
-            return Capabilities::default();
-        };
-        Capabilities {
-            can_move: is_settable(window.element, "AXPosition"),
-            can_resize: is_settable(window.element, "AXSize"),
-            can_read_state: true,
-            can_restore_native: false,
-            // Read here rather than during enumeration: it costs a cross-process
-            // round trip, and the engine asks only about windows it is about to
-            // place.
-            min_size: copy_size(window.element, "AXMinSize")
-                .map(|size| Size::new(size.width.round() as i32, size.height.round() as i32)),
+    fn window(&self, id: &WindowId) -> Result<&CFType> {
+        if id.instance == 0 || id.instance != self.instance {
+            return Err(PlatformError::IdentityUncertain);
         }
+        if !is_trusted() {
+            return Err(PlatformError::PermissionDenied);
+        }
+        let window = self
+            .windows
+            .iter()
+            .find(|window| window.id == *id)
+            .ok_or(PlatformError::IdentityUncertain)?;
+        let app = objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(
+            id.process_id as i32,
+        )
+        .ok_or(PlatformError::IdentityUncertain)?;
+        let launch = app.launchDate().ok_or(PlatformError::IdentityUncertain)?;
+        if (launch.timeIntervalSince1970() * 10_000_000.0) as u64 != id.process_start {
+            return Err(PlatformError::IdentityUncertain);
+        }
+        Ok(&window.element)
+    }
+
+    fn snapshot(&self, id: &WindowId) -> Result<WindowSnapshot> {
+        let element = self.window(id)?;
+        let app = objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(
+            id.process_id as i32,
+        )
+        .ok_or(PlatformError::IdentityUncertain)?;
+        let app_name = app
+            .localizedName()
+            .map(|name| name.to_string())
+            .unwrap_or_default();
+        read_snapshot(element, id.clone(), app_name)
+    }
+
+    fn capabilities(&self, id: &WindowId) -> Result<Capabilities> {
+        let element = self.window(id)?;
+        Ok(Capabilities {
+            can_move: is_settable(element, "AXPosition")?,
+            can_resize: is_settable(element, "AXSize")?,
+            can_read_state: read_observed(element).is_ok(),
+            can_restore_native: false,
+            min_size: optional_size(element, "AXMinSize")?,
+        })
     }
 
     fn apply(&self, id: &WindowId, plan: &WindowPlan) -> Result<()> {
-        self.with_window(id, |window| {
-            if window.snapshot.mode == WindowMode::Fullscreen {
-                // Native fullscreen lives in its own Space; AX position is
-                // ignored there. Report rather than pretend.
-                return Err(PlatformError::Unsupported);
-            }
-
-            // macOS clamps a size request to the visible area of the window's
-            // *current* display, so the documented order is size -> position ->
-            // size: grow/shrink first, move, then apply the final size where the
-            // window now lives. The previous order started with a position write
-            // and lost the size whenever the window crossed displays.
+        let element = self.window(id)?;
+        if copy_string(element, "AXSubrole")? != "AXStandardWindow" {
+            return Err(PlatformError::Unsupported);
+        }
+        let observed = read_observed(element)?;
+        if observed.mode != WindowMode::Normal || plan.mode != WindowMode::Normal {
+            return Err(PlatformError::Unsupported);
+        }
+        if !is_settable(element, "AXPosition")? {
+            return Err(PlatformError::Unsupported);
+        }
+        let resize = plan.resize;
+        if resize && !is_settable(element, "AXSize")? {
+            return Err(PlatformError::Unsupported);
+        }
+        if resize {
             set_size(
-                window.element,
+                element,
                 plan.visible_rect.width() as f64,
                 plan.visible_rect.height() as f64,
             )?;
-            set_position(
-                window.element,
-                plan.visible_rect.left as f64,
-                plan.visible_rect.top as f64,
-            )?;
+        }
+        set_position(
+            element,
+            plan.visible_rect.left as f64,
+            plan.visible_rect.top as f64,
+        )?;
+        if resize {
             set_size(
-                window.element,
+                element,
                 plan.visible_rect.width() as f64,
                 plan.visible_rect.height() as f64,
             )?;
-            Ok(())
-        })
+        }
+        Ok(())
     }
 
     fn read_back(&self, id: &WindowId) -> Result<ObservedWindow> {
-        self.with_window(id, |window| {
-            // A failed attribute read is not proof the window is gone. Reporting
-            // `WindowGone` made the engine drop its recovery obligation for a
-            // window that was merely busy or temporarily unreadable.
-            let position = copy_point(window.element, "AXPosition")
-                .ok_or_else(|| attribute_error(window.element, "AXPosition"))?;
-            let size = copy_size(window.element, "AXSize")
-                .ok_or_else(|| attribute_error(window.element, "AXSize"))?;
-            let minimized = copy_bool(window.element, "AXMinimized").unwrap_or(false);
-            let fullscreen = copy_bool(window.element, "AXFullScreen").unwrap_or(false);
-            let mode = if minimized {
-                WindowMode::Minimized
-            } else if fullscreen {
-                WindowMode::Fullscreen
-            } else {
-                WindowMode::Normal
-            };
-            Ok(ObservedWindow {
-                visible_rect: Rect::new(
-                    position.x.round() as i32,
-                    position.y.round() as i32,
-                    (position.x + size.width).round() as i32,
-                    (position.y + size.height).round() as i32,
-                ),
-                mode,
-            })
-        })
-    }
-
-    fn restore_native(&self, _id: &WindowId, _placement: &[u8]) -> Result<()> {
-        // AX has no native placement blob; positions are restored geometrically.
-        Err(PlatformError::Unsupported)
+        read_observed(self.window(id)?)
     }
 }
 
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    fn CFRelease(cf: CFTypeRef);
-    fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
+fn read_snapshot(element: &CFType, id: WindowId, app_name: String) -> Result<WindowSnapshot> {
+    // A missing role is unknown, never evidence of a standard application window.
+    if copy_string(element, "AXSubrole")? != "AXStandardWindow" {
+        return Err(PlatformError::Unsupported);
+    }
+    let observed = read_observed(element)?;
+    Ok(WindowSnapshot {
+        id,
+        app_name,
+        display: DisplayKey {
+            native_id: String::new(),
+            quality: IdentityQuality::Weak,
+        },
+        visible_rect: observed.visible_rect,
+        outer_rect: observed.visible_rect,
+        mode: observed.mode,
+        native_placement: None,
+        topmost: false,
+        min_size: optional_size(element, "AXMinSize")?,
+        focused: optional_bool(element, "AXFocused")?
+            .or(optional_bool(element, "AXMain")?)
+            .unwrap_or(false),
+    })
 }
 
-/// Map an unreadable attribute to the reason the caller needs.
-///
-/// `AX_ERROR_API_DISABLED` is a revoked permission, not a missing window; the
-/// engine must keep the recovery record and tell the user to re-authorise.
-fn attribute_error(element: CFTypeRef, name: &str) -> PlatformError {
+fn read_observed(element: &CFType) -> Result<ObservedWindow> {
+    let position = copy_point(element, "AXPosition")?;
+    let size = copy_size(element, "AXSize")?;
+    let minimized = copy_bool(element, "AXMinimized")?;
+    // Missing or unreadable state cannot establish that this window is safe to move.
+    let fullscreen = copy_bool(element, "AXFullScreen")?;
+    let edges = [
+        position.x,
+        position.y,
+        position.x + size.width,
+        position.y + size.height,
+    ];
+    if size.width <= 0.0
+        || size.height <= 0.0
+        || size.width > i32::MAX as f64
+        || size.height > i32::MAX as f64
+        || edges
+            .iter()
+            .any(|v| !v.is_finite() || *v < i32::MIN as f64 || *v > i32::MAX as f64)
+        || edges[2].round() - edges[0].round() > i32::MAX as f64
+        || edges[3].round() - edges[1].round() > i32::MAX as f64
+    {
+        return Err(PlatformError::Os("invalid AX window geometry".into()));
+    }
+    if edges[2].round() <= edges[0].round() || edges[3].round() <= edges[1].round() {
+        return Err(PlatformError::Os("invalid AX window geometry".into()));
+    }
+    Ok(ObservedWindow {
+        visible_rect: Rect::new(
+            edges[0].round() as i32,
+            edges[1].round() as i32,
+            edges[2].round() as i32,
+            edges[3].round() as i32,
+        ),
+        mode: if minimized {
+            WindowMode::Minimized
+        } else if fullscreen {
+            WindowMode::Fullscreen
+        } else {
+            WindowMode::Normal
+        },
+    })
+}
+
+fn owned(raw: CFTypeRef, operation: &str) -> Result<CFType> {
+    if raw.is_null() {
+        return Err(PlatformError::Os(format!("{operation} returned null")));
+    }
+    Ok(unsafe { CFType::wrap_under_create_rule(raw) })
+}
+
+fn ax_result(code: i32, operation: &str) -> Result<()> {
+    match code {
+        AX_SUCCESS => Ok(()),
+        AX_ERROR_API_DISABLED => Err(PlatformError::PermissionDenied),
+        AX_ERROR_ATTRIBUTE_UNSUPPORTED | AX_ERROR_NO_VALUE => Err(PlatformError::Unsupported),
+        // Invalid element and other AX errors do not establish that a journal window is gone.
+        _ => Err(PlatformError::Os(format!("{operation}: AX error {code}"))),
+    }
+}
+
+fn ipc_result(code: i32, operation: &str, elapsed: std::time::Duration) -> Result<()> {
+    // CannotComplete also covers messaging failures before the timeout. Preserve
+    // those as OS errors; only an exhausted deadline is classified as TimedOut.
+    if code == AX_ERROR_CANNOT_COMPLETE && elapsed >= std::time::Duration::from_millis(400) {
+        return Err(PlatformError::TimedOut);
+    }
+    ax_result(code, operation)
+}
+
+fn invalid_type(name: &str) -> PlatformError {
+    PlatformError::Os(format!("invalid AX type for {name}"))
+}
+
+fn set_timeout(element: &CFType) -> Result<()> {
+    ax_result(
+        unsafe { AXUIElementSetMessagingTimeout(element.as_CFTypeRef(), 0.4) },
+        "set AX timeout",
+    )
+}
+
+fn copy_attribute(element: &CFType, name: &str) -> Result<CFType> {
+    set_timeout(element)?;
     let attribute = CFString::new(name);
-    let mut value: CFTypeRef = std::ptr::null();
+    let mut value = std::ptr::null();
+    let started = std::time::Instant::now();
     let result = unsafe {
-        AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value)
+        AXUIElementCopyAttributeValue(
+            element.as_CFTypeRef(),
+            attribute.as_concrete_TypeRef(),
+            &mut value,
+        )
     };
-    if !value.is_null() {
-        unsafe { CFRelease(value) };
-    }
-    match result {
-        AX_ERROR_API_DISABLED => PlatformError::PermissionDenied,
-        AX_ERROR_ATTRIBUTE_UNSUPPORTED => PlatformError::Unsupported,
-        _ => PlatformError::Os(format!("AX read {name} failed: {result}")),
-    }
-}
-
-fn copy_attribute(element: CFTypeRef, name: &str) -> Option<CFTypeRef> {
-    set_timeout(element);
-    let attribute = CFString::new(name);
-    let mut value: CFTypeRef = std::ptr::null();
-    let result = unsafe {
-        AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value)
-    };
-    if result == AX_SUCCESS && !value.is_null() {
-        Some(value)
-    } else {
-        // `AX_ERROR_API_DISABLED` means the user revoked Accessibility while we
-        // were running; it is reported as a missing attribute here and surfaces
-        // as `PermissionDenied` from `enumerate`.
+    // Own any returned reference even when AX reports an error.
+    let value = if value.is_null() {
         None
-    }
+    } else {
+        Some(unsafe { CFType::wrap_under_create_rule(value) })
+    };
+    ipc_result(result, name, started.elapsed())?;
+    value.ok_or_else(|| invalid_type(name))
 }
 
-fn copy_point(element: CFTypeRef, name: &str) -> Option<CGPoint> {
+fn copy_point(element: &CFType, name: &str) -> Result<CGPoint> {
     let value = copy_attribute(element, name)?;
     let mut point = CGPoint::default();
-    let ok = unsafe {
-        AXValueGetValue(
-            value,
-            AX_VALUE_CG_POINT,
-            &mut point as *mut CGPoint as *mut c_void,
-        )
-    };
-    unsafe { CFRelease(value) };
-    (ok != 0).then_some(point)
+    if unsafe { CFGetTypeID(value.as_CFTypeRef()) != AXValueGetTypeID() }
+        || unsafe {
+            AXValueGetValue(
+                value.as_CFTypeRef(),
+                AX_VALUE_CG_POINT,
+                &mut point as *mut _ as *mut c_void,
+            )
+        } == 0
+    {
+        return Err(invalid_type(name));
+    }
+    Ok(point)
 }
 
-fn copy_size(element: CFTypeRef, name: &str) -> Option<CGSize> {
+fn copy_size(element: &CFType, name: &str) -> Result<CGSize> {
     let value = copy_attribute(element, name)?;
     let mut size = CGSize::default();
-    let ok = unsafe {
-        AXValueGetValue(
-            value,
-            AX_VALUE_CG_SIZE,
-            &mut size as *mut CGSize as *mut c_void,
+    if unsafe { CFGetTypeID(value.as_CFTypeRef()) != AXValueGetTypeID() }
+        || unsafe {
+            AXValueGetValue(
+                value.as_CFTypeRef(),
+                AX_VALUE_CG_SIZE,
+                &mut size as *mut _ as *mut c_void,
+            )
+        } == 0
+    {
+        return Err(invalid_type(name));
+    }
+    Ok(size)
+}
+
+fn optional_size(element: &CFType, name: &str) -> Result<Option<Size>> {
+    match copy_size(element, name) {
+        Ok(size)
+            if size.width.is_finite()
+                && size.height.is_finite()
+                && size.width > 0.0
+                && size.height > 0.0
+                && size.width <= i32::MAX as f64
+                && size.height <= i32::MAX as f64 =>
+        {
+            Ok(Some(Size::new(
+                size.width.ceil() as i32,
+                size.height.ceil() as i32,
+            )))
+        }
+        Ok(_) => Err(invalid_type(name)),
+        Err(PlatformError::Unsupported) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn copy_bool(element: &CFType, name: &str) -> Result<bool> {
+    let value = copy_attribute(element, name)?;
+    bool_value(&value, name)
+}
+
+fn bool_value(value: &CFType, name: &str) -> Result<bool> {
+    if let Some(boolean) = value.downcast::<CFBoolean>() {
+        return Ok(boolean.into());
+    }
+    if let Some(number) = value.downcast::<CFNumber>() {
+        return number
+            .to_i64()
+            .map(|value| value != 0)
+            .ok_or_else(|| invalid_type(name));
+    }
+    Err(invalid_type(name))
+}
+
+fn optional_bool(element: &CFType, name: &str) -> Result<Option<bool>> {
+    match copy_bool(element, name) {
+        Ok(value) => Ok(Some(value)),
+        Err(PlatformError::Unsupported) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn copy_string(element: &CFType, name: &str) -> Result<String> {
+    copy_attribute(element, name)?
+        .downcast_into::<CFString>()
+        .map(|value| value.to_string())
+        .ok_or_else(|| invalid_type(name))
+}
+
+fn is_settable(element: &CFType, name: &str) -> Result<bool> {
+    set_timeout(element)?;
+    let attribute = CFString::new(name);
+    let mut settable = 0;
+    let started = std::time::Instant::now();
+    let result = unsafe {
+        AXUIElementIsAttributeSettable(
+            element.as_CFTypeRef(),
+            attribute.as_concrete_TypeRef(),
+            &mut settable,
         )
     };
-    unsafe { CFRelease(value) };
-    (ok != 0).then_some(size)
+    ipc_result(result, name, started.elapsed())?;
+    Ok(settable != 0)
 }
 
-/// Read an AX boolean.
-///
-/// `AXMinimized` and `AXFullScreen` are `CFBooleanRef`, not `CFNumberRef`. Reading
-/// them as a number happened to work for some applications and returned `None` for
-/// others, which silently turned "minimized" into "normal" and let the engine move
-/// a window the user had put away.
-fn copy_bool(element: CFTypeRef, name: &str) -> Option<bool> {
-    use core_foundation::base::CFGetTypeID;
-    use core_foundation::boolean::CFBoolean;
-
-    let value = copy_attribute(element, name)?;
-    let is_boolean = unsafe { CFGetTypeID(value) == CFBoolean::type_id() };
-    if is_boolean {
-        let boolean = unsafe { CFBoolean::wrap_under_get_rule(value as _) };
-        let result = boolean.into();
-        unsafe { CFRelease(value) };
-        return Some(result);
-    }
-    // Some applications answer a number; accept it rather than losing the state.
-    let number = unsafe { CFNumber::wrap_under_get_rule(value as _) };
-    let result = number.to_i64().map(|v| v != 0);
-    unsafe { CFRelease(value) };
-    result
-}
-
-fn copy_string(element: CFTypeRef, name: &str) -> Option<String> {
-    let value = copy_attribute(element, name)?;
-    let string = unsafe { CFString::wrap_under_get_rule(value as _) };
-    let result = Some(string.to_string());
-    unsafe { CFRelease(value) };
-    result
-}
-
-fn is_settable(element: CFTypeRef, name: &str) -> bool {
-    set_timeout(element);
-    let attribute = CFString::new(name);
-    let mut settable: u8 = 0;
-    let result = unsafe {
-        AXUIElementIsAttributeSettable(element, attribute.as_concrete_TypeRef(), &mut settable)
-    };
-    result == AX_SUCCESS && settable != 0
-}
-
-/// Bound one call to a possibly-hung application.
-///
-/// `AXUIElementSetMessagingTimeout` applies to the element it is called on, not to
-/// every element in the process. Setting it only on the application object left
-/// every position/size read on a window element unbounded, so one frozen app could
-/// block the whole gather.
-fn set_timeout(element: CFTypeRef) {
-    const TIMEOUT_SECS: f32 = 0.4;
-    unsafe { AXUIElementSetMessagingTimeout(element, TIMEOUT_SECS) };
-}
-
-fn set_position(element: CFTypeRef, x: f64, y: f64) -> Result<()> {
+fn set_position(element: &CFType, x: f64, y: f64) -> Result<()> {
     let point = CGPoint { x, y };
-    let value =
-        unsafe { AXValueCreate(AX_VALUE_CG_POINT, &point as *const CGPoint as *const c_void) };
-    if value.is_null() {
-        return Err(PlatformError::Os("AXValueCreate(point)".into()));
-    }
-    write_attribute(element, "AXPosition", value)
+    let value = owned(
+        unsafe { AXValueCreate(AX_VALUE_CG_POINT, &point as *const _ as *const c_void) },
+        "create AX point",
+    )?;
+    write_attribute(element, "AXPosition", &value)
 }
 
-fn set_size(element: CFTypeRef, width: f64, height: f64) -> Result<()> {
+fn set_size(element: &CFType, width: f64, height: f64) -> Result<()> {
     let size = CGSize { width, height };
-    let value = unsafe { AXValueCreate(AX_VALUE_CG_SIZE, &size as *const CGSize as *const c_void) };
-    if value.is_null() {
-        return Err(PlatformError::Os("AXValueCreate(size)".into()));
-    }
-    write_attribute(element, "AXSize", value)
+    let value = owned(
+        unsafe { AXValueCreate(AX_VALUE_CG_SIZE, &size as *const _ as *const c_void) },
+        "create AX size",
+    )?;
+    write_attribute(element, "AXSize", &value)
 }
 
-fn write_attribute(element: CFTypeRef, name: &str, value: CFTypeRef) -> Result<()> {
-    set_timeout(element);
+fn write_attribute(element: &CFType, name: &str, value: &CFType) -> Result<()> {
+    set_timeout(element)?;
     let attribute = CFString::new(name);
-    let result =
-        unsafe { AXUIElementSetAttributeValue(element, attribute.as_concrete_TypeRef(), value) };
-    unsafe { CFRelease(value) };
-    match result {
-        0 => Ok(()),
-        AX_ERROR_ATTRIBUTE_UNSUPPORTED => Err(PlatformError::Unsupported),
-        AX_ERROR_API_DISABLED => Err(PlatformError::PermissionDenied),
-        other => Err(PlatformError::Os(format!("AX set {name} failed: {other}"))),
-    }
-}
-
-/// Pids of running GUI applications, via `NSWorkspace`.
-fn running_application_pids() -> Vec<i32> {
-    use objc2_app_kit::NSWorkspace;
-
-    let workspace = NSWorkspace::sharedWorkspace();
-    let apps = workspace.runningApplications();
-    let mut pids = Vec::new();
-    for app in apps.iter() {
-        let pid = app.processIdentifier();
-        if pid > 0 {
-            pids.push(pid);
-        }
-    }
-    pids
-}
-
-/// Bundle display name or executable name for a pid.
-fn app_name_for(pid: i32) -> String {
-    use objc2_app_kit::NSRunningApplication;
-
-    let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
-        return String::new();
+    let started = std::time::Instant::now();
+    let result = unsafe {
+        AXUIElementSetAttributeValue(
+            element.as_CFTypeRef(),
+            attribute.as_concrete_TypeRef(),
+            value.as_CFTypeRef(),
+        )
     };
-    if let Some(name) = app.localizedName() {
-        return name.to_string();
+    ipc_result(result, name, started.elapsed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previous_runtime_identity_remains_unresolved() {
+        let state = AxState::default();
+        let previous = WindowId {
+            native_id: 1,
+            process_id: 1,
+            process_start: 1,
+            instance: state.instance.wrapping_add(1),
+        };
+        assert!(matches!(
+            state.window(&previous),
+            Err(PlatformError::IdentityUncertain)
+        ));
+        let legacy = WindowId {
+            instance: 0,
+            ..previous
+        };
+        assert!(matches!(
+            state.window(&legacy),
+            Err(PlatformError::IdentityUncertain)
+        ));
+        assert!(matches!(
+            ax_result(-25202, "read"),
+            Err(PlatformError::Os(_))
+        ));
+        assert_eq!(
+            ax_result(AX_ERROR_API_DISABLED, "read"),
+            Err(PlatformError::PermissionDenied)
+        );
+        assert!(matches!(
+            ax_result(AX_ERROR_CANNOT_COMPLETE, "read"),
+            Err(PlatformError::Os(_))
+        ));
+        assert_eq!(
+            ipc_result(
+                AX_ERROR_CANNOT_COMPLETE,
+                "read",
+                std::time::Duration::from_millis(400)
+            ),
+            Err(PlatformError::TimedOut)
+        );
     }
-    app.bundleIdentifier()
-        .map(|id| id.to_string())
-        .unwrap_or_default()
+
+    #[test]
+    fn boolean_attributes_reject_unrelated_cf_types() {
+        assert_eq!(
+            bool_value(&CFBoolean::true_value().as_CFType(), "state"),
+            Ok(true)
+        );
+        assert_eq!(
+            bool_value(&CFBoolean::false_value().as_CFType(), "state"),
+            Ok(false)
+        );
+        assert_eq!(
+            bool_value(&CFNumber::from(1_i32).as_CFType(), "state"),
+            Ok(true)
+        );
+        assert!(matches!(
+            bool_value(&CFString::new("false").as_CFType(), "state"),
+            Err(PlatformError::Os(_))
+        ));
+    }
 }

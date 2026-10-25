@@ -35,6 +35,7 @@ fn preimage(native_id: u64) -> Preimage {
             native_id,
             process_id: 100,
             process_start: 1,
+            instance: 1,
         },
         display_native_id: "display-a".into(),
         display_quality: IdentityQuality::Strong,
@@ -59,6 +60,9 @@ fn closed_transaction_is_clean() {
     let path = temp_journal();
     let mut journal = Journal::begin(&path, "1 display").unwrap();
     journal.write_preimage(&preimage(1)).unwrap();
+    journal
+        .write_resolved(&preimage(1).id, WindowOutcome::KeptUserChange)
+        .unwrap();
     journal.close().unwrap();
 
     assert_eq!(recover(&path).unwrap(), Recovered::Clean);
@@ -165,11 +169,12 @@ fn truncated_tail_drops_only_the_torn_record() {
     assert_eq!(tx.preimages.len(), 1);
     assert_eq!(tx.preimages[0].id, preimage(1).id);
     assert!(tx.truncated_bytes > 6, "the entire torn record is dropped");
-    assert!(path.with_extension("corrupt").exists());
+    assert!(!path.with_extension("corrupt").exists());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes[..cut]);
 }
 
 #[test]
-fn garbage_tail_does_not_lose_earlier_records() {
+fn garbage_tail_is_blocked_without_changing_the_file() {
     let path = temp_journal();
     let mut journal = Journal::begin(&path, "2 displays").unwrap();
     journal.write_preimage(&preimage(1)).unwrap();
@@ -180,30 +185,23 @@ fn garbage_tail_does_not_lose_earlier_records() {
     file.write_all(&[0xFF; 32]).unwrap();
     drop(file);
 
-    let Recovered::Unfinished(tx) = recover(&path).unwrap() else {
-        panic!("expected unfinished");
-    };
-    assert_eq!(tx.preimages.len(), 2);
-    assert_eq!(tx.truncated_bytes, 32);
+    let before = std::fs::read(&path).unwrap();
+    assert!(recover(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert!(!path.with_extension("corrupt").exists());
 }
 
 #[test]
-fn begin_truncates_a_previous_transaction() {
-    // A stale file from a resolved session must not leak into the next one.
+fn begin_refuses_to_overwrite_a_previous_transaction() {
     let path = temp_journal();
     {
         let mut journal = Journal::begin(&path, "old").unwrap();
         journal.write_preimage(&preimage(1)).unwrap();
         journal.abandon();
     }
-    let journal = Journal::begin(&path, "new").unwrap();
-    let tx = journal.transaction();
-    journal.close().unwrap();
-
-    let Recovered::Clean = recover(&path).unwrap() else {
-        panic!("new transaction should be clean");
-    };
-    assert_ne!(tx, uuid_from_nothing());
+    let before = std::fs::read(&path).unwrap();
+    assert!(Journal::begin(&path, "new").is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
 #[test]
@@ -213,10 +211,6 @@ fn close_and_remove_leaves_no_file() {
     journal.close_and_remove().unwrap();
     assert!(!path.exists());
     assert_eq!(recover(&path).unwrap(), Recovered::Clean);
-}
-
-fn uuid_from_nothing() -> uuid::Uuid {
-    uuid::Uuid::nil()
 }
 
 #[test]
@@ -294,4 +288,154 @@ fn kill_child_mid_write_leaves_recoverable_journal() {
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(path.with_extension("corrupt")).ok();
     }
+}
+
+#[test]
+fn a_later_intent_is_not_satisfied_by_an_earlier_result() {
+    let path = temp_journal();
+    let preimage = preimage(1);
+    let mut journal = Journal::begin(&path, "repeated write").unwrap();
+    journal.write_preimage(&preimage).unwrap();
+    journal
+        .write_intent(&preimage.id, preimage.visible_rect, WindowMode::Normal)
+        .unwrap();
+    journal
+        .write_result(&AppliedResult {
+            id: preimage.id.clone(),
+            outcome: WindowOutcome::Applied,
+            observed: Some(ObservedRect {
+                visible_rect: preimage.visible_rect,
+                mode: WindowMode::Normal,
+            }),
+        })
+        .unwrap();
+    journal
+        .write_intent(
+            &preimage.id,
+            Rect::new(50, 50, 850, 650),
+            WindowMode::Normal,
+        )
+        .unwrap();
+    journal.durable().unwrap();
+    journal.abandon();
+    let Recovered::Unfinished(tx) = recover(&path).unwrap() else {
+        panic!("unfinished");
+    };
+    assert!(tx.has_unresolved_intent());
+    assert!(tx.may_have_moved_windows());
+    assert!(tx.results.is_empty());
+    assert_eq!(tx.intents[0].write_seq, 2);
+}
+
+#[test]
+fn reopen_validates_identity_before_truncating_a_short_tail() {
+    let path = temp_journal();
+    let journal = Journal::begin(&path, "reopen").unwrap();
+    let id = journal.transaction();
+    journal.abandon();
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&[1, 2, 3])
+        .unwrap();
+    let before = std::fs::read(&path).unwrap();
+    assert!(Journal::reopen(&path, uuid::Uuid::new_v4()).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let mut journal = Journal::reopen(&path, id).unwrap();
+    journal.close().unwrap();
+    assert_eq!(recover(&path).unwrap(), Recovered::Clean);
+}
+
+#[test]
+fn closed_with_unresolved_windows_or_a_short_suffix_is_corrupt() {
+    let path = temp_journal();
+    let mut journal = Journal::begin(&path, "unfinished close").unwrap();
+    journal.write_preimage(&preimage(1)).unwrap();
+    journal.close().unwrap();
+    assert!(recover(&path).is_err());
+
+    let path = temp_journal();
+    let mut journal = Journal::begin(&path, "closed suffix").unwrap();
+    journal.close().unwrap();
+    drop(journal);
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&[1])
+        .unwrap();
+    assert!(recover(&path).is_err());
+}
+
+#[test]
+fn stale_sequenced_result_cannot_resolve_a_new_write() {
+    let path = temp_journal();
+    let mut journal = Journal::begin(&path, "stale result").unwrap();
+    let transaction = journal.transaction();
+    let preimage = preimage(1);
+    journal.write_preimage(&preimage).unwrap();
+    journal
+        .write_intent(&preimage.id, preimage.visible_rect, WindowMode::Normal)
+        .unwrap();
+    journal
+        .write_intent(&preimage.id, preimage.visible_rect, WindowMode::Maximized)
+        .unwrap();
+    journal.abandon();
+    let record = unfy_journal::Record::Result {
+        transaction,
+        write_seq: 1,
+        result: AppliedResult {
+            id: preimage.id,
+            outcome: WindowOutcome::Applied,
+            observed: None,
+        },
+    };
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&record.encode().unwrap())
+        .unwrap();
+    assert!(recover(&path).is_err());
+}
+
+#[test]
+fn a_resolved_window_cannot_be_reopened_by_an_intent() {
+    let path = temp_journal();
+    let mut journal = Journal::begin(&path, "resolved window").unwrap();
+    let preimage = preimage(1);
+    journal.write_preimage(&preimage).unwrap();
+    journal
+        .write_resolved(&preimage.id, WindowOutcome::KeptUserChange)
+        .unwrap();
+    journal
+        .write_intent(&preimage.id, preimage.visible_rect, WindowMode::Normal)
+        .unwrap();
+    journal.abandon();
+    assert!(recover(&path).is_err());
+}
+
+#[test]
+fn empty_existing_file_is_an_unknown_recovery_blocker() {
+    let path = temp_journal();
+    std::fs::write(&path, []).unwrap();
+    assert!(recover(&path).is_err());
+}
+
+#[test]
+fn future_schema_is_a_typed_blocker() {
+    let path = temp_journal();
+    let version = unfy_journal::SCHEMA_VERSION + 1;
+    let begin = unfy_journal::Record::Begin {
+        schema_version: version,
+        transaction: uuid::Uuid::new_v4(),
+        display_summary: "future".into(),
+        created_unix_ms: 0,
+    };
+    std::fs::write(&path, begin.encode().unwrap()).unwrap();
+    assert_eq!(
+        recover(&path),
+        Err(unfy_journal::JournalError::SchemaMismatch(version))
+    );
 }

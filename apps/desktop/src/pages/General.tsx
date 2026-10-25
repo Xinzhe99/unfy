@@ -9,7 +9,6 @@ import type {
 import { Button, Card, Segmented, SettingRow, Status, Switch } from "../components/ui";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import { t } from "../i18n";
-import { commitNumber } from "../lib/numeric";
 import { renderMessage } from "../api";
 import { IconDownload } from "../components/icons";
 
@@ -31,6 +30,12 @@ export function GeneralPage({
   onReset,
   onShowGuide,
   onClearHistory,
+  platform,
+  onInstallUpdate,
+  diagnosticsPreview,
+  onPreviewDiagnostics,
+  onExport,
+  onOpenConfigDir,
 }: {
   settings: SettingsDto | null;
   hotkeys: HotkeyStatusDto | null;
@@ -45,6 +50,12 @@ export function GeneralPage({
   onShowGuide: () => void;
   /** Forget the activity history (spec P0-15: it is the user's record to erase). */
   onClearHistory: () => void;
+  platform?: string;
+  onInstallUpdate?: () => void;
+  diagnosticsPreview?: string | null;
+  onPreviewDiagnostics?: () => void;
+  onExport?: () => void;
+  onOpenConfigDir?: () => void;
 }) {
   // The reset row is the one destructive action in the app; arming it is local
   // state so a stray click cannot wipe a configuration built over weeks.
@@ -96,9 +107,9 @@ export function GeneralPage({
 
       <Card
         title={t("远程会话检测")}
-        description={t("远程桌面（RDP）会话建立时整理、结束时恢复。其他远控软件需要手动整理。")}
+        description={t("已验证的 RDP 连接仅找回越界窗口，不重排可见窗口，也不会自动恢复手动整理。其他工具请手动整理和恢复。")}
         aside={
-          settings.remote_active ? (
+          settings.remote_unknown ? <Status tone="warning">{t("连接状态未知，自动操作已停止")}</Status> : settings.remote_active ? (
             <Status tone="accent">
               {settings.remote_evidence
                 ? renderMessage(settings.remote_evidence)
@@ -108,97 +119,52 @@ export function GeneralPage({
         }
       >
         <SettingRow
-          label={t("远程端能看到")}
-          hint={
-            settings.remote_screens === "all"
-              ? t("既然全部屏幕都看得到，自动整理不会搬动任何窗口。")
-              : t("默认。远端只有一块屏，整理才有意义。")
-          }
-        >
-          <Segmented
-            label={t("远程端能看到")}
-            value={settings.remote_screens}
-            disabled={busy}
-            onChange={(remote_screens) => onSave({ remote_screens })}
-            options={[
-              { value: "single", label: t("一块屏") },
-              { value: "all", label: t("全部屏幕") },
-            ]}
-          />
-        </SettingRow>
-
-        <div className="border-t border-[var(--color-border)]" />
-
-        <SettingRow
           label={t("远程会话检测")}
           hint={detectHint(settings.auto_detect)}
         >
           <Segmented
             label={t("远程会话检测")}
-            value={settings.auto_detect}
-            disabled={busy}
-            onChange={(auto_detect) => onSave({ auto_detect })}
+            value={settings.auto_detect === "verified" && settings.auto_gather ? "verified" : "off"}
+            disabled={busy || platform !== "windows"}
+            onChange={(auto_detect) => onSave({ auto_detect, auto_gather: auto_detect === "verified", remote_screens: "single" })}
             options={[
-              { value: "off", label: t("关闭") },
-              { value: "verified", label: t("远程桌面会话") },
+              { value: "off", label: t("手动") },
+              { value: "verified", label: t("可靠连接触发") },
             ]}
           />
         </SettingRow>
 
-        <div className="border-t border-[var(--color-border)]" />
-
-        <SettingRow
-          label={t("检测到远程时自动整理")}
-          hint={
-            settings.auto_gather
-              ? t("关闭时会先把窗口恢复原位，再停止自动整理")
-              : t("关闭时只提示，不移动窗口")
-          }
-        >
-          <Switch
-            checked={settings.auto_gather}
-            disabled={busy || settings.auto_detect === "off"}
-            label={t("检测到远程时自动整理")}
-            onChange={(auto_gather) => onSave({ auto_gather })}
-          />
-        </SettingRow>
-
-        <div className="border-t border-[var(--color-border)]" />
-
-        <SettingRow
-          label={t("断开后自动恢复")}
-          hint={t("远程会话结束后把窗口放回原位")}
-        >
-          <Switch
-            checked={settings.auto_restore}
-            disabled={busy || settings.auto_detect === "off"}
-            label={t("断开后自动恢复")}
-            onChange={(auto_restore) => onSave({ auto_restore })}
-          />
-        </SettingRow>
 
         <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">
-          {t("没有任何系统接口能查询「谁正在远程这台电脑」。这里只在远程桌面（RDP）会话真正建立和结束时自动动手；远控工具在后台运行、端口已连接、或存在虚拟显示器，都只作为信息显示，不会触发移动。")}
+          {t(platform === "windows" ? "只有已验证的远程桌面（RDP）连接能触发自动操作。远控进程、已连接端口和虚拟显示器都只提供信息。" : "当前平台仅支持手动整理与恢复，自动连接检测不可用。")}
         </p>
       </Card>
 
       <Card title={t("启动与运行")}>
         <SettingRow label={t("开机自动启动")} hint={t("登录后静默启动，不打开窗口")}>
           <Switch
-            checked={settings.autostart}
+            checked={settings.autostart_actual === true}
             disabled={busy}
             label={t("开机自动启动")}
             onChange={(autostart) => onSave({ autostart })}
           />
         </SettingRow>
+        {settings.autostart_actual === null || settings.autostart_actual !== settings.autostart || settings.autostart_error ? (
+          <div role={settings.autostart_error ? "alert" : "status"} className="space-y-1 pb-2 text-xs text-[var(--color-fg-soft)]">
+            <p>{t(settings.autostart ? "期望开机启动：开启" : "期望开机启动：关闭")}</p>
+            <p>{t(settings.autostart_actual === null ? "系统启动注册状态无法确认" : settings.autostart_actual ? "系统实际启动注册：已开启" : "系统实际启动注册：未开启")}</p>
+            {settings.autostart_error ? <p className="break-all">{settings.autostart_error}</p> : null}
+            <Button size="sm" disabled={busy} onClick={() => onSave({ autostart: settings.autostart })}>{t("重新应用启动设置")}</Button>
+          </div>
+        ) : null}
 
         <div className="border-t border-[var(--color-border)]" />
 
-        <SettingRow label={t("自动检查更新")} hint={t("有未完成的整理时会跳过这次安装，下次启动再检查")}>
+        <SettingRow label={t("自动更新")} hint={t("自动下载、安装并重启 Unfy；远程连接或恢复工作未结束时会等待。") }>
           <Switch
             checked={settings.auto_update}
-            disabled={busy}
-            label={t("自动检查更新")}
+            disabled={busy || !updateStatus?.configured}
+            label={t("自动更新")}
             onChange={(auto_update) => onSave({ auto_update })}
           />
         </SettingRow>
@@ -266,39 +232,6 @@ export function GeneralPage({
         <p className="pt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">{t("点一下再按组合键即可录制，Esc 取消，Backspace 清除。被系统或其他应用占用时会在这里显示原因。")}</p>
       </Card>
 
-      <Card title={t("恢复行为")}>
-        <SettingRow
-          label={t("恢复延迟")}
-          hint={t("等这么多秒再放回窗口。期间如果又检测到远程会话，这次恢复会取消——避免断开重连时来回搬两次")}
-        >
-          <div className="flex items-center gap-1.5">
-            <input
-              type="number"
-              defaultValue={settings.restore_delay_secs}
-              min={0}
-              max={120}
-              disabled={busy}
-              onBlur={(event) => {
-                const commit = commitNumber(
-                  event.currentTarget.value,
-                  settings.restore_delay_secs,
-                  0,
-                  120,
-                );
-                event.currentTarget.value = commit.display;
-                if (commit.changed) {
-                  // Spec range is 15-120 s; 0 stays legal because a user may
-                  // prefer an immediate restore and accept the risk of two
-                  // migrations on a flapping connection.
-                  onSave({ restore_delay_secs: commit.value });
-                }
-              }}
-              className="h-7 w-16 rounded-[var(--radius-control)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 text-right text-xs tabular-nums outline-none focus:border-[var(--color-accent)]"
-            />
-            <span className="text-[11px] text-[var(--color-muted)]">{t("秒")}</span>
-          </div>
-        </SettingRow>
-      </Card>
 
       <Card
         title={t("更新")}
@@ -323,7 +256,7 @@ export function GeneralPage({
                   })
                   : t("尚未检查过更新。")
                 : t(
-                    "此构建没有签名公钥与更新地址，检查更新不会成功。发布版才会启用。",
+                    "开发版本，自动更新不可用。",
                   )}
             </p>
             {updateStatus?.configured &&
@@ -340,9 +273,22 @@ export function GeneralPage({
             disabled={busy || !updateStatus?.configured}
             icon={<IconDownload className="size-3.5" />}
           >{t("检查更新")}</Button>
+          {updateStatus?.configured && (updateStatus.last_outcome === "available" || updateStatus.last_outcome === "deferred") ? (
+            <Button size="sm" disabled={busy} onClick={onInstallUpdate}>{t("安装更新并重启")}</Button>
+          ) : null}
         </div>
       </Card>
 
+      <details>
+        <summary className="cursor-pointer py-2 text-[13px]">{t("帮助与诊断")}</summary>
+        <Card title={t("工具")}>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={onPreviewDiagnostics} disabled={busy}>{t("查看诊断内容")}</Button>
+            <Button onClick={onExport} disabled={busy}>{t("导出诊断包")}</Button>
+            <Button onClick={onOpenConfigDir} disabled={busy}>{t("打开配置目录")}</Button>
+          </div>
+          {diagnosticsPreview ? <pre className="mt-2 max-h-64 overflow-auto text-xs">{diagnosticsPreview}</pre> : null}
+        </Card>
       <Card
         title={t("环境状态")}
         description={t("Unfy 当前能不能正常工作。遇到问题时先看这里。")}
@@ -424,7 +370,7 @@ export function GeneralPage({
       <Card title={t("帮助")}>
         <SettingRow
           label={t("重新显示引导")}
-          hint={t("五步走一遍：这个工具做什么、哪块屏是远端能看到的那块、以及如何随时纠正")}
+          hint={t("确认这台主机与目标显示器，然后开始使用。")}
         >
           <Button size="sm" onClick={onShowGuide} disabled={busy}>
             {t("重新显示")}
@@ -468,6 +414,7 @@ export function GeneralPage({
           </div>
         </SettingRow>
       </Card>
+      </details>
     </>
   );
 }
@@ -475,7 +422,7 @@ export function GeneralPage({
 function detectHint(level: SettingsDto["auto_detect"]): string {
   switch (level) {
     case "verified":
-      return t("只在可验证的远程桌面（RDP）会话开始和结束时自动整理、恢复。远控软件在后台运行、或存在虚拟显示器，都不算连接。");
+      return t("已验证的 RDP 连接仅找回越界窗口，不重排可见窗口，也不会自动恢复手动整理。其他工具请手动整理和恢复。");
     default:
       return t("关闭自动检测，只用快捷键、托盘和界面按钮。");
   }
@@ -483,6 +430,8 @@ function detectHint(level: SettingsDto["auto_detect"]): string {
 
 function outcomeLabel(outcome: string | null): string {
   switch (outcome) {
+    case "available":
+      return t("发现新版本");
     case "up_to_date":
       return t("已是最新");
     case "deferred":

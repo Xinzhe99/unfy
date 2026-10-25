@@ -30,6 +30,7 @@ fn main() {
                 native_id: i,
                 process_id: 1,
                 process_start: 1,
+                instance: 1,
             },
             display_native_id: "display-a".into(),
             display_quality: IdentityQuality::Strong,

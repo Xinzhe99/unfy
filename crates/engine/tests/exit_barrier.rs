@@ -79,7 +79,7 @@ fn refused_window_keeps_exit_blocked_and_the_journal_alive() {
     let report = engine.migrate(&target()).expect("migrate");
     assert_eq!(
         report.outcomes.get(&id(2)),
-        Some(&WindowOutcome::Rejected),
+        Some(&WindowOutcome::Unknown),
         "a self-correcting window cannot be placed"
     );
 
@@ -114,6 +114,10 @@ fn adopted_transaction_also_blocks_exit() {
                 native_placement: None,
             })
             .unwrap();
+        journal
+            .write_intent(&id(3), Rect::new(3000, 300, 3800, 900), WindowMode::Normal)
+            .unwrap();
+        journal.durable().unwrap();
         journal.abandon();
     }
 
@@ -150,5 +154,6 @@ fn id(n: u64) -> unfy_domain::WindowId {
         native_id: n,
         process_id: 1000 + n as u32,
         process_start: 1,
+        instance: 1,
     }
 }

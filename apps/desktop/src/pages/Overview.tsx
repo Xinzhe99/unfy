@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { t } from "../i18n";
 import { targetState } from "../lib/target";
-import { renderMessage, renderNotice, stateLabels } from "../api";
+import { renderMessage, renderNotice, skipLabel, stateLabels } from "../api";
 import type {
   ActivityEntryDto,
   DisplayDto,
@@ -10,10 +10,11 @@ import type {
   PreviewDto,
   SettingsDto,
   StatusDto,
+  WindowResultDto,
 } from "../api";
 import { PlanPreview } from "../components/PlanPreview";
 import { Button, Card, Detail, EmptyState, Status } from "../components/ui";
-import { IconArrowRight, IconEye, IconInfo, IconLayout } from "../components/icons";
+import { IconArrowRight, IconEye, IconLayout } from "../components/icons";
 
 /**
  * Overview.
@@ -39,16 +40,15 @@ export function OverviewPage({
   onPause,
   onRescue,
   onIdentify,
-  onExport,
-  onPreviewDiagnostics,
-  diagnosticsPreview,
-  onOpenConfigDir,
   onOpenDisplays,
   onExclude,
   onKeepLayout,
   onDismissError,
   pendingApps,
   refusedApps,
+  recoveryPending = false,
+  onRecheck,
+  latestResults,
 }: {
   status: StatusDto | null;
   settings: SettingsDto | null;
@@ -73,13 +73,6 @@ export function OverviewPage({
   onPause: (paused: boolean) => void;
   onRescue: () => void;
   onIdentify: () => void;
-  onExport: () => void;
-  /** Show the payload without writing a file (spec P0-15-A). */
-  onPreviewDiagnostics: () => void;
-  /** The payload, or null when not requested. */
-  diagnosticsPreview: string | null;
-  /** Reveal the config directory, which also holds the logs and diagnostics. */
-  onOpenConfigDir: () => void;
   onOpenDisplays: () => void;
   /**
    * Add applications to the exclusion rules, from a report row.
@@ -93,6 +86,9 @@ export function OverviewPage({
   onKeepLayout: () => void;
   /** Clear the "last operation failed" line. */
   onDismissError: () => void;
+  recoveryPending?: boolean;
+  onRecheck?: () => void;
+  latestResults?: WindowResultDto[] | null;
 }) {
   // The full history is reference material; three rows answer "what just happened".
   const [expanded, setExpanded] = useState(false);
@@ -109,25 +105,11 @@ export function OverviewPage({
   const pending = status?.pending_windows ?? 0;
   const target = status?.target;
 
-  // `degraded` means the journal is still open: some windows are captured, some
-  // could not be restored. Treating it as "idle" (the previous behaviour) showed
-  // "就绪" and offered "整理到目标屏", which then failed with a transaction error.
-  // Anything with pending work must offer restore first.
-  const hasWork =
-    state === "active" || state === "degraded" || state === "restoring";
-  // The journal is the authority on whether there is anything to restore, not the
-  // state name: an engine that adopted a transaction from a previous run (or one
-  // whose journal is open but which reports `idle`) still has displaced windows.
-  // Deriving this from `pending_windows` means a degraded or failed engine with an
-  // open transaction always shows the restore entry.
-  const restorable = hasWork || pending > 0;
+  const hasWork = pending > 0 || captured > 0 || recoveryPending;
+  const restorable = hasWork;
   const busyState = state === "migrating" || state === "restoring";
-  const needsAttention = state === "degraded" || state === "error";
-  // In `Error` the engine refuses every new gather by design: the journal is not
-  // durable, so writing another one would put the user's windows at risk. The
-  // actions that still work are rescue and restore, and they must be what the
-  // page offers - previously it showed "gather", the one button that cannot run.
-  const blocked = state === "error";
+  const blocked = (status?.recovery_blockers ?? 0) > 0 || state === "error";
+  const needsAttention = blocked || state === "degraded";
   // With one display there is nowhere to gather to. Saying nothing leaves the
   // user pressing a button that reports "moved 0 windows", which reads as broken.
   // One display is not, by itself, a reason to hide the gather action: windows can
@@ -139,6 +121,7 @@ export function OverviewPage({
   // in-page pattern the settings reset uses, because the native dialog does not
   // render reliably inside the Tauri webview.
   const [keepArmed, setKeepArmed] = useState(false);
+  useEffect(() => { setKeepArmed(false); }, [captured, pending]);
   // Applications that refused the last gather, minus those already excluded.
   // Showing an application whose rule already exists would offer an action that
   // does nothing.
@@ -152,20 +135,19 @@ export function OverviewPage({
       <Card
         title={t("当前状态")}
         aside={
-          paused ? (
-            <Status tone="warning">{t("已暂停")}</Status>
-          ) : state === "error" ? (
+          blocked ? (
             <Status tone="danger">{t("需要处理")}</Status>
           ) : state === "degraded" ? (
-            <Status tone="warning">{t("部分待恢复")}</Status>
-          ) : busyState || busy ? (
-            // `busy` covers the window between the click and the engine's first
-            // state change, which on a busy desktop can be a second of silence.
-            <Status tone="live">
-              {t(stateLabels[state === "idle" ? "migrating" : state])}
-            </Status>
-          ) : hasWork ? (
+            <Status tone="warning">{t("仍有窗口待处理")}</Status>
+          ) : busyState ? (
+            <Status tone="live">{t(stateLabels[state])}</Status>
+          ) : state === "active" ? (
+            // The windows really are gathered and really do owe a restore. Calling
+            // that "recovery records still need attention" made a successful gather
+            // read as a fault, which is the same confusion the crash banner had.
             <Status tone="live">{t("布局已启用")}</Status>
+          ) : hasWork ? (
+            <Status tone="live">{t("恢复记录仍待处理")}</Status>
           ) : status === null ? (
             // Before the first status arrives, claiming the engine is ready is a
             // statement the page cannot make: it has not asked yet. The comment above
@@ -188,7 +170,7 @@ export function OverviewPage({
           {/* Only when it has something to say. An em dash on an idle engine was a
               row of pure noise between two rows that carry facts. */}
           {captured > 0 ? (
-            <Detail label={t("已收拢窗口")} value={String(captured)} />
+            <Detail label={t("已保存恢复位置")} value={String(captured)} />
           ) : null}
           {pending > 0 ? (
             <Detail
@@ -197,10 +179,11 @@ export function OverviewPage({
             />
           ) : null}
           <Detail label={t("布局")} value={layoutLabel(settings?.layout_mode)} />
+          {paused ? <Status tone="warning">{t("自动整理已暂停")}</Status> : null}
           <Detail
             label={t("远程检测")}
             value={
-              settings?.remote_active
+              settings?.remote_unknown ? t("连接状态未知，自动操作已停止") : settings?.remote_active
                 ? settings.remote_evidence
                   ? renderMessage(settings.remote_evidence)
                   : t("已检测到")
@@ -211,6 +194,12 @@ export function OverviewPage({
         </div>
 
 
+        {target?.present && !target.confirmed ? (
+          <div role="status" className="mt-2 text-xs">
+            <p>{t("这块显示器需要在当前桌面重新确认。请点击对应卡片；确认前不会整理窗口。")}</p>
+            <Button size="sm" onClick={onOpenDisplays}>{t("重新选择目标显示器")}</Button>
+          </div>
+        ) : null}
         {targetIsGone && target ? (
           <div className="mt-2.5 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
             <p className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
@@ -232,7 +221,7 @@ export function OverviewPage({
         {status?.settings_recovered ? (
           <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-warning)] px-3 py-2">
             <p className="min-w-0 flex-1 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-              {t("读取设置文件失败，已改用默认设置。原文件保留为 settings.json.invalid，可以手工修复后重启。")}
+              {t("设置文件无法读取，原文件已保留。请查看诊断并修复后重启；自动操作已停止。")}
             </p>
           </div>
         ) : null}
@@ -257,8 +246,8 @@ export function OverviewPage({
             <p className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
               {t(
                 state === "error"
-                  ? "出现了无法自动处理的问题。恢复与救援仍然可用；如果反复失败，请导出诊断包。"
-                  : "有窗口没能恢复到原位。可以再试一次，或先关闭这些窗口。",
+                  ? "恢复记录需要处理。请重试检查或恢复；记录会继续保留。"
+                  : "有窗口仍需处理。可以重试恢复，或查看最近一次结果。",
               )}
             </p>
             {/* Naming the application is the difference between an explanation and a
@@ -271,7 +260,7 @@ export function OverviewPage({
             {pendingApps.length > 0 ? (
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 <span className="text-[var(--color-muted)]">
-                  {t("仍在原处：")}
+                  {t("仍待恢复：")}
                 </span>
                 {pendingApps.map((name) => (
                   <span
@@ -294,85 +283,40 @@ export function OverviewPage({
 
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {blocked ? (
+          {restorable || blocked ? (
             <>
-              <Button onClick={onRestore} disabled={busy}>{t("尝试恢复")}</Button>
-              <Button onClick={onRescue} disabled={busy || !supported}>{t("救援越界窗口")}</Button>
-              <Button
-                variant="quiet"
-                size="sm"
-                onClick={onExport}
-                disabled={busy}
-              >{t("导出诊断包")}</Button>
-            </>
-          ) : restorable ? (
-            <>
-              <Button
-                variant="primary"
-                onClick={onRestore}
-                disabled={busy || busyState}
-                loading={busy || busyState}
-              >
-                {busy || busyState ? t("正在恢复…") : t("恢复本次布局")}
+              <Button variant="primary" onClick={onRestore} disabled={busy || busyState || !supported || !status?.has_permission} loading={state === "restoring"}>
+                {state === "restoring" ? t("正在恢复…") : t("恢复本次布局")}
               </Button>
-              <Button
-                onClick={() => onPause(!paused)}
-                disabled={busy || busyState}
-              >
-                {t(paused ? "取消暂停" : "暂停")}
-              </Button>
-              {/* The only way out when restoring is impossible: the user decides
-                  the current arrangement is good enough. Without it the exit
-                  barrier refuses to quit, forever. It discards the recovery
-                  record, so it asks once, in place, and names what is lost. */}
-              {keepArmed ? (
-                <span className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs leading-relaxed text-[var(--color-fg-soft)]">
-                    {t("这次整理的恢复位置将被放弃，之后不能用本次记录恢复。")}
-                  </span>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => {
-                      setKeepArmed(false);
-                      onKeepLayout();
-                    }}
-                    disabled={busy || busyState}
-                  >{t("放弃恢复记录")}</Button>
-                  <Button
-                    variant="quiet"
-                    size="sm"
-                    onClick={() => setKeepArmed(false)}
-                  >{t("取消")}</Button>
-                </span>
-              ) : (
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  onClick={() => setKeepArmed(true)}
-                  disabled={busy || busyState}
-                >{t("保留当前布局")}</Button>
-              )}
+              {blocked ? <Button onClick={onRecheck} disabled={busy}>{t("重新检查")}</Button> : null}
+              {!blocked ? (
+                <>
+                  <Button onClick={onMigrate} disabled={busy || busyState || !target?.confirmed || targetIsGone || !supported || !status?.has_permission}>{t("整理新窗口")}</Button>
+                  <p className="w-full text-[11px] leading-relaxed text-[var(--color-muted)]">
+                    {t("当前布局仍在生效：把之后打开或移出目标屏的窗口也整理过去，已整理的窗口保持不动。恢复记录会继续保留。")}
+                  </p>
+                </>
+              ) : null}
             </>
+          ) : !target?.confirmed || targetIsGone ? (
+            <Button variant="primary" onClick={onOpenDisplays}>{t("选择目标显示器")}</Button>
           ) : (
-            <Button
-              variant="primary"
-              onClick={onMigrate}
-              disabled={busy || !supported || singleDisplay}
-              loading={busy}
-            >
-              {progress
-                ? t("正在整理 {done}/{total}…", { done: progress.done, total: progress.total })
-                : busy
-                  ? t("正在整理…")
-                  : t("整理到目标屏")}
+            <Button variant="primary" onClick={onMigrate} disabled={busy || busyState || !supported || !status?.has_permission} loading={state === "migrating"}>
+              {progress ? t("正在整理 {done}/{total}…", { done: progress.done, total: progress.total }) : state === "migrating" ? t("正在整理…") : t("整理到目标屏")}
             </Button>
           )}
+          {/* Pause belongs here, not behind the collapsed "More" section. It is the
+              one control a user reaches for when automation does something they did
+              not expect, and hiding it made the app look like it could not be
+              stopped at all. */}
+          {settings?.auto_detect !== "off" ? (
+            <Button onClick={() => onPause(!paused)} disabled={busy || busyState}>{t(paused ? "取消暂停" : "暂停")}</Button>
+          ) : null}
           {/* Read-only, so it is offered whatever the engine is doing: the plan is
               the only way to see where the windows would land, and hiding it while a
               layout is active left the user with no way to look before acting. */}
           <Button
-            variant={blocked || restorable ? "primary" : "secondary"}
+            variant="secondary"
             size="sm"
             onClick={onPreview}
             disabled={busy || !supported}
@@ -391,16 +335,29 @@ export function OverviewPage({
             description rather than as the reason the button does nothing. */}
         {singleDisplay && !restorable ? (
           <p className="mt-2 text-xs leading-relaxed text-[var(--color-fg-soft)]">
-            {t("当前只检测到一块显示器，没有需要整理的窗口。接上第二块屏、或远程端开始投送多屏后再来。")}
+            {t("当前只有一块显示器；仍可找回越界窗口。")}
           </p>
         ) : null}
         <p className="mt-1.5 text-[11px] text-[var(--color-muted)]">{t("识别编号会在每块屏幕中央短暂显示数字，用来对照远程画面确认是哪一块。")}</p>
       </Card>
 
+      {latestResults ? (
+        <Card title={t("最近一次实际结果")}>
+          <ul className="space-y-2 text-xs">
+            {latestResults.map((result, index) => (
+              <li key={`${result.window_id}:${index}`} className="space-y-1 border-b border-[var(--color-border)] pb-2 last:border-0">
+                <p className="break-all" title={result.app_name ?? result.window_id}>{result.app_name ?? result.window_id}</p>
+                <p>{t({ applied: "已移入", restored: "已恢复原位", kept_user_change: "保留外部改动", fallback_visible: "已安全可见，原屏恢复待处理", rejected: "窗口未接受位置调整，可重试", gone: "窗口已关闭，无需重试", skipped: "本次跳过", unknown: "无法确认结果，恢复记录保留" }[result.outcome] ?? result.outcome)}</p>
+                {result.reason ? <p className="text-[var(--color-muted)]">{skipLabel(result.reason)}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
       {preview ? (
         <Card
           title={t("布局预览")}
-          description={t("预览不会移动任何窗口。窗口有变化时会自动更新。")}
+          description={t("预览不会移动窗口；目标或设置变化后请重新预览。")}
           aside={
             // A plain count, not a `Status`: the dot in that component means "state
             // of the engine", and a grey dot next to a window count reads as
@@ -480,7 +437,7 @@ export function OverviewPage({
           // handles comfortably.
           <>
           <ul>
-            {activity.slice(0, expanded ? activity.length : 3).map((entry) => (
+            {activity.slice(0, expanded ? activity.length : 1).map((entry) => (
               <li
                 key={`${entry.at}-${entry.kind}-${entry.affected}`}
                 className="flex items-baseline justify-between gap-3 border-t border-[var(--color-border)] py-1.5 first:border-t-0 first:pt-0"
@@ -504,7 +461,7 @@ export function OverviewPage({
               </li>
             ))}
           </ul>
-          {activity.length > 3 ? (
+          {activity.length > 1 ? (
             <button
               type="button"
               onClick={() => setExpanded(!expanded)}
@@ -519,6 +476,8 @@ export function OverviewPage({
         )}
       </Card>
 
+      <details>
+        <summary className="cursor-pointer text-xs">{t("更多")}</summary>
       <Card title={t("工具")}>
         {supported ? null : (
           <EmptyState title={t("当前平台尚未实现窗口控制")}>
@@ -526,25 +485,18 @@ export function OverviewPage({
           </EmptyState>
         )}
         <div className="flex flex-wrap gap-1.5">
+          {captured > 0 ? keepArmed ? (
+            <div role="alertdialog" aria-label={t("放弃恢复记录")} className="space-y-2">
+              <p className="text-xs">{t("这次整理的恢复位置将被放弃，之后不能用本次记录恢复。")}</p>
+              <p className="text-xs">{t("影响 {count} 个窗口", { count: captured })}</p>
+              <Button autoFocus onClick={() => setKeepArmed(false)}>{t("取消")}</Button>
+              <Button variant="danger" disabled={busy || busyState} onClick={() => { setKeepArmed(false); onKeepLayout(); }}>{t("放弃恢复记录")}</Button>
+            </div>
+          ) : <Button size="sm" variant="quiet" disabled={busy || busyState} onClick={() => setKeepArmed(true)}>{t("保留当前位置并结束本次整理")}</Button> : null}
           <Button size="sm" onClick={onRescue} disabled={busy || !supported}>{t("救援越界窗口")}</Button>
-          <Button size="sm" variant="quiet" onClick={onPreviewDiagnostics} disabled={busy}>{t("查看诊断内容")}</Button>
-          <Button size="sm" onClick={onExport} disabled={busy}>{t("导出诊断包")}</Button>
-          <Button size="sm" variant="quiet" onClick={onOpenConfigDir} disabled={busy}>{t("打开配置目录")}</Button>
         </div>
-        <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-[var(--color-muted)]">
-          <IconInfo className="mt-px size-3 shrink-0" />
-          {t("「救援」把停留在不存在坐标上的窗口移回可见区域。诊断包只含版本、显示器分辨率与设置项，不含窗口标题、文件路径或屏幕画面。")}
-        </p>
-
-        {diagnosticsPreview ? (
-          <details className="mt-2 rounded-[var(--radius-control)] border border-[var(--color-border)]">
-            <summary className="cursor-pointer select-none px-3 py-2 text-xs text-[var(--color-fg-soft)]">{t("诊断包内容（导出时就是这个文件）")}</summary>
-            <pre className="max-h-64 overflow-auto border-t border-[var(--color-border)] px-3 py-2 font-mono text-[11px] leading-relaxed text-[var(--color-fg-soft)]">
-              {diagnosticsPreview}
-            </pre>
-          </details>
-        ) : null}
       </Card>
+      </details>
     </>
   );
 }
@@ -561,7 +513,7 @@ export function targetDisplayName(
   displays: DisplayDto[],
   target: TargetDto | null | undefined,
 ): string {
-  if (!target) return t("跟随主显示器");
+  if (!target) return t("尚未选择目标显示器");
   // Prefer the backend's number for the target itself: it is the live value when
   // the display is present and the saved one when it is not, so the name does not
   // change depending on whether the monitor is plugged in.
@@ -654,7 +606,7 @@ function detectStatusLabel(settings: SettingsDto | null, paused: boolean): strin
   if (paused) return t("监视中（已暂停，不会自动操作）");
   // There is only one level now: verified connection evidence. Naming it would be
   // a choice the user no longer has.
-  if (!settings.auto_gather && !settings.auto_restore)
+  if (!settings.auto_gather)
     return t("监视中（未启用自动操作）");
   return t("监视中");
 }

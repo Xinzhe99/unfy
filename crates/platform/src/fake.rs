@@ -136,6 +136,7 @@ impl FakeBackend {
                 native_id: id,
                 process_id: 1000 + id as u32,
                 process_start: 1,
+                instance: 1,
             },
             display: DisplayKey {
                 native_id: display.to_string(),
@@ -165,6 +166,7 @@ impl FakeBackend {
             native_id: id,
             process_id: 1000 + id as u32,
             process_start: 1,
+            instance: 1,
         }
     }
 
@@ -234,6 +236,20 @@ impl WindowBackend for FakeBackend {
         Ok(out)
     }
 
+    fn snapshot(&self, id: &WindowId) -> Result<WindowSnapshot> {
+        let windows = self.windows.borrow();
+        let window = windows
+            .get(&id.native_id)
+            .ok_or(PlatformError::WindowGone)?;
+        if !window.alive {
+            return Err(PlatformError::WindowGone);
+        }
+        if window.snapshot.id != *id {
+            return Err(PlatformError::IdentityUncertain);
+        }
+        Ok(window.snapshot.clone())
+    }
+
     fn capabilities(&self, id: &WindowId) -> Capabilities {
         let windows = self.windows.borrow();
         match windows.get(&id.native_id) {
@@ -257,12 +273,19 @@ impl WindowBackend for FakeBackend {
         if !w.alive {
             return Err(PlatformError::WindowGone);
         }
+        if w.snapshot.id != *id {
+            return Err(PlatformError::IdentityUncertain);
+        }
         if w.behaviour == FakeBehaviour::Denied {
             return Err(PlatformError::PermissionDenied);
         }
         w.applies += 1;
 
         let mut target = plan.visible_rect;
+        if !plan.resize {
+            target.right = target.left + w.snapshot.visible_rect.width();
+            target.bottom = target.top + w.snapshot.visible_rect.height();
+        }
         if w.behaviour == FakeBehaviour::SizeOnly {
             // Keep the position it already had; take only the requested size.
             target = Rect::new(
@@ -303,6 +326,9 @@ impl WindowBackend for FakeBackend {
         if !w.alive {
             return Err(PlatformError::WindowGone);
         }
+        if w.snapshot.id != *id {
+            return Err(PlatformError::IdentityUncertain);
+        }
 
         match w.behaviour {
             FakeBehaviour::Vanishes => {
@@ -327,10 +353,6 @@ impl WindowBackend for FakeBackend {
             }),
         }
     }
-
-    fn restore_native(&self, _id: &WindowId, _placement: &[u8]) -> Result<()> {
-        Err(PlatformError::Unsupported)
-    }
 }
 
 #[cfg(test)]
@@ -350,6 +372,7 @@ mod tests {
         let plan = WindowPlan {
             visible_rect: Rect::new(3000, 100, 3300, 400),
             mode: WindowMode::Normal,
+            resize: true,
         };
         assert_eq!(
             backend.apply(&id, &plan),
@@ -372,6 +395,7 @@ mod tests {
         let plan = WindowPlan {
             visible_rect: Rect::new(3000, 100, 3300, 400),
             mode: WindowMode::Normal,
+            resize: true,
         };
         backend.apply(&id, &plan).unwrap();
         let observed = backend.read_back(&id).unwrap();
@@ -391,6 +415,7 @@ mod tests {
         let plan = WindowPlan {
             visible_rect: Rect::new(3000, 100, 3100, 200),
             mode: WindowMode::Normal,
+            resize: true,
         };
         backend.apply(&id, &plan).unwrap();
         let observed = backend.read_back(&id).unwrap();

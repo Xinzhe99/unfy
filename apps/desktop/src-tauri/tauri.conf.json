@@ -52,12 +52,15 @@
     "publisher": "Unfy",
     "category": "Utility",
     "shortDescription": "Keep remote-session windows on the display the client can see",
-    "longDescription": "Unfy notices when a remote client is connected to this machine, gathers the windows from your other displays onto the one the client can see, and puts them back when the session ends."
+    "longDescription": "Unfy gathers windows onto a display you choose while preserving their sizes, and keeps recovery records so you can restore their previous positions.",
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
-      "endpoints": []
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY0NzQ2MkUyMkFDNzFBOUQKUldTZEdzY3E0bUowWk96R0VpT0lEQk9mMFc1Zk9tMU5CV1JLY2dsTUdid3AvMEltSUJOQXhqazIK",
+      "endpoints": [
+        "https://github.com/Xinzhe99/unfy/releases/latest/download/latest.json"
+      ]
     }
   }
 }

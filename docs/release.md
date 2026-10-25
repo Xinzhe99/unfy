@@ -4,16 +4,16 @@
 
 ## 0. 当前实际状态（先读这一节）
 
-本仓库当前的发行链是**可达但故意不完整的**：
+CI 已接通打包、签名验证、更新清单生成和 tag 发布；当前配置仍缺少真实发行身份与更新源。
 
 | 项 | 当前值 | 后果 |
 |---|---|---|
 | `tauri.conf.json` 的 `plugins.updater.pubkey` | 空字符串 | 客户端无法验证任何更新签名，自动更新不可用 |
 | `plugins.updater.endpoints` | 空数组 | 客户端不会发起更新查询 |
-| `bundle.createUpdaterArtifacts` | 未设置 | 不产出 `.sig` 与 macOS `.app.tar.gz` |
+| `bundle.createUpdaterArtifacts` | CI 在 tag 构建时设为 `true`，手工烟测为 `false` | 发行产物与未签名烟测明确分开 |
 | `TAURI_SIGNING_PRIVATE_KEY` | 未配置 | 没有可用的签名私钥 |
 
-因此**现在的 tag 构建会失败，这是设计意图，不是回归**。CI 的 `bundle` job 在编译之前检查上述四项，缺任何一项就以非零退出，并在日志里逐条列出缺什么。理由很直接：如果放行，产物会带着一个空的 updater 配置发布，而安装后的客户端既查不到更新，也无法验证更新；发布说明里一旦写了「支持自动更新」，就是假陈述。宁可让 tag 构建红，也不要发出一个自称能自更新的包。
+因此现在的 tag 构建会在打包前失败。门禁要求 tag 与应用版本一致、更新源指向当前仓库的 `releases/latest/download/latest.json`、存在 updater 公钥/私钥，以及对应平台的原生签名凭据。Windows 还要求证书指纹和时间戳服务。缺少任何一项均返回错误，不发布无法验证或无法更新的包。
 
 把这些配置补齐之后，tag 构建才会真正走到打包步骤。补齐清单见 §3。
 
@@ -21,20 +21,20 @@ CI 与 tag 的关系：
 
 - `push` 到 `main`/`master` 与所有 `pull_request`：只跑检查（`check`、`frontend`、`ui-audit`），不打包。
 - `push` 一个 `v*` tag：跑全部检查，然后跑 `bundle`（Windows + macOS universal）。
-- 手工 `workflow_dispatch`：同样会跑 `bundle`，但**不要求** updater 配置——用于在没配密钥的分支上做一次冒烟打包。这种构建只能用于本机验证，不能当发布件。
+- 手工 `workflow_dispatch`：只有勾选 `build_installers` 才运行 `bundle`，用于未签名安装烟测；不发布 release 或更新清单。
 
 ### CI 的发布产物
 
-`bundle` job 每个平台产出两个 artifact：
+`bundle` 为每个平台上传安装包；tag 构建额外上传已经验签的发行输入：
 
 | artifact | 内容 | 缺失时 |
 |---|---|---|
-| `unfy-Windows` / `unfy-macOS` | NSIS `.exe`（+ 可选 MSI）；DMG | **job 失败**（`if-no-files-found: error`） |
-| `unfy-Windows-updater` / `unfy-macOS-updater` | `*.sig` 与 macOS `*.app.tar.gz` | tag 构建下 **job 失败**；手工 dispatch 下允许为空 |
+| `unfy-Windows` / `unfy-macOS` | NSIS `.exe` / DMG | job 失败 |
+| `release-Windows` / `release-macOS` | 已验签安装包、更新包、`.sig`、平台清单 | tag 构建缺失时 job 失败 |
 
-打包完成后还有一步 `Verify release artifacts` 直接遍历 `target/`，按平台核对「安装包存在」，tag 构建再核对「至少一个 `.sig`，macOS 另有 `.app.tar.gz`」。这一层是必要的：上传步骤只对它自己被要求上传的模式负责，若只产出了安装包而没有更新包，两个上传都不会报错，但这次发布仍然是有缺口的。
+Windows 检查应用与安装包的 Authenticode 签名、证书指纹和时间戳；macOS 检查签名、公证装订和 universal 架构。更新包同时验证 minisign 密钥 ID、包签名和 trusted comment 签名，并由实际包名生成下载 URL。
 
-**注意**：即使这些检查都通过，也**没有**任何步骤生成或上传更新清单（`latest.json`）。清单目前需要人工按 §3 的格式写并上传到 `endpoints` 指向的位置；CI 只负责把签名和更新包交出来。
+`release` job 合并三个必需平台键（Windows x64、macOS ARM64/x64）生成 `latest.json`，先创建包含全部文件的草稿，再发布。上述原生签名与 GitHub 发布尚未执行；本轮离线执行了当前验签脚本，有效 Ed/ED 签名通过，损坏包、错误密钥、错误密钥 ID 和损坏 trusted comment 均被拒绝。
 
 ### 真实桌面 e2e
 
@@ -44,8 +44,8 @@ CI 与 tag 的关系：
 
 | 平台 | 产物 | 命令 |
 |---|---|---|
-| Windows | NSIS 安装包（每用户，无需管理员）；可选 MSI | `npm run tauri build` |
-| macOS | DMG（含 Universal app）；PKG 用于批量分发 | `npm run tauri build -- --target universal-apple-darwin` |
+| Windows | NSIS 安装包（每用户，无需管理员） | `npm run tauri build -- --bundles nsis` |
+| macOS | Universal app 与 DMG | `npm run tauri build -- --target universal-apple-darwin --bundles app,dmg` |
 | Linux | **未实现**（v1 范围为 Windows + macOS） | — |
 
 Windows 每用户安装刻意不要求管理员权限：应用本身不需要提权，只有用户自行选择安装到受管位置时才需要。
@@ -59,7 +59,7 @@ Windows 每用户安装刻意不要求管理员权限：应用本身不需要提
 - SmartScreen 会拦截首次运行，用户需要点击"更多信息 → 仍要运行"；
 - 部分 EDR 产品会标记未签名二进制。
 
-签名通过环境变量或在 `tauri.conf.json` 的 `bundle.windows.certificateThumbprint` 配置。**证书指纹对应的证书必须已导入构建机的证书存储**，Tauri 会按指纹查找。
+配置 `bundle.windows.certificateThumbprint` 与 `timestampUrl`；CI 使用 `WINDOWS_CERTIFICATE`（base64 PFX）和 `WINDOWS_CERTIFICATE_PASSWORD` 导入当前用户证书存储，并核对实际指纹。Tauri 按该指纹签名。
 
 驱动签名与本产品无关：v1 不含 IDD 驱动。
 
@@ -84,17 +84,17 @@ CI 中通过 `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_SIGNING
 - `pubkey`：minisign 公钥，**当前为空**。为空时更新检查会失败，这不影响本地功能，但意味着这个构建不能被自动更新。
 - `endpoints`：更新清单 URL。当前为空，因此不会发起网络请求。
 
-补齐顺序（四项缺一不可，CI 按这个顺序检查并报错）：
+配置顺序：
 
 1. `npx tauri signer generate -w ~/.tauri/unfy.key` 生成密钥对；
 2. 把公钥填进 `plugins.updater.pubkey`；
-3. 在 `bundle.createUpdaterArtifacts` 设为 `true`，否则不产出 `.sig` 与 macOS `.app.tar.gz`；
-4. 把 `plugins.updater.endpoints` 指向真正会托管清单的 URL；
+3. 确认 CI 的 tag 构建覆盖 `bundle.createUpdaterArtifacts=true`；本地发行打包也必须开启；
+4. 把 `plugins.updater.endpoints` 指向当前 GitHub 仓库的 `releases/latest/download/latest.json`；
 5. 把私钥内容存入 CI secret `TAURI_SIGNING_PRIVATE_KEY`（有密码时连同 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。
 
 私钥永不入库。**私钥丢失意味着现有用户永远无法再收到更新**，必须离线备份。换用新私钥等于换了一把验证钥匙：已安装的旧版本会拒绝新签名，因此轮换私钥必须连同一次人工升级路径一起规划，不能只改 secret。
 
-清单需要人工生成并托管：CI 只产出 `*.sig` 与更新包，不产出清单文件。更新清单是一个静态 JSON，每个平台/架构一条，包含版本、下载地址、签名与发布日期。示例：
+CI 生成并随安装包发布清单，格式如下；平台地址与签名来自本次已验证的更新包：
 
 ```json
 {
@@ -118,7 +118,7 @@ macOS 打的是 universal 包，`darwin-aarch64` 与 `darwin-x86_64` 两个键�
 
 ### 恢复屏障
 
-更新安装会重启进程，因此 `update::check_and_install` 在下载完成后、安装之前检查 `captured_window_count()`。只要还有窗口被当前事务持有，更新就会被推迟并发出 `unfy://update` 事件，UI 显示"恢复完成后再安装"。
+“检查更新”只查询版本；安装是独立操作。后台安装遇到未恢复窗口、无法读取的记录或受支持的远程会话状态不明时延期，空闲后重试。下载完成后重新取得维护准入，阻止排队动作，再检查内存与递归磁盘恢复记录；仍有恢复责任就不安装。失败释放维护准入，保持应用可操作。
 
 这条规则没有旁路：安全更新也一样等待。理由是一旦重启，用户面对的是一台布局错乱又没有任何解释的机器。
 
@@ -143,15 +143,15 @@ macOS 打的是 universal 包，`darwin-aarch64` 与 `darwin-x86_64` 两个键�
 | macOS 无法移动原生全屏窗口 | 全屏应用不参与整理 | 跳过并在结果中报告 `fullscreen` |
 | macOS 无法跨 Space 操作 | 其他桌面上的窗口完全不可见 | 不承诺；AX 只暴露当前 Space |
 | Windows 无法操作提权窗口 | 以管理员运行的程序保持原位 | 跳过并计入 `permission_denied` |
-| 部分 Chromium 系应用会回弹 | 少数窗口拒绝移动 | 有界重试后标记 `rejected`，UI 显示进程号 |
-| 无法得知远程端在看哪块屏 | 目标屏需要用户指定 | 首次向导 + 热键循环 + 托盘提示 |
-| 自动检测覆盖不完整 | TeamViewer/AnyDesk 等不置位任何系统标志 | 分级检测：RDP 与虚拟显示器可靠，进程级信号需连续两次确认；默认不自动移动窗口 |
+| 部分应用拒绝或回弹 | 请求提交后几何或模式未稳定 | 有界回读后报告真实结果；未知请求不叠加重试，恢复记录保留 |
+| 无法得知远程端在看哪块屏 | 目标屏需要用户指定 | 显式选择；弱身份仅在本次运行的已确认拓扑有效 |
+| 自动检测覆盖有限 | 第三方软件的进程、端口、虚拟屏不能证明入站连接 | 已验证 RDP 生命周期只触发离屏救援；其他软件保留手动操作 |
 
 ## 6. 未做的事
 
 - 无 Linux 支持。
 - 无虚拟显示器、无强制单屏模式。
 - 无特权 helper，因此提权窗口不会被动到。
-- 无遥测上传（设置项存在，但没有任何上传代码）。
-- 自动检测不覆盖 macOS/Linux：`unfy-detect` 在这两个平台返回空观测，检测器保持惰性。
+- 无遥测上传，也不保留无效的遥测设置项。
+- macOS/Linux 没有已验证的远程连接检测，返回 Unknown；不能据此宣称支持自动整理。
 - 无 License/支付。

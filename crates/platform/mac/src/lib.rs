@@ -12,14 +12,13 @@
 //! * It cannot move native fullscreen windows: they live in their own Space and
 //!   the AX position attribute does not apply. They are reported as
 //!   `WindowMode::Fullscreen` and skipped.
-//! * It cannot see windows on other Spaces at all; AX only exposes windows on the
-//!   currently visible Space, so cross-Space migration is impossible by design.
+//! * It only acts on windows whose current AX role and state can be confirmed;
+//!   inaccessible windows and unknown Space membership are not forced into view.
 //! * Sizes are not applied exactly in one call. yabai and AeroSpace both do
 //!   `set size -> set position -> set size`, because macOS clamps a window to the
 //!   visible area of the display it is currently on before the move completes.
 //!   This backend does the same and then reads back.
-//! * `AXFullScreen` is not a public constant; it is used as a literal string and
-//!   treated as best-effort.
+//! * Missing fullscreen state prevents movement rather than implying Normal.
 
 pub fn is_available() -> bool {
     cfg!(target_os = "macos")
@@ -63,18 +62,24 @@ mod platform {
         pub fn new() -> Self {
             Self::default()
         }
+
+        /// Called on the AppKit main thread at startup and periodically (including
+        /// Dock and display changes). Publishes bounds/work areas together.
+        pub fn prime_work_areas(&self) -> bool {
+            self.displays.prime_work_areas()
+        }
     }
 
     impl Platform for MacPlatform {
-        type Displays = QuartzDisplays;
-        type Windows = AccessibilityBackend;
+        type Displays = Self;
+        type Windows = Self;
 
         fn displays(&self) -> &Self::Displays {
-            &self.displays
+            self
         }
 
         fn windows(&self) -> &Self::Windows {
-            &self.windows
+            self
         }
     }
 
@@ -86,13 +91,29 @@ mod platform {
             self.displays.scale_of(key)
         }
         fn display_for(&self, id: &WindowId) -> Result<DisplayKey> {
-            self.displays.display_for(id)
+            let observed = self.windows.read_back(id)?;
+            display_for_rect(observed.visible_rect, &self.displays.topology()?)
         }
     }
 
     impl WindowBackend for MacPlatform {
         fn enumerate(&self) -> Result<Vec<WindowSnapshot>> {
-            self.windows.enumerate()
+            let displays = self.displays.topology()?;
+            let mut windows = self.windows.enumerate()?;
+            for window in &mut windows {
+                if let Ok(display) = display_for_rect(window.visible_rect, &displays) {
+                    window.display = display;
+                }
+            }
+            Ok(windows)
+        }
+        fn snapshot(&self, id: &WindowId) -> Result<WindowSnapshot> {
+            let displays = self.displays.topology()?;
+            let mut window = self.windows.snapshot(id)?;
+            if let Ok(display) = display_for_rect(window.visible_rect, &displays) {
+                window.display = display;
+            }
+            Ok(window)
         }
         fn capabilities(&self, id: &WindowId) -> Capabilities {
             self.windows.capabilities(id)
@@ -103,9 +124,27 @@ mod platform {
         fn read_back(&self, id: &WindowId) -> Result<ObservedWindow> {
             self.windows.read_back(id)
         }
-        fn restore_native(&self, id: &WindowId, placement: &[u8]) -> Result<()> {
-            self.windows.restore_native(id, placement)
-        }
+    }
+
+    fn display_for_rect(
+        rect: unfy_domain::Rect,
+        displays: &[DisplaySnapshot],
+    ) -> Result<DisplayKey> {
+        displays
+            .iter()
+            .filter_map(|display| {
+                let width = (i64::from(rect.right.min(display.bounds.right))
+                    - i64::from(rect.left.max(display.bounds.left)))
+                .max(0);
+                let height = (i64::from(rect.bottom.min(display.bounds.bottom))
+                    - i64::from(rect.top.max(display.bounds.top)))
+                .max(0);
+                let area = width * height;
+                (area > 0).then_some((area, display))
+            })
+            .max_by_key(|(area, _)| *area)
+            .map(|(_, display)| display.key.clone())
+            .ok_or(unfy_platform::PlatformError::DisplayGone)
     }
 }
 

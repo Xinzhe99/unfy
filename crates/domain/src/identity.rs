@@ -91,9 +91,9 @@ pub enum WindowMode {
 
 /// A window identifier that survives until the window is destroyed.
 ///
-/// `native_id` alone is not enough: Windows reuses `HWND` values, and macOS
-/// `CGWindowID` is only unique within a session. `process_start` disambiguates
-/// a recycled handle that now belongs to a different process instance.
+/// `native_id` and process creation time cannot distinguish two windows created
+/// by the same process after handle reuse. `instance` proves window continuity;
+/// zero means an older record without that proof.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WindowId {
     pub native_id: u64,
@@ -101,6 +101,8 @@ pub struct WindowId {
     /// Process creation time in 100 ns intervals since the Unix epoch, or 0 if
     /// the platform cannot report it.
     pub process_start: u64,
+    #[serde(default)]
+    pub instance: u64,
 }
 
 /// A captured window, ready to be moved or restored.
@@ -171,6 +173,7 @@ mod tests {
                 native_id: 1,
                 process_id: 2,
                 process_start: 3,
+                instance: 1,
             },
             app_name: "test-app.exe".into(),
             display: DisplayKey {

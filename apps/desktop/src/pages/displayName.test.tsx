@@ -15,6 +15,7 @@ import { describe, expect, test } from "bun:test";
 
 import { targetDisplayName } from "./Overview";
 import type { DisplayDto } from "../api";
+import { t } from "../i18n";
 
 function display(overrides: Partial<DisplayDto> & { native_id: string }): DisplayDto {
   return {
@@ -47,17 +48,19 @@ describe("targetDisplayName", () => {
         native_id: "left",
         label: "DISPLAY1",
         present: true,
+        confirmed: true,
         number: 1,
       }),
-    ).toBe("显示器 1（主）");
+    ).toBe(t("显示器 {number}（主）", { number: 1 }));
     expect(
       targetDisplayName(displays, {
         native_id: "right",
         label: "DISPLAY2",
         present: true,
+        confirmed: true,
         number: 2,
       }),
-    ).toBe("显示器 2");
+    ).toBe(t("显示器 {number}", { number: 2 }));
   });
 
   test("names the same display identically regardless of list order", () => {
@@ -65,6 +68,7 @@ describe("targetDisplayName", () => {
       native_id: "primary",
       label: "DISPLAY1",
       present: true,
+      confirmed: true,
       number: 1,
     };
     const first = [
@@ -83,28 +87,31 @@ describe("targetDisplayName", () => {
         native_id: "gone",
         label: "DISPLAY9",
         present: false,
+        confirmed: false,
         number: 2,
       }),
-    ).toBe("显示器 2");
+    ).toBe(t("显示器 {number}", { number: 2 }));
   });
 
   test("falls back when there is no target or it is gone", () => {
-    expect(targetDisplayName([], null)).toBe("跟随主显示器");
+    expect(targetDisplayName([], null)).toBe(t("尚未选择目标显示器"));
     expect(
       targetDisplayName([display({ native_id: "a" })], {
         native_id: "gone",
         label: "DISPLAY9",
         present: false,
+        confirmed: false,
         number: null,
       }),
-    ).toBe("不可用");
+    ).toBe(t("不可用"));
     expect(
       targetDisplayName([display({ native_id: "a" })], {
         native_id: "gone",
         label: "DISPLAY9",
         present: true,
+        confirmed: true,
         number: null,
       }),
-    ).toBe("已选择");
+    ).toBe(t("已选择"));
   });
 });

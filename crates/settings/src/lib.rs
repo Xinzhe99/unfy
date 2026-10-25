@@ -21,8 +21,14 @@ pub const SETTINGS_VERSION: u32 = 2;
 /// `quality` is stored so the engine can refuse to auto-restore onto a display
 /// whose identity was only ever known by geometry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetDisplay {
     pub native_id: String,
+    #[serde(default = "unknown_identity_quality")]
+    pub quality: unfy_domain::IdentityQuality,
+    /// Weak identity approval is valid only in this process and topology.
+    #[serde(skip)]
+    pub confirmed_topology: Option<String>,
     pub label: String,
     /// The number this display had when it was chosen.
     ///
@@ -34,10 +40,16 @@ pub struct TargetDisplay {
     pub number: Option<usize>,
 }
 
+fn unknown_identity_quality() -> unfy_domain::IdentityQuality {
+    unfy_domain::IdentityQuality::Weak
+}
+
 impl TargetDisplay {
     pub fn from_key(key: &DisplayKey, label: impl Into<String>) -> Self {
         Self {
             native_id: key.native_id.clone(),
+            quality: key.quality,
+            confirmed_topology: None,
             label: label.into(),
             number: None,
         }
@@ -52,6 +64,9 @@ impl TargetDisplay {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub version: u32,
+    /// The upgraded layout and automation policy needs user acknowledgement.
+    #[serde(default)]
+    pub migration_notice: bool,
     /// Display windows are gathered onto. `None` means "ask the user".
     pub target_display: Option<TargetDisplay>,
     pub layout_mode: LayoutModeName,
@@ -152,18 +167,12 @@ pub enum RemoteScreens {
     All,
 }
 
-/// The persisted name of the layout mode.
-///
-/// `MoveInto` is serialized as `default` because that is what the interface has
-/// always called it. The removed `primary_side` and `preserve_order` spellings
-/// are still *accepted* by the deserializer so an existing settings file loads,
-/// but they are migrated to `default` by [`Settings::migrate`]: the mode they
-/// described no longer exists, and silently keeping the name would let the UI
-/// offer a choice the engine cannot honour.
+/// The persisted name of the layout mode. Legacy spellings are translated only
+/// while loading an older settings schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutModeName {
-    #[serde(rename = "default", alias = "preserve_order", alias = "primary_side")]
+    #[serde(rename = "default")]
     MoveInto,
     Grid,
 }
@@ -207,6 +216,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
+            migration_notice: false,
             target_display: None,
             // Move the windows over, keep their size and state. The grid is the
             // explicit opt-in for users who want an arranged desktop.
@@ -266,88 +276,106 @@ impl Settings {
     /// the user's configured target display without telling them.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let text = std::fs::read_to_string(path)?;
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(error.into()),
+        };
         // Editors on Windows commonly write UTF-8 with a BOM (PowerShell's
         // `Set-Content -Encoding UTF8` does it by default). `serde_json` rejects
         // the BOM as "expected value at line 1 column 1", which used to make a
         // hand-edited settings file look corrupt and silently reset everything.
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-        // Fields that were removed from the document are stripped before the
-        // strict deserialization. Without this, an ordinary upgrade would look
-        // like a corrupt file, be copied aside as `settings.json.invalid`, and
-        // silently reset the user's target, exclusions and shortcuts.
         let mut value: serde_json::Value =
             serde_json::from_str(text).map_err(|e| SettingsError::Parse(e.to_string()))?;
-        if let Some(object) = value.as_object_mut() {
-            for removed in ["telemetry", "last_refused_apps"] {
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| SettingsError::Parse("settings must be a JSON object".into()))?;
+        let version = match object.get("version") {
+            None => 1,
+            Some(value) => value
+                .as_u64()
+                .filter(|v| *v <= u32::MAX as u64)
+                .ok_or_else(|| SettingsError::Parse("version must be an unsigned integer".into()))?
+                as u32,
+        };
+        if version > SETTINGS_VERSION {
+            return Err(SettingsError::VersionTooNew {
+                found: version,
+                supported: SETTINGS_VERSION,
+            });
+        }
+        object.insert("version".into(), version.into());
+        if version < 2 {
+            for removed in [
+                "telemetry",
+                "last_refused_apps",
+                "marker",
+                "deferred_restore",
+            ] {
                 object.remove(removed);
+            }
+            if matches!(
+                object.get("layout_mode").and_then(|v| v.as_str()),
+                Some("primary_side" | "preserve_order" | "keep_layout" | "KeepLayout")
+            ) {
+                object.insert("layout_mode".into(), "default".into());
             }
         }
         let settings: Settings =
             serde_json::from_value(value).map_err(|e| SettingsError::Parse(e.to_string()))?;
-        if settings.version > SETTINGS_VERSION {
-            return Err(SettingsError::VersionTooNew {
-                found: settings.version,
-                supported: SETTINGS_VERSION,
-            });
-        }
         let settings = settings.migrate();
         settings.validate()?;
         Ok(settings)
     }
 
-    /// Bring a file written by an older build up to the current contract.
-    ///
-    /// This is deliberately not a `serde` alias trick beyond the layout enum: the
-    /// removed values mean something different now, and the user has to end up
-    /// with a document whose meaning is the new one. Running it more than once is
-    /// a no-op.
+    /// Upgrade legacy preferences without granting new automation authority.
     pub fn migrate(mut self) -> Self {
-        // v1 → v2:
-        // * `primary_side` / `preserve_order` layout names collapse to the
-        //   move-in default. The old modes either rearranged the target or mapped
-        //   the whole desktop; neither is the product's default any more.
-        // * The four-level detection ladder collapses to off/verified. Anything
-        //   that was not already "off" keeps the user's intent that automation may
-        //   act, but only on evidence that can actually prove a session.
-        // * `last_refused_apps` and `telemetry` are gone; they are dropped by the
-        //   deserializer's `deny_unknown_fields` compatibility shim below.
         if self.version < 2 {
-            self.version = 2;
-            self.layout_mode = match self.layout_mode {
-                LayoutModeName::Grid => LayoutModeName::Grid,
-                LayoutModeName::MoveInto => LayoutModeName::MoveInto,
-            };
-            self.auto_detect = match self.auto_detect.as_str() {
-                "off" => "off".to_string(),
-                // The old levels all meant "act automatically on some evidence".
-                // Preserve the wish, not the unreliable evidence.
-                _ => "verified".to_string(),
-            };
+            self.version = SETTINGS_VERSION;
+            self.migration_notice = true;
+            self.auto_detect = "off".into();
+            self.auto_gather = false;
+            self.auto_restore = false;
+        }
+        if self.remote_screens == RemoteScreens::All {
+            self.auto_detect = "off".into();
+            self.auto_gather = false;
+            self.auto_restore = false;
         }
         self
     }
 
-    /// Write atomically: temp file in the same directory, then rename.
+    /// Flush a unique sibling file before replacing the previous settings.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         self.validate()?;
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        // A failed load must never be followed by overwriting an unknown schema.
+        if path.try_exists()? {
+            Self::load(path)?;
         }
-        let temp = temp_path(path);
         let json =
-            serde_json::to_string_pretty(self).map_err(|e| SettingsError::Parse(e.to_string()))?;
-        std::fs::write(&temp, json)?;
-        // `rename` over an existing file is atomic on NTFS and on POSIX.
-        std::fs::rename(&temp, path)?;
+            serde_json::to_vec_pretty(self).map_err(|e| SettingsError::Parse(e.to_string()))?;
+        atomic_write(path, &json)?;
         Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.version != SETTINGS_VERSION {
+            return Err(SettingsError::Validation(format!(
+                "save requires settings version {SETTINGS_VERSION}, found {}",
+                self.version
+            )));
+        }
+        if self.remote_screens == RemoteScreens::All
+            && (self.auto_detect != "off" || self.auto_gather || self.auto_restore)
+        {
+            return Err(SettingsError::Validation(
+                "all-screen mode requires manual automation policy".into(),
+            ));
+        }
         if !(0..=200).contains(&self.margin) {
             return Err(SettingsError::Validation(format!(
                 "margin {} is outside 0..=200",
@@ -401,7 +429,7 @@ impl Settings {
                     "window size {width}x{height} is out of range"
                 )));
             }
-            if x.abs() > 20000 || y.abs() > 20000 {
+            if !(-20000..=20000).contains(&x) || !(-20000..=20000).contains(&y) {
                 return Err(SettingsError::Validation(format!(
                     "window position {x},{y} is out of range"
                 )));
@@ -435,139 +463,359 @@ impl Settings {
     }
 }
 
-fn temp_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "settings.json".into());
-    path.with_file_name(format!("{file_name}.tmp"))
+fn unique_sibling(path: &Path, suffix: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!("{name}.{}.{sequence}.{suffix}", std::process::id()))
 }
 
-/// Per-user configuration directory.
-///
-/// Uses the platform's own convention rather than a hardcoded Windows path, so
-/// the same code works on macOS once that backend lands.
-///
-/// The product used to be called Conflux and kept its data under that name.
-/// A rename must not strand the user's settings, window geometry, exclusion
-/// rules and journal, so the first run after the rename moves the old
-/// directory into place. Moving (not copying) keeps the journal and the
-/// settings file as the very same files the previous build wrote, and the
-/// leftover-empty-old-directory case degrades to "no settings yet" harmlessly.
-pub fn config_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let appdata = PathBuf::from(appdata);
-            let dir = appdata.join("Unfy");
-            migrate_from(&dir, appdata.join("Conflux"));
-            return dir;
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+fn sync_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    std::fs::File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+    }
+    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    // Both strings are NUL-terminated and live through the call. Replace and
+    // write-through are required so success does not mean only cached data.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0x1 | 0x8) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::rename(from, to)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    atomic_write_with(path, bytes, replace_file)
+}
+
+fn atomic_write_with(
+    path: &Path,
+    bytes: &[u8],
+    replace: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(parent_dir(path))?;
+    let (temp, mut file) = loop {
+        let temp = unique_sibling(path, "tmp");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => break (temp, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
         }
+    };
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        sync_dir(parent_dir(path))?;
+        replace(&temp, path)?;
+        sync_dir(parent_dir(path))
+    })();
+    if result.is_err() {
+        // This invocation owns this unique file; never remove a stale sibling.
+        let _ = std::fs::remove_file(temp);
+    }
+    result
+}
+
+/// Resolve the current configuration directory without touching the filesystem.
+pub fn config_dir() -> PathBuf {
+    config_dirs().1
+}
+
+fn config_dirs() -> (PathBuf, PathBuf) {
+    #[cfg(target_os = "windows")]
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let root = PathBuf::from(appdata);
+        return (root.join("Conflux"), root.join("Unfy"));
     }
     #[cfg(target_os = "macos")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            let home = PathBuf::from(home);
-            let dir = home
-                .join("Library")
-                .join("Application Support")
-                .join("Unfy");
-            migrate_from(
-                &dir,
-                home.join("Library")
-                    .join("Application Support")
-                    .join("Conflux"),
-            );
-            return dir;
+    if let Some(home) = std::env::var_os("HOME") {
+        let root = PathBuf::from(home).join("Library/Application Support");
+        return (root.join("Conflux"), root.join("Unfy"));
+    }
+    let root = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_else(std::env::temp_dir);
+    (root.join("conflux"), root.join("unfy"))
+}
+
+/// Run before opening logs, settings or journals. Failure blocks new transactions.
+pub fn initialize_config_dir() -> Result<PathBuf> {
+    let (old, new) = config_dirs();
+    migrate_config_dirs(&old, &new)?;
+    Ok(new)
+}
+
+/// Import the previous product directory. Existing settings always win. Old
+/// journals and failed staging trees are retained until explicitly reviewed.
+pub fn migrate_config_dirs(old_dir: &Path, new_dir: &Path) -> Result<()> {
+    migrate_config_dirs_with(old_dir, new_dir, &|a, b| std::fs::rename(a, b), &|a, b| {
+        std::fs::copy(a, b)
+    })
+}
+
+fn migration_error(path: &Path, reason: impl std::fmt::Display) -> SettingsError {
+    SettingsError::Io(format!(
+        "configuration migration at {}: {reason}",
+        path.display()
+    ))
+}
+
+type JournalFiles = std::collections::BTreeMap<String, PathBuf>;
+
+fn journal_files(dir: &Path) -> Result<JournalFiles> {
+    fn visit(dir: &Path, files: &mut JournalFiles) -> Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                visit(&path, files)?;
+            } else if kind.is_file() && path.extension().is_some_and(|ext| ext == "journal") {
+                unfy_journal::recover(&path).map_err(|e| migration_error(&path, e))?;
+                let bytes = std::fs::read(&path)?;
+                let transaction = match unfy_journal::Record::decode(&bytes)
+                    .map_err(|e| migration_error(&path, e))?
+                {
+                    Some((unfy_journal::Record::Begin { transaction, .. }, _)) => {
+                        transaction.to_string()
+                    }
+                    _ => return Err(migration_error(&path, "missing transaction header")),
+                };
+                if path.file_stem().and_then(|name| name.to_str()) != Some(transaction.as_str()) {
+                    return Err(migration_error(
+                        &path,
+                        "journal filename does not match transaction UUID",
+                    ));
+                }
+                if let Some(previous) = files.get(&transaction) {
+                    if !same_file_contents(previous, &path)? {
+                        return Err(migration_error(
+                            &path,
+                            "conflicting copies of the same transaction",
+                        ));
+                    }
+                } else {
+                    files.insert(transaction, path);
+                }
+            } else {
+                return Err(migration_error(
+                    &path,
+                    "unrecognized journal entry; recovery review required",
+                ));
+            }
+        }
+        Ok(())
+    }
+    let mut files = JournalFiles::new();
+    if dir.try_exists()? {
+        visit(dir, &mut files)?;
+    }
+    Ok(files)
+}
+
+fn same_file_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut a = std::fs::File::open(a)?;
+    let mut b = std::fs::File::open(b)?;
+    if a.metadata()?.len() != b.metadata()?.len() {
+        return Ok(false);
+    }
+    let mut left = [0u8; 8192];
+    let mut right = [0u8; 8192];
+    loop {
+        let count = a.read(&mut left)?;
+        if count == 0 {
+            return Ok(true);
+        }
+        b.read_exact(&mut right[..count])?;
+        if left[..count] != right[..count] {
+            return Ok(false);
         }
     }
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        let xdg = PathBuf::from(xdg);
-        let dir = xdg.join("unfy");
-        migrate_from(&dir, xdg.join("conflux"));
-        return dir;
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let home = PathBuf::from(home);
-        let dir = home.join(".config").join("unfy");
-        migrate_from(&dir, home.join(".config").join("conflux"));
-        return dir;
-    }
-    std::env::temp_dir().join("unfy")
 }
 
-/// Move the previous product-name directory into the new one.
-///
-/// The journal lives in a *subdirectory*, and the recovery record inside it is the
-/// only description of windows that may still be displaced. The previous version
-/// copied only the top-level files, so a fallback migration (across filesystems,
-/// where `rename` fails) silently dropped `journal/` - and it then skipped every
-/// later attempt because the destination existed. This version:
-///
-/// * copies the whole tree, recursively;
-/// * writes into a temporary sibling and only renames it into place once every
-///   entry has been copied, so an interrupted copy never looks complete;
-/// * leaves the old directory untouched on any failure, so the next launch can try
-///   again;
-/// * refuses to overwrite an existing destination, which is what protects data the
-///   new build already wrote.
-fn migrate_from(new_dir: &std::path::Path, old_dir: std::path::PathBuf) {
-    if !old_dir.is_dir() || new_dir.exists() {
-        return;
+fn copy_verified(
+    from: &Path,
+    to: &Path,
+    copy: &impl Fn(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<()> {
+    copy(from, to)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(to)?
+        .sync_all()?;
+    if !same_file_contents(from, to)? {
+        return Err(migration_error(from, "copied contents differ"));
     }
-    if std::fs::rename(&old_dir, new_dir).is_ok() {
-        eprintln!(
-            "migrated configuration directory from {} to {}",
-            old_dir.display(),
-            new_dir.display()
-        );
-        return;
-    }
-
-    // Rename across filesystems fails. Copy into a temporary directory and commit
-    // it atomically; the old directory stays as the fallback until that succeeds.
-    let staging = new_dir.with_extension("migrating");
-    if staging.exists() && std::fs::remove_dir_all(&staging).is_err() {
-        eprintln!(
-            "could not clear the previous partial migration at {}",
-            staging.display()
-        );
-        return;
-    }
-    if let Err(e) = copy_tree(&old_dir, &staging) {
-        eprintln!(
-            "could not copy configuration from {}: {e}; keeping the original",
-            old_dir.display()
-        );
-        let _ = std::fs::remove_dir_all(&staging);
-        return;
-    }
-    if let Err(e) = std::fs::rename(&staging, new_dir) {
-        eprintln!("could not commit the migrated configuration: {e}");
-        let _ = std::fs::remove_dir_all(&staging);
-        return;
-    }
-    eprintln!(
-        "copied configuration from {} to {}",
-        old_dir.display(),
-        new_dir.display()
-    );
+    Ok(())
 }
 
-/// Recursively copy a directory tree.
-fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+fn copy_tree(
+    from: &Path,
+    to: &Path,
+    copy: &impl Fn(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            copy_tree(&entry.path(), &target)?;
-        } else if file_type.is_file() {
-            std::fs::copy(entry.path(), &target)?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target, copy)?;
+        } else if kind.is_file() {
+            copy_verified(&entry.path(), &target, copy)?;
+        } else {
+            return Err(migration_error(
+                &entry.path(),
+                "links and special files require manual review",
+            ));
         }
-        // Symlinks and platform-specific entries are skipped deliberately: the
-        // config directory contains only files and the journal subdirectory.
+    }
+    sync_dir(to)?;
+    Ok(())
+}
+
+fn migrate_config_dirs_with(
+    old_dir: &Path,
+    new_dir: &Path,
+    rename: &impl Fn(&Path, &Path) -> std::io::Result<()>,
+    copy: &impl Fn(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<()> {
+    if old_dir == new_dir {
+        return Err(migration_error(old_dir, "source equals destination"));
+    }
+    if !old_dir.try_exists()? {
+        return Ok(());
+    }
+    let old_files = journal_files(&old_dir.join("journal"))?;
+    if !new_dir.try_exists()? {
+        Settings::load(old_dir.join("settings.json"))?;
+        std::fs::create_dir_all(parent_dir(new_dir))?;
+        if rename(old_dir, new_dir).is_ok() {
+            sync_dir(parent_dir(new_dir))?;
+            atomic_write(&new_dir.join(".conflux-migration-complete"), b"1\n")?;
+            return Ok(());
+        }
+        let staging = loop {
+            let path = unique_sibling(new_dir, "migrating");
+            match std::fs::create_dir(&path) {
+                Ok(()) => break path,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
+        };
+        copy_tree(old_dir, &staging, copy)?;
+        Settings::load(staging.join("settings.json"))?;
+        let staged_files = journal_files(&staging.join("journal"))?;
+        if staged_files.len() != old_files.len() {
+            return Err(migration_error(
+                old_dir,
+                "journal inventory changed during migration",
+            ));
+        }
+        let receipts = staging.join(".conflux-imported-journals");
+        std::fs::create_dir_all(&receipts)?;
+        for (id, source) in &staged_files {
+            let original = old_files
+                .get(id)
+                .ok_or_else(|| migration_error(source, "journal appeared during migration"))?;
+            if !same_file_contents(source, original)? {
+                return Err(migration_error(
+                    source,
+                    "source journal changed during migration",
+                ));
+            }
+            copy_verified(source, &receipts.join(format!("{id}.journal")), copy)?;
+        }
+        sync_dir(&receipts)?;
+        atomic_write(&staging.join(".conflux-migration-complete"), b"1\n")?;
+        std::fs::rename(&staging, new_dir)?;
+        sync_dir(parent_dir(new_dir))?;
+        return Ok(());
+    }
+
+    let marker = new_dir.join(".conflux-migration-complete");
+    if marker.try_exists()? && std::fs::read(&marker)? != b"1\n" {
+        return Err(migration_error(&marker, "unknown migration marker version"));
+    }
+    let new_files = journal_files(&new_dir.join("journal"))?;
+    let receipts = new_dir.join(".conflux-imported-journals");
+    let mut pending = Vec::new();
+    for (id, source) in &old_files {
+        let receipt = receipts.join(format!("{id}.journal"));
+        if receipt.try_exists()? {
+            if !same_file_contents(source, &receipt)? {
+                return Err(migration_error(
+                    source,
+                    "legacy journal changed after import",
+                ));
+            }
+            continue;
+        }
+        if let Some(existing) = new_files.get(id) {
+            if !same_file_contents(source, existing)? {
+                return Err(migration_error(
+                    source,
+                    "transaction conflicts with the new configuration",
+                ));
+            }
+        }
+        pending.push((id, source, receipt));
+    }
+    // Validate everything before publishing any import. Each file commit remains
+    // independently restartable if a later write fails.
+    if !new_dir.join("settings.json").try_exists()? && old_dir.join("settings.json").try_exists()? {
+        Settings::load(old_dir.join("settings.json"))?;
+        atomic_write(
+            &new_dir.join("settings.json"),
+            &std::fs::read(old_dir.join("settings.json"))?,
+        )?;
+    }
+    for (id, source, receipt) in pending {
+        let bytes = std::fs::read(source)?;
+        if let Some(existing) = new_files.get(id) {
+            if std::fs::read(existing)? != bytes {
+                return Err(migration_error(source, "journal changed while importing"));
+            }
+        } else {
+            atomic_write(
+                &new_dir.join("journal").join(format!("{id}.journal")),
+                &bytes,
+            )?;
+        }
+        atomic_write(&receipt, &bytes)?;
+    }
+    if !marker.try_exists()? {
+        atomic_write(&marker, b"1\n")?;
     }
     Ok(())
 }
@@ -601,6 +849,8 @@ mod tests {
             target_display: Some(TargetDisplay {
                 number: None,
                 native_id: "DISPLAY#DEL41FF".into(),
+                quality: unfy_domain::IdentityQuality::Strong,
+                confirmed_topology: None,
                 label: "Dell U2720Q".into(),
             }),
             layout_mode: LayoutModeName::Grid,
@@ -677,12 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_processes_use_a_single_settings_file() {
-        // Two instances must not exist (enforced by the single-instance plugin),
-        // but the settings writer itself must still be safe against a stale
-        // process writing an older revision over a newer one. This test pins the
-        // observable contract: the last write wins and the file is always valid
-        // JSON, never a partial document.
+    fn successive_saves_replace_the_existing_file() {
         let dir = temp_dir("concurrent");
         let path = dir.join("settings.json");
 
@@ -737,6 +982,8 @@ mod tests {
         let target = TargetDisplay {
             number: None,
             native_id: "display-a".into(),
+            quality: unfy_domain::IdentityQuality::Strong,
+            confirmed_topology: None,
             label: "Old label".into(),
         };
         let key = DisplayKey {
@@ -745,38 +992,307 @@ mod tests {
         };
         assert!(target.matches(&key));
     }
-}
-
-#[cfg(test)]
-mod lock_tests {
-    //! Guards the deadlock that shipped once: `save_settings` held the settings
-    //! mutex while calling a helper that also tried to read settings. Because
-    //! `std::sync::Mutex` is not reentrant, the command thread blocked forever —
-    //! the file was written, the registry was not, and the UI hung.
-    //!
-    //! The fix was structural (the helper now takes a value, not the lock), so
-    //! this test documents the contract that made the bug possible: reading
-    //! settings while a caller already holds the guard must be impossible by
-    //! construction. Here we assert the non-reentrancy explicitly so nobody
-    //! "simplifies" the call site back into a deadlock.
-    use std::sync::{Arc, Mutex};
 
     #[test]
-    fn std_mutex_is_not_reentrant_so_settings_helpers_must_take_values() {
-        let guard = Arc::new(Mutex::new(1u32));
-        let outer = guard.lock().unwrap();
-
-        let inner = Arc::clone(&guard);
-        let handle = std::thread::spawn(move || inner.try_lock().is_ok());
-
-        let observed = handle.join().unwrap();
-        assert!(
-            !observed,
-            "a second lock attempt must fail while the guard is held; \
-             if this ever passes, review every settings helper call site"
+    fn weak_target_confirmation_does_not_survive_restart() {
+        let dir = temp_dir("weak-target");
+        let path = dir.join("settings.json");
+        let mut target = TargetDisplay::from_key(
+            &DisplayKey {
+                native_id: "geometry-only".into(),
+                quality: unfy_domain::IdentityQuality::Weak,
+            },
+            "Chosen display",
         );
-        drop(outer);
-        assert!(guard.try_lock().is_ok(), "guard must be released");
+        target.confirmed_topology = Some("current-process-topology".into());
+        Settings {
+            target_display: Some(target),
+            ..Settings::default()
+        }
+        .save(&path)
+        .unwrap();
+        let restored = Settings::load(&path).unwrap().target_display.unwrap();
+        assert_eq!(restored.native_id, "geometry-only");
+        assert_eq!(restored.quality, unfy_domain::IdentityQuality::Weak);
+        assert!(restored.confirmed_topology.is_none());
+    }
+
+    fn migration_dirs(tag: &str) -> (PathBuf, PathBuf) {
+        let root = unique_sibling(&std::env::temp_dir().join(tag), "test");
+        std::fs::create_dir_all(&root).unwrap();
+        (root.join("Conflux"), root.join("Unfy"))
+    }
+
+    fn unfinished_journal(dir: &Path, summary: &str) -> PathBuf {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let path = dir.join(format!("{id}.journal"));
+        let mut journal =
+            unfy_journal::Journal::begin_named(&path, id.parse().unwrap(), summary).unwrap();
+        let preimage = unfy_journal::Preimage {
+            id: unfy_domain::WindowId {
+                native_id: 10,
+                process_id: 20,
+                process_start: 30,
+                instance: 1,
+            },
+            display_native_id: "display-a".into(),
+            display_quality: unfy_domain::IdentityQuality::Strong,
+            display_work_area: unfy_domain::Rect::new(0, 0, 1920, 1080),
+            display_scale: unfy_domain::Scale { x: 1.0, y: 1.0 },
+            visible_rect: unfy_domain::Rect::new(10, 20, 800, 600),
+            outer_rect: unfy_domain::Rect::new(10, 20, 800, 600),
+            mode: unfy_domain::WindowMode::Normal,
+            topmost: false,
+            native_placement: None,
+        };
+        journal.write_preimage(&preimage).unwrap();
+        journal
+            .write_intent(
+                &preimage.id,
+                unfy_domain::Rect::new(2000, 20, 800, 600),
+                preimage.mode,
+            )
+            .unwrap();
+        journal.durable().unwrap();
+        path
+    }
+
+    #[test]
+    fn legacy_choices_survive_without_automation_authority() {
+        let dir = temp_dir("legacy-choices");
+        let path = dir.join("settings.json");
+        let original = r#"{"theme":"dark","language":"en","autostart":true,
+            "layout_mode":"primary_side","auto_detect":"aggressive","auto_gather":true,
+            "auto_restore":true,"remote_screens":"all","telemetry":true,
+            "last_refused_apps":["refused.exe"],"deferred_restore":true,"marker":true,
+            "hotkey_gather":"Ctrl+Alt+G","excluded_apps":["private.exe"],
+            "target_display":{"native_id":"display-a","label":"Chosen","number":2}}"#;
+        std::fs::write(&path, original).unwrap();
+        let settings = Settings::load(&path).unwrap();
+        assert_eq!(settings.theme, ThemeName::Dark);
+        assert_eq!(settings.language, LanguageName::En);
+        assert!(settings.autostart);
+        assert_eq!(settings.hotkey_gather.as_deref(), Some("Ctrl+Alt+G"));
+        assert_eq!(settings.excluded_apps, ["private.exe"]);
+        assert_eq!(
+            settings.target_display.as_ref().unwrap().native_id,
+            "display-a"
+        );
+        assert_eq!(
+            settings.target_display.as_ref().unwrap().quality,
+            unfy_domain::IdentityQuality::Weak
+        );
+        assert!(settings
+            .target_display
+            .as_ref()
+            .unwrap()
+            .confirmed_topology
+            .is_none());
+        assert_eq!(settings.layout_mode, LayoutModeName::MoveInto);
+        assert_eq!(settings.auto_detect, "off");
+        assert!(!settings.auto_gather && !settings.auto_restore);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).unwrap(), settings);
+    }
+
+    #[test]
+    fn migration_notice_persists_until_explicitly_dismissed() {
+        let dir = temp_dir("migration-notice");
+        let path = dir.join("settings.json");
+        assert!(!Settings::default().migration_notice);
+        std::fs::write(&path, r#"{"version":1,"layout_mode":"primary_side","auto_detect":"balanced","auto_gather":true}"#).unwrap();
+        let migrated = Settings::load(&path).unwrap();
+        assert!(migrated.migration_notice);
+        assert_eq!(migrated.auto_detect, "off");
+        assert!(!migrated.auto_gather);
+        migrated.save(&path).unwrap();
+        let mut reloaded = Settings::load(&path).unwrap();
+        assert!(reloaded.migration_notice);
+        reloaded.theme = ThemeName::Dark;
+        reloaded.save(&path).unwrap();
+        assert!(Settings::load(&path).unwrap().migration_notice);
+        reloaded.migration_notice = false;
+        reloaded.save(&path).unwrap();
+        let acknowledged = Settings::load(&path).unwrap();
+        assert!(!acknowledged.migration_notice);
+        assert_eq!(acknowledged.theme, ThemeName::Dark);
+        assert_eq!(acknowledged.layout_mode, LayoutModeName::MoveInto);
+        assert_eq!(acknowledged.auto_detect, "off");
+        acknowledged.save(&path).unwrap();
+        assert!(!Settings::load(&path).unwrap().migration_notice);
+    }
+
+    #[test]
+    fn unknown_schema_and_failed_validation_cannot_overwrite_disk() {
+        let dir = temp_dir("protected-schema");
+        let path = dir.join("settings.json");
+        let future = r#"{"version":99,"future_choice":{"enabled":true}}"#;
+        std::fs::write(&path, future).unwrap();
+        assert!(matches!(
+            Settings::load(&path),
+            Err(SettingsError::VersionTooNew { .. })
+        ));
+        assert!(Settings::default().save(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), future);
+        std::fs::remove_file(&path).unwrap();
+        Settings::default().save(&path).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let invalid = Settings {
+            window_geometry: Some((i32::MIN, 0, 800, 600)),
+            ..Settings::default()
+        };
+        assert!(invalid.save(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn rename_and_copy_migrate_nested_journals() {
+        for fallback in [false, true] {
+            let (old, new) = migration_dirs("unfy-nested");
+            Settings {
+                margin: 41,
+                ..Settings::default()
+            }
+            .save(old.join("settings.json"))
+            .unwrap();
+            let original = unfinished_journal(&old.join("journal/nested"), "original");
+            let bytes = std::fs::read(&original).unwrap();
+            migrate_config_dirs_with(
+                &old,
+                &new,
+                &|a, b| {
+                    if fallback {
+                        Err(std::io::Error::other("injected rename failure"))
+                    } else {
+                        std::fs::rename(a, b)
+                    }
+                },
+                &|a, b| std::fs::copy(a, b),
+            )
+            .unwrap();
+            assert_eq!(
+                Settings::load(new.join("settings.json")).unwrap().margin,
+                41
+            );
+            let imported = new
+                .join("journal/nested")
+                .join(original.file_name().unwrap());
+            assert_eq!(std::fs::read(&imported).unwrap(), bytes);
+            assert!(matches!(
+                unfy_journal::recover(imported).unwrap(),
+                unfy_journal::Recovered::Unfinished(_)
+            ));
+            migrate_config_dirs(&old, &new).unwrap();
+            assert_eq!(old.exists(), fallback);
+        }
+    }
+
+    #[test]
+    fn interrupted_copy_keeps_original_and_retries_without_deleting_staging() {
+        let (old, new) = migration_dirs("unfy-copy-failure");
+        Settings::default().save(old.join("settings.json")).unwrap();
+        let journal = unfinished_journal(&old.join("journal/nested"), "original");
+        let bytes = std::fs::read(&journal).unwrap();
+        let rename = |_: &Path, _: &Path| Err(std::io::Error::other("cross-device"));
+        let failed = migrate_config_dirs_with(&old, &new, &rename, &|a, b| {
+            if a.extension().is_some_and(|ext| ext == "journal") {
+                std::fs::write(b, b"partial")?;
+                Err(std::io::Error::other("injected copy failure"))
+            } else {
+                std::fs::copy(a, b)
+            }
+        });
+        assert!(failed.is_err());
+        assert!(!new.exists());
+        assert_eq!(std::fs::read(&journal).unwrap(), bytes);
+        let staging: Vec<_> = std::fs::read_dir(old.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "migrating"))
+            .collect();
+        assert_eq!(staging.len(), 1);
+        migrate_config_dirs_with(&old, &new, &rename, &|a, b| std::fs::copy(a, b)).unwrap();
+        assert!(staging[0].exists());
+        assert_eq!(journal_files(&new.join("journal")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn dual_directories_preserve_new_choices_and_do_not_resurrect_imports() {
+        let (old, new) = migration_dirs("unfy-dual");
+        Settings {
+            margin: 21,
+            ..Settings::default()
+        }
+        .save(old.join("settings.json"))
+        .unwrap();
+        Settings {
+            margin: 42,
+            ..Settings::default()
+        }
+        .save(new.join("settings.json"))
+        .unwrap();
+        let source = unfinished_journal(&old.join("journal/nested"), "original");
+        migrate_config_dirs(&old, &new).unwrap();
+        let imported = new.join("journal").join(source.file_name().unwrap());
+        assert!(same_file_contents(&source, &imported).unwrap());
+        assert_eq!(
+            Settings::load(new.join("settings.json")).unwrap().margin,
+            42
+        );
+        // Once recovery has consumed the imported transaction, the old backup
+        // must not create that obligation again on the next startup.
+        std::fs::remove_file(&imported).unwrap();
+        migrate_config_dirs(&old, &new).unwrap();
+        assert!(!imported.exists());
+        assert!(source.exists());
+    }
+
+    #[test]
+    fn dual_directory_conflict_and_unknown_journal_block_without_changes() {
+        let (old, new) = migration_dirs("unfy-conflict");
+        let source = unfinished_journal(&old.join("journal"), "old transaction");
+        let target = unfinished_journal(&new.join("journal"), "conflicting transaction");
+        let before = std::fs::read(&target).unwrap();
+        assert!(migrate_config_dirs(&old, &new).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), before);
+        assert!(source.exists());
+        assert!(!new.join(".conflux-migration-complete").exists());
+        let (old, new) = migration_dirs("unfy-malformed");
+        std::fs::create_dir_all(old.join("journal")).unwrap();
+        std::fs::write(old.join("journal/unknown.journal"), b"unknown schema").unwrap();
+        assert!(migrate_config_dirs(&old, &new).is_err());
+        assert!(!new.exists());
+        assert!(old.join("journal/unknown.journal").exists());
+    }
+
+    #[test]
+    fn failed_replacement_preserves_previous_settings_and_unrelated_temp() {
+        let (root, _) = migration_dirs("unfy-save-failure");
+        let path = root.join("settings.json");
+        Settings {
+            margin: 27,
+            ..Settings::default()
+        }
+        .save(&path)
+        .unwrap();
+        let stale = root.join("settings.json.tmp");
+        std::fs::write(&stale, b"unrelated interrupted save").unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let replacement = serde_json::to_vec(&Settings::default()).unwrap();
+        assert!(atomic_write_with(&path, &replacement, |_, _| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected replacement failure",
+            ))
+        })
+        .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(Settings::load(&path).unwrap().margin, 27);
+        assert_eq!(
+            std::fs::read(&stale).unwrap(),
+            b"unrelated interrupted save"
+        );
     }
 }
 

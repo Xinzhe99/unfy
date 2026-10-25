@@ -164,7 +164,7 @@ fn denied_window_is_rejected_but_others_still_move() {
 }
 
 #[test]
-fn self_correcting_window_is_retried_then_reported_rejected() {
+fn self_correcting_window_remains_unknown_without_an_overlapping_retry() {
     let mut backend = FakeBackend::with_two_displays();
     backend.add_window(
         9,
@@ -177,32 +177,50 @@ fn self_correcting_window_is_retried_then_reported_rejected() {
     let mut engine = Engine::new(backend, config("selfcorrect"));
     let report = engine.migrate(&target_key()).expect("migrate");
 
-    assert_eq!(report.outcomes.get(&id(9)), Some(&WindowOutcome::Rejected));
+    assert_eq!(report.outcomes.get(&id(9)), Some(&WindowOutcome::Unknown));
     assert_eq!(report.failed_count(), 1);
     assert_eq!(engine.state(), EngineState::Degraded);
 }
 
 #[test]
-fn min_size_window_is_placed_at_its_minimum_and_still_applied() {
+fn an_unreported_minimum_remains_pending_without_false_success() {
     let mut backend = FakeBackend::with_two_displays();
+    // 2200 wide cannot fit the 1920-wide target, so the planner scales it down;
+    // the application's 2000-pixel minimum then overrides that scale. The original
+    // rectangle is above the minimum, which is what makes restore possible at all.
     backend.add_window(
         4,
-        Rect::new(100, 100, 900, 700),
+        Rect::new(100, 100, 2300, 1000),
         "fake-display-a",
         WindowMode::Normal,
-        FakeBehaviour::MinSize(900, 600),
+        FakeBehaviour::MinSize(2000, 600),
     );
 
     let mut engine = Engine::new(backend, config("minsize"));
     let report = engine.migrate(&target_key()).expect("migrate");
 
-    // The fake enforces 900x600; the engine reads back and reports the outcome
-    // honestly rather than claiming the planned rectangle.
-    let outcome = report.outcomes.get(&id(4)).copied().expect("outcome");
-    assert!(matches!(
-        outcome,
-        WindowOutcome::Applied | WindowOutcome::Rejected
-    ));
+    // The application enforces a minimum the backend could not discover. A
+    // submitted request is not proof that the planned size was accepted.
+    assert_eq!(report.outcomes.get(&id(4)), Some(&WindowOutcome::Unknown));
+    assert!(report.applied.is_empty());
+    assert_eq!(engine.unresolved_window_count(), 1);
+    assert!(engine.current_transaction().is_some());
+
+    // Restore must still reach the original position. It used to re-submit the
+    // unconfirmed gather request on every attempt, so a window that cannot fit its
+    // cell stayed unresolved forever and the journal never closed.
+    let restore = engine.restore().expect("restore after a refused gather");
+    assert!(
+        restore.is_complete(),
+        "an unconfirmed gather request must not block restore: {:?}",
+        restore.pending
+    );
+    assert_eq!(
+        engine.backend().read_back(&id(4)).unwrap().visible_rect,
+        Rect::new(100, 100, 2300, 1000)
+    );
+    assert_eq!(engine.state(), EngineState::Idle);
+    assert!(engine.current_transaction().is_none());
 }
 
 #[test]
@@ -240,6 +258,7 @@ fn user_move_during_session_is_preserved_on_restore() {
             &unfy_platform::WindowPlan {
                 visible_rect: moved,
                 mode: WindowMode::Normal,
+                resize: true,
             },
         )
         .expect("user move");
@@ -417,6 +436,7 @@ fn id(n: u64) -> WindowId {
         native_id: n,
         process_id: 1000 + n as u32,
         process_start: 1,
+        instance: 1,
     }
 }
 
@@ -461,6 +481,10 @@ fn adopted_transaction_can_actually_be_restored() {
                 native_placement: None,
             })
             .unwrap();
+        journal
+            .write_intent(&id(1), Rect::new(3000, 300, 3800, 900), WindowMode::Normal)
+            .unwrap();
+        journal.durable().unwrap();
         // No `close`: this is what a kill leaves behind.
         journal.abandon();
     }
@@ -807,7 +831,7 @@ fn exclusion_is_case_insensitive_and_ignores_unknown_names() {
 }
 
 #[test]
-fn every_unfinished_journal_is_kept_and_the_newest_is_adopted() {
+fn multiple_unfinished_journals_require_explicit_selection() {
     // Two crashes can leave two open transactions. Deleting the older one because
     // a newer file exists would discard the only record of where its windows were.
     let dir = journal_dir("stale");
@@ -825,6 +849,7 @@ fn every_unfinished_journal_is_kept_and_the_newest_is_adopted() {
                     native_id: n,
                     process_id: 1000 + n as u32,
                     process_start: 1,
+                    instance: 1,
                 },
                 display_native_id: "fake-display-a".into(),
                 display_quality: IdentityQuality::Strong,
@@ -848,9 +873,8 @@ fn every_unfinished_journal_is_kept_and_the_newest_is_adopted() {
 
     let backend = scenario();
     let mut engine = Engine::new(backend, config("stale-engine"));
-    let adopted = engine.recover_latest(&dir).expect("recover");
-
-    assert!(adopted.is_some(), "an unfinished journal must be adopted");
+    assert!(engine.recover_latest(&dir).is_err());
+    assert!(engine.current_transaction().is_none());
     assert!(
         old_a.exists(),
         "an older unfinished journal must not be deleted"
@@ -860,7 +884,7 @@ fn every_unfinished_journal_is_kept_and_the_newest_is_adopted() {
         "an older unfinished journal must not be deleted"
     );
     assert!(newest.exists(), "the adopted journal must be kept");
-    assert_eq!(engine.state(), EngineState::Degraded);
+    assert_eq!(engine.state(), EngineState::Error);
 }
 
 #[test]
@@ -1096,13 +1120,13 @@ fn a_large_window_minimum_is_respected() {
         .find(|p| p.id.native_id == 1)
         .expect("window 1 is planned");
     assert!(
-        placement.rect.width() >= 900 && placement.rect.height() >= 700,
+        placement.rect.width() >= 600 && placement.rect.height() >= 467,
         "the slot must satisfy the window's minimum, got {}x{}",
         placement.rect.width(),
         placement.rect.height()
     );
-    // `clamped_to_min` means the planner had to give up on a tidy grid to honour
-    // the minimum, which is what the preview surfaces as dashed rectangles.
+    // The 900x700 minimum is expressed at source scale 150%; at 100% it
+    // becomes 600x467. The default mode must honor it even though the window fits.
     assert!(
         placement.clamped_to_min,
         "a minimum that dominates the layout must be reported as clamped"
@@ -1140,10 +1164,9 @@ fn a_failed_journal_write_enters_the_error_state() {
         "a failed durable write is not a transient condition"
     );
 
-    // Recovery stays available: the user must be able to get out.
     assert!(
-        engine.rescue_offscreen().is_ok(),
-        "rescue must remain usable in the error state"
+        engine.rescue_offscreen().is_err(),
+        "rescue also requires a durable journal"
     );
     // But new gathers must be refused rather than attempted on a broken journal.
     assert!(engine.migrate(&target_key()).is_err());
@@ -1188,15 +1211,10 @@ fn a_failed_preview_returns_to_idle() {
     );
 }
 
-/// A window that takes the new size but not the new position - clash-verge, as seen
-/// on a real desktop - must end up the size it started.
-///
-/// The user's report: "clash failed to move, but its window was resized". A gather
-/// that cannot place a window has done nothing to it, and it must look that way; a
-/// half-applied move leaves the desktop changed for no benefit, and the user has to
-/// undo it by hand.
+/// An uncertain partial move retains its preimage and does not submit an
+/// unjournaled size compensation over a possibly outstanding platform request.
 #[test]
-fn a_window_that_refuses_the_position_keeps_its_size() {
+fn a_partial_move_remains_pending_for_recovery() {
     let mut backend = FakeBackend::with_two_displays();
     let before = Rect::new(100, 100, 700, 600);
     let id = backend.add_window(
@@ -1216,17 +1234,65 @@ fn a_window_that_refuses_the_position_keeps_its_size() {
 
     assert_eq!(
         report.outcomes.get(&id),
-        Some(&WindowOutcome::Rejected),
+        Some(&WindowOutcome::Unknown),
         "a window that stays put was not placed"
     );
 
-    let after = engine
-        .backend()
-        .read_back(&id)
-        .expect("read back")
-        .visible_rect;
+    assert_eq!(engine.unresolved_window_count(), 1);
+    assert!(engine.current_transaction().is_some());
+    assert!(engine.retarget(&target_key()).is_err());
+}
+
+#[test]
+fn a_window_straddling_two_displays_is_moved_fully_onto_the_target() {
+    // Displays span 0..2560 (A) and 2560..4480 (B); the target is B. This window
+    // is 1000 wide with 400 px on A and 600 px on B. Leaving it where it is would
+    // keep 400 px outside the screen the remote client shows, so a straddling
+    // window is not "already on the target": the whole window is moved in.
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        7,
+        Rect::new(2160, 200, 3160, 800),
+        "fake-display-a",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    let mut engine = Engine::new(backend, config("straddle"));
+    let report = engine.migrate(&target_key()).expect("migrate");
+
+    assert_eq!(report.outcomes.get(&id(7)), Some(&WindowOutcome::Applied));
+    let placed = engine.backend().read_back(&id(7)).unwrap().visible_rect;
+    let target_work = Rect::new(2560, 0, 4480, 1040);
+    assert_eq!(placed.width(), 1000, "a straddling window keeps its size");
+    assert_eq!(placed.height(), 600);
+    assert!(
+        placed.left >= target_work.left && placed.right <= target_work.right,
+        "no part of the window may stay on the other display: {placed:?}"
+    );
+}
+
+#[test]
+fn a_straddling_window_already_inside_the_target_is_left_alone() {
+    // Same window after a gather: fully on B. A second gather must not write it
+    // again, which is what makes repeated gathering idempotent.
+    let mut backend = FakeBackend::with_two_displays();
+    backend.add_window(
+        7,
+        Rect::new(2600, 200, 3600, 800),
+        "fake-display-b",
+        WindowMode::Normal,
+        FakeBehaviour::Compliant,
+    );
+    let mut engine = Engine::new(backend, config("straddle-idempotent"));
+    let report = engine.migrate(&target_key()).expect("migrate");
+
+    assert!(
+        !report.outcomes.contains_key(&id(7)),
+        "a window already inside the target must receive zero writes: {:?}",
+        report.outcomes
+    );
     assert_eq!(
-        after, original,
-        "a rejected move must not resize the window"
+        engine.backend().read_back(&id(7)).unwrap().visible_rect,
+        Rect::new(2600, 200, 3600, 800)
     );
 }

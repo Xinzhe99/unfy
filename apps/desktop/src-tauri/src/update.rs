@@ -24,6 +24,8 @@ use crate::AppState;
 pub enum UpdateOutcome {
     /// No update available.
     UpToDate { current: String },
+    /// A query found a release; nothing has been installed.
+    Available { version: String },
     /// An update was found and installed; the app will restart.
     Installed { version: String },
     /// An update was found but deferred because windows are still captured.
@@ -40,6 +42,7 @@ impl UpdateOutcome {
     pub fn version(&self) -> String {
         match self {
             UpdateOutcome::UpToDate { current } => current.clone(),
+            UpdateOutcome::Available { version } => version.clone(),
             UpdateOutcome::Installed { version } => version.clone(),
             UpdateOutcome::Deferred { version, .. } => version.clone(),
             UpdateOutcome::Failed { .. } => String::new(),
@@ -61,6 +64,7 @@ impl UpdateOutcome {
     pub fn as_str(&self) -> &'static str {
         match self {
             UpdateOutcome::UpToDate { .. } => "up_to_date",
+            UpdateOutcome::Available { .. } => "available",
             UpdateOutcome::Installed { .. } => "installed",
             UpdateOutcome::Deferred { .. } => "deferred",
             UpdateOutcome::Failed { .. } => "failed",
@@ -92,11 +96,43 @@ pub fn is_configured<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
     has_key && has_endpoint
 }
 
+pub async fn check_only(app: &AppHandle) -> UpdateOutcome {
+    if !is_configured(app) {
+        return UpdateOutcome::Failed {
+            message: "updater is not configured".into(),
+        };
+    }
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(error) => {
+            return UpdateOutcome::Failed {
+                message: error.to_string(),
+            }
+        }
+    };
+    match updater.check().await {
+        Ok(Some(update)) => UpdateOutcome::Available {
+            version: update.version,
+        },
+        Ok(None) => UpdateOutcome::UpToDate {
+            current: app.package_info().version.to_string(),
+        },
+        Err(error) => UpdateOutcome::Failed {
+            message: error.to_string(),
+        },
+    }
+}
+
 /// Check for an update and install it if it is safe to do so.
 ///
 /// `force` skips the "user disabled auto update" preference, not the recovery
 /// barrier: a security update still waits for a clean journal.
 pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
+    if !is_configured(&app) {
+        return UpdateOutcome::Failed {
+            message: "updater is not configured".into(),
+        };
+    }
     if !force {
         let enabled = {
             let state = app.state::<AppState>();
@@ -142,7 +178,7 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
     // The count includes journals the engine did not adopt, so an unreadable or
     // foreign record blocks the update instead of being silently ignored.
     let pending = pending_windows(&app);
-    if pending > 0 {
+    if pending > 0 || remote_active(&app) {
         let _ = app.emit(
             "unfy://update",
             serde_json::json!({
@@ -179,9 +215,10 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
         serde_json::json!({ "outcome": "downloaded", "version": version }),
     );
 
-    if let Err(outcome) = acquire_install_barrier(&app, &version).await {
-        return outcome;
-    }
+    let _barrier = match acquire_install_barrier(&app, &version, force).await {
+        Ok(barrier) => barrier,
+        Err(outcome) => return outcome,
+    };
 
     match update.install(bytes) {
         Ok(()) => {
@@ -192,12 +229,9 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
             tokio::time::sleep(Duration::from_millis(400)).await;
             app.restart();
         }
-        Err(e) => {
-            release_install_barrier(&app);
-            UpdateOutcome::Failed {
-                message: format!("install failed: {e}"),
-            }
-        }
+        Err(e) => UpdateOutcome::Failed {
+            message: format!("install failed: {e}"),
+        },
     }
 }
 
@@ -205,15 +239,25 @@ pub async fn check_and_install(app: AppHandle, force: bool) -> UpdateOutcome {
 ///
 /// Returns `Err(outcome)` when the update must not proceed. Admission is reopened
 /// on every failure path, because a deferred update must leave a working app.
-async fn acquire_install_barrier(app: &AppHandle, version: &str) -> Result<(), UpdateOutcome> {
+async fn acquire_install_barrier(
+    app: &AppHandle,
+    version: &str,
+    force: bool,
+) -> Result<crate::commands::MaintenanceGuard, UpdateOutcome> {
     let state = app.state::<AppState>();
-    state
-        .maintenance
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    // Invalidate timers before the restore so a delayed automatic action cannot
-    // start behind it.
-    if let Ok(mut schedule) = state.schedule.lock() {
-        schedule.cancel();
+    let guard = crate::commands::MaintenanceGuard::acquire(&state)
+        .map_err(|message| UpdateOutcome::Failed { message })?;
+    let enabled = state
+        .settings
+        .lock()
+        .map(|settings| settings.auto_update)
+        .unwrap_or(false);
+    let pending = pending_windows(app);
+    if (!force && !enabled) || pending > 0 || remote_active(app) {
+        return Err(UpdateOutcome::Deferred {
+            version: version.into(),
+            pending_windows: pending,
+        });
     }
 
     let report = {
@@ -230,43 +274,33 @@ async fn acquire_install_barrier(app: &AppHandle, version: &str) -> Result<(), U
             // Re-count from disk: the restore only resolved what the engine knew.
             let pending = pending_windows(app);
             if pending == 0 {
-                Ok(())
+                Ok(guard)
             } else {
-                release_install_barrier(app);
                 Err(UpdateOutcome::Deferred {
                     version: version.to_string(),
                     pending_windows: pending,
                 })
             }
         }
-        Ok(Ok(report)) => {
-            release_install_barrier(app);
-            Err(UpdateOutcome::Deferred {
-                version: version.to_string(),
-                pending_windows: report.outstanding(),
-            })
-        }
-        Ok(Err(e)) => {
-            release_install_barrier(app);
-            Err(UpdateOutcome::Failed {
-                message: format!("restore before install failed: {e}"),
-            })
-        }
-        Err(e) => {
-            release_install_barrier(app);
-            Err(UpdateOutcome::Failed {
-                message: format!("restore task failed: {e}"),
-            })
-        }
+        Ok(Ok(report)) => Err(UpdateOutcome::Deferred {
+            version: version.to_string(),
+            pending_windows: report.outstanding(),
+        }),
+        Ok(Err(e)) => Err(UpdateOutcome::Failed {
+            message: format!("restore before install failed: {e}"),
+        }),
+        Err(e) => Err(UpdateOutcome::Failed {
+            message: format!("restore task failed: {e}"),
+        }),
     }
 }
 
-fn release_install_barrier(app: &AppHandle) {
-    if let Some(state) = app.try_state::<AppState>() {
-        state
-            .maintenance
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-    }
+fn remote_active(app: &AppHandle) -> bool {
+    app.state::<AppState>()
+        .detector
+        .lock()
+        .map(|tracker| tracker.is_active() || (cfg!(windows) && tracker.is_unknown()))
+        .unwrap_or(true)
 }
 
 /// How many windows still owe a restore.
@@ -277,41 +311,12 @@ fn release_install_barrier(app: &AppHandle) {
 /// read let the updater restart the app over an unknown recovery obligation.
 fn pending_windows(app: &AppHandle) -> usize {
     let state = app.state::<AppState>();
-    let (owned, in_memory) = match state.engine.lock() {
-        Ok(engine) => (
-            engine.current_transaction(),
-            engine.unresolved_window_count(),
-        ),
-        // A poisoned lock means another thread panicked while holding it. Treat
-        // that as "unknown, assume unsafe".
+    let engine = match state.engine.lock() {
+        Ok(engine) => engine,
         Err(_) => return 1,
     };
-
-    let mut pending = in_memory;
-    let dir = unfy_settings::config_dir().join("journal");
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "journal") {
-                continue;
-            }
-            match unfy_journal::recover(&path) {
-                Ok(unfy_journal::Recovered::Unfinished(tx)) => {
-                    if Some(tx.transaction) == owned {
-                        continue;
-                    }
-                    pending += tx.touched_windows().len();
-                }
-                Ok(unfy_journal::Recovered::Clean) => {}
-                Err(_) => {
-                    // Unreadable is not zero. Blocking the update is recoverable;
-                    // restarting over it is not.
-                    pending += 1;
-                }
-            }
-        }
-    }
-    pending
+    let recovery = crate::commands::recovery_status(&engine, state.settings_error.is_some());
+    recovery.windows + recovery.blockers
 }
 
 /// Spawn a background check at startup. Failures are only logged: an offline
@@ -326,19 +331,40 @@ pub fn check_in_background(app: AppHandle) {
         return;
     }
     tauri::async_runtime::spawn(async move {
-        let outcome = check_and_install(app.clone(), false).await;
-        tracing::info!(outcome = outcome.as_str(), "update check finished");
-
-        if let UpdateOutcome::Deferred {
-            version,
-            pending_windows,
-        } = &outcome
-        {
-            tracing::warn!(
-                %version,
-                pending_windows,
-                "update deferred until windows are restored"
-            );
+        loop {
+            let enabled = app
+                .state::<AppState>()
+                .settings
+                .lock()
+                .map(|settings| settings.auto_update)
+                .unwrap_or(false);
+            if !enabled {
+                return;
+            }
+            let outcome = check_and_install(app.clone(), false).await;
+            tracing::info!(outcome = outcome.as_str(), "update check finished");
+            if let Ok(mut last) = app.state::<AppState>().last_update.lock() {
+                *last = Some((outcome.as_str().into(), outcome.version(), outcome.detail()));
+            }
+            let _ = app.emit("unfy://update", &outcome);
+            if !matches!(outcome, UpdateOutcome::Deferred { .. }) {
+                return;
+            }
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let enabled = app
+                    .state::<AppState>()
+                    .settings
+                    .lock()
+                    .map(|settings| settings.auto_update)
+                    .unwrap_or(false);
+                if !enabled {
+                    return;
+                }
+                if pending_windows(&app) == 0 && !remote_active(&app) {
+                    break;
+                }
+            }
         }
     });
 }

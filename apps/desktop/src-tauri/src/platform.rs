@@ -1,8 +1,7 @@
 //! Platform selection for the desktop app.
 //!
-//! Each supported target gets its native backend. Any other target compiles the
-//! fake backend so the UI can still be reviewed, but `is_supported()` reports
-//! `false` and the UI must show that rather than pretending to work.
+//! Each supported target gets its native backend. Other targets report
+//! `Unsupported` and never manufacture displays or window-control success.
 
 #[cfg(target_os = "windows")]
 pub type Backend = unfy_platform_win::WinPlatform;
@@ -66,14 +65,6 @@ impl unfy_platform::WindowBackend for UnsupportedBackend {
         &self,
         _id: &unfy_domain::WindowId,
     ) -> unfy_platform::Result<unfy_platform::ObservedWindow> {
-        Err(unfy_platform::PlatformError::Unsupported)
-    }
-
-    fn restore_native(
-        &self,
-        _id: &unfy_domain::WindowId,
-        _placement: &[u8],
-    ) -> unfy_platform::Result<()> {
         Err(unfy_platform::PlatformError::Unsupported)
     }
 }
