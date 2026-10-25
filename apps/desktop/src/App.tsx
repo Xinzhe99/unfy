@@ -90,6 +90,8 @@ export default function App() {
   const [settings, setSettings] = useState<SettingsDto | null>(null);
   const [preview, setPreview] = useState<PreviewDto | null>(null);
   const [pending, setPending] = useState<PendingWorkDto | null>(null);
+  /** Whether elevated windows are reachable from this process. */
+  const [elevation, setElevation] = useState<{ elevated: boolean; supported: boolean } | null>(null);
   // Applications whose windows the last restore could not put back. The backend
   // already computes this; without it the overview could only say "a window did not
   // come back", leaving the user to guess which application to close.
@@ -163,18 +165,20 @@ export default function App() {
         const epoch = mutationEpoch.current;
         const results = await Promise.allSettled([
           api.getStatus(), api.listDisplays(), api.getSettings(), api.pendingWork(),
+          api.elevationStatus(),
         ]);
         if (epoch !== mutationEpoch.current) {
           refreshAgain.current = true;
           continue;
         }
-        const [nextStatus, nextDisplays, nextSettings, nextPending] = results;
+        const [nextStatus, nextDisplays, nextSettings, nextPending, nextElevation] = results;
         if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
         else flash({ tone: "danger", text: errorMessage(nextStatus.reason) });
         if (nextDisplays.status === "fulfilled") setDisplays(nextDisplays.value);
         if (nextSettings.status === "fulfilled") setSettings(nextSettings.value);
         else flash({ tone: "danger", text: errorMessage(nextSettings.reason) });
         if (nextPending.status === "fulfilled") setPending(nextPending.value);
+        if (nextElevation.status === "fulfilled") setElevation(nextElevation.value);
       } while (refreshAgain.current);
     })().finally(() => { refreshFlight.current = null; });
     refreshFlight.current = flight;
@@ -303,17 +307,6 @@ export default function App() {
       } else if (evidence) {
         flash({ tone: "neutral", text: renderMessage(evidence) });
       }
-    });
-    const unlistenExit = listen("unfy://exit-blocked", () => {
-      // The old message mentioned "keep the current layout" as an option while
-      // no such control existed anywhere in the app.
-      flash({
-        tone: "warning",
-        text: t(
-          "还有窗口没有恢复，已取消退出。在概览页可以再试一次恢复，或点「保留当前布局」。",
-        ),
-      });
-      setPage("overview");
     });
     const unlistenProgress = listen<{
       phase: string;
@@ -453,7 +446,6 @@ export default function App() {
       disposed = true;
       void unlistenAction.then((fn) => fn());
       void unlistenRemote.then((fn) => fn());
-      void unlistenExit.then((fn) => fn());
       void unlistenProgress.then((fn) => fn());
       void unlistenShown.then((fn) => fn());
       void unlistenTopology.then((fn) => fn());
@@ -859,6 +851,13 @@ export default function App() {
                   )
                 }
                 onRestore={() => void onRestore()}
+                elevation={elevation}
+                onRestartElevated={() =>
+                  void run(
+                    () => api.restartElevated(),
+                    () => ({ tone: "neutral", text: t("正在以管理员身份重启…") }),
+                  )
+                }
                 onPause={(paused) =>
                   void run(
                     () => api.setPaused(paused),

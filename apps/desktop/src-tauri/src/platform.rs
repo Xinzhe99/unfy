@@ -143,6 +143,35 @@ pub fn open_permission_settings() -> bool {
     }
 }
 
+/// Whether this process can move elevated windows.
+///
+/// Only meaningful on Windows; other platforms have no such boundary.
+pub fn is_elevated() -> bool {
+    #[cfg(windows)]
+    {
+        unfy_platform_win::is_elevated()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Relaunch elevated so elevated windows become movable.
+///
+/// Returns false when the user declines the consent prompt or the platform has
+/// no elevation concept.
+pub fn relaunch_elevated() -> bool {
+    #[cfg(windows)]
+    {
+        unfy_platform_win::relaunch_elevated()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Name of the permission in the OS settings, for the UI's instructions.
 pub fn permission_name() -> &'static str {
     if cfg!(target_os = "macos") {

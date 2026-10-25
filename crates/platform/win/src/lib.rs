@@ -172,6 +172,67 @@ pub fn running_applications() -> Vec<String> {
     names
 }
 
+/// Relaunch this executable elevated, via the UAC prompt.
+///
+/// Windows will not let a normal-integrity process move a window owned by an
+/// elevated one; `SetWindowPos` across that boundary fails with access denied.
+/// Rather than leaving those windows permanently out of reach, the user can
+/// relaunch elevated. `ShellExecuteW` with the `runas` verb is the documented way
+/// to request that: the shell shows the consent prompt and starts a new process
+/// at high integrity.
+///
+/// Returns false when the user dismisses the prompt or the shell refuses. The
+/// caller must not treat false as success.
+pub fn relaunch_elevated() -> bool {
+    use windows::core::HSTRING;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let operation = HSTRING::from("runas");
+    let target = HSTRING::from(exe.as_os_str().to_string_lossy().to_string());
+    // SAFETY: all strings live for the duration of the call; the shell retains
+    // nothing after it returns.
+    let result = unsafe { ShellExecuteW(None, &operation, &target, None, None, SW_SHOWNORMAL) };
+    // ShellExecuteW returns a value > 32 on success; 5 (SE_ERR_ACCESSDENIED) is
+    // the user declining the UAC prompt.
+    result.0 as isize > 32
+}
+
+/// Whether this process is running with administrator rights.
+///
+/// Reported so the interface can explain why elevated windows stay put, and so
+/// the elevation offer disappears once it has been taken.
+pub fn is_elevated() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = HANDLE::default();
+    // SAFETY: the handle is closed below; the buffer is sized by the API contract.
+    unsafe {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut size = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut _),
+            core::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        ok && elevation.TokenIsElevated != 0
+    }
+}
+
 /// Open a directory in the user's file manager.
 ///
 /// Uses `ShellExecuteW` with `explorer`: the documented way to ask the shell to

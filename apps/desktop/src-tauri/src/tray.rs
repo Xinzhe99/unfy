@@ -410,11 +410,19 @@ fn toggle_settings<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Exit only after the recovery barrier.
+/// Exit. Always.
 ///
-/// A failure to restore must not silently drop windows, so the process stays
-/// alive and the error is surfaced. The user can retry from the tray.
-fn quit<R: Runtime>(app: &AppHandle<R>) {
+/// This used to refuse to exit when a restore could not complete, on the theory
+/// that quitting with windows displaced would leave the user with a broken
+/// desktop. The reasoning was wrong in the case that matters: the user clicked
+/// Quit. Refusing makes the application impossible to close, which is a worse
+/// failure than a window in the wrong place - and the journal on disk already
+/// guarantees the next launch can still put it back.
+///
+/// So the restore is attempted, its outcome is recorded, and the process exits
+/// either way. Anything still unresolved stays in the journal and is offered on
+/// the next start.
+pub fn quit<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<AppState>();
     let guard = match crate::commands::MaintenanceGuard::acquire(&state) {
         Ok(guard) => guard,
@@ -423,31 +431,22 @@ fn quit<R: Runtime>(app: &AppHandle<R>) {
 
     // The exit path ignores the configured delay: the user is waiting for the
     // process to end, not for a timer.
-    let blocked = match restore_now(app) {
-        // Nothing was captured, or everything went back: exit.
-        Ok(report) if report.is_complete() => match state.engine.lock() {
-            Ok(engine) => {
-                crate::commands::recovery_status(&engine, state.settings_error.is_some()).present
-            }
-            Err(_) => true,
-        },
-        Ok(report) => {
-            tracing::warn!(pending = report.pending.len(), "restore incomplete");
-            true
+    match restore_now(app) {
+        Ok(report) if report.is_complete() => {}
+        Ok(report) => tracing::warn!(
+            pending = report.pending.len(),
+            awaiting = report.awaiting_original.len(),
+            "quitting with windows still displaced; the journal keeps them recoverable"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            "restore failed during quit; exiting anyway, the journal is retained"
+        ),
+    }
+    if let Ok(engine) = state.engine.lock() {
+        if let Some(transaction) = engine.current_transaction() {
+            tracing::info!(%transaction, "leaving an open journal for the next launch");
         }
-        Err(e) => {
-            tracing::error!(error = %e, "restore failed during exit");
-            true
-        }
-    };
-
-    if blocked {
-        let _ = app.emit(
-            "unfy://exit-blocked",
-            serde_json::json!({ "reason": "restore_incomplete" }),
-        );
-        show_settings(app);
-        return;
     }
     crate::monitor::stop();
     guard.keep_closed();

@@ -38,6 +38,8 @@ export function OverviewPage({
   onMigrate,
   onRestore,
   onPause,
+  elevation,
+  onRestartElevated,
   onRescue,
   onIdentify,
   onOpenDisplays,
@@ -71,6 +73,14 @@ export function OverviewPage({
    */
   refusedApps: string[];
   onPause: (paused: boolean) => void;
+  /**
+   * `elevated` is whether this process already runs as administrator, `supported`
+   * whether elevation exists on this platform. Elevated windows cannot be moved
+   * from a normal-integrity process, and saying so without offering the way out
+   * leaves the user with an unexplained failure.
+   */
+  elevation?: { elevated: boolean; supported: boolean } | null;
+  onRestartElevated?: () => void;
   onRescue: () => void;
   onIdentify: () => void;
   onOpenDisplays: () => void;
@@ -410,6 +420,17 @@ export function OverviewPage({
               </li>
             ))}
           </ul>
+        </Card>
+      ) : null}
+
+      {elevation?.supported && !elevation.elevated ? (
+        <Card
+          title={t("部分窗口无法移动")}
+          description={t("以管理员权限运行的程序，普通权限无法移动它的窗口。重启为管理员后可以一并整理；重启不会丢失恢复记录。")}
+        >
+          <Button size="sm" onClick={onRestartElevated} disabled={busy}>
+            {t("以管理员身份重启")}
+          </Button>
         </Card>
       ) : null}
 

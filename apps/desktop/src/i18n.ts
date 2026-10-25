@@ -477,8 +477,6 @@ const EN: Record<string, string> = {
     "Detected {evidence}, but a gather already ran within 30 seconds, so this one was skipped. Press Gather to target if you need it.",
   "远程会话已结束，已恢复 {count} 个窗口。":
     "Remote session ended; restored {count} windows.",
-  "还有窗口没有恢复，已取消退出。在概览页可以再试一次恢复，或点「保留当前布局」。":
-    "Some windows were not restored, so quitting was cancelled. Retry from the overview, or press Keep current layout.",
   "已整理 {count} 个窗口": "Gathered {count} windows",
   "，{count} 个已在目标屏": ", {count} already on the target",
   "，{count} 个已关闭": ", {count} closed",
@@ -696,6 +694,11 @@ const EN: Record<string, string> = {
   "连接状态未知，自动操作已停止": "Connection state unknown; automation stopped",
   "帮助与诊断": "Help and diagnostics",
   "仍有窗口待处理": "Windows still need attention",
+  "部分窗口无法移动": "Some windows cannot be moved",
+  "以管理员权限运行的程序，普通权限无法移动它的窗口。重启为管理员后可以一并整理；重启不会丢失恢复记录。":
+    "A normal-integrity process cannot move the windows of a program running as administrator. Restarting elevated lets Unfy gather those too; recovery records survive the restart.",
+  "以管理员身份重启": "Restart as administrator",
+  "正在以管理员身份重启…": "Restarting as administrator…",
   "设置文件无法读取，原文件已保留。请查看诊断并修复后重启；自动操作已停止。": "The settings file could not be read and has been retained. Review diagnostics, repair it and restart; automation is stopped.",
   "还有 {count} 个窗口没能恢复原位。恢复记录已保留，请查看结果并重试恢复。": "{count} windows could not be restored. Their recovery records are retained; review the results and retry restoring.",
   "当前整理仍有恢复记录，请查看当前状态后继续操作。": "This gather still has recovery records. Review the current state before continuing.",

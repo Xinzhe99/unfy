@@ -305,6 +305,10 @@ export const api = {
   /** Returns the permission state *before* the user answers; re-check after. */
   requestPermission: () => invoke<boolean>("request_permission"),
   openPermissionSettings: () => invoke<boolean>("open_permission_settings"),
+  /** Whether this process can move elevated windows, and whether it could be. */
+  elevationStatus: () => invoke<{ elevated: boolean; supported: boolean }>("elevation_status"),
+  /** Relaunch elevated; rejects with "elevation_declined" if UAC was dismissed. */
+  restartElevated: () => invoke<void>("restart_elevated"),
   updateStatus: () => invoke<UpdateStatusDto>("update_status"),
   checkUpdate: () => invoke<UpdateCheckDto>("check_update"),
   installUpdate: () => invoke<UpdateCheckDto>("install_update"),

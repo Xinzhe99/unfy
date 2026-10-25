@@ -314,6 +314,8 @@ pub fn run() {
             commands::preview_diagnostics,
             commands::request_permission,
             commands::open_permission_settings,
+            commands::elevation_status,
+            commands::restart_elevated,
             commands::update_status,
             commands::check_update,
             commands::install_update,
@@ -397,18 +399,24 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the settings window should hide it, not exit: the tray and
-            // shortcuts must keep working.
+            // Closing the window exits the application.
+            //
+            // This used to hide the window and keep the process alive so the tray
+            // icon and hotkeys stayed available. That is the right model for a
+            // background agent and the wrong one here: a user who closes the
+            // window expects the program to stop, and an app that keeps running
+            // invisibly - still watching, still holding a tray icon - reads as
+            // something that cannot be shut down. The hotkeys only matter while a
+            // window is open or the tray is used deliberately, and the recovery
+            // journal survives the exit either way.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                // Capture geometry before hiding: the window still has its real
-                // size here, and hiding it is what the user just asked for.
+                // Geometry still needs recording: the window has its real size
+                // here, and the next launch restores it.
                 persist_window_geometry(window.app_handle());
-                // `window` here is a `Window`, not a `WebviewWindow`; hide and
-                // notify inline.
-                let _ = window.hide();
-                use tauri::Emitter;
-                let _ = window.app_handle().emit("unfy://window-hidden", ());
+                // Quit performs the restore attempt, then exits regardless of its
+                // outcome; the journal keeps anything unresolved recoverable.
+                crate::tray::quit(window.app_handle());
             }
         })
         .run(tauri::generate_context!())

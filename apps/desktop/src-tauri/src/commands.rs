@@ -1953,6 +1953,39 @@ pub fn open_permission_settings() -> bool {
     platform::open_permission_settings()
 }
 
+/// Whether the interface should offer to relaunch with administrator rights.
+#[derive(Debug, Serialize)]
+pub struct ElevationDto {
+    /// This process already runs elevated, so elevated windows are reachable.
+    pub elevated: bool,
+    /// Elevation exists on this platform at all.
+    pub supported: bool,
+}
+
+#[tauri::command]
+pub fn elevation_status() -> ElevationDto {
+    ElevationDto {
+        elevated: platform::is_elevated(),
+        supported: cfg!(windows),
+    }
+}
+
+/// Relaunch elevated, then exit this instance.
+///
+/// The new process starts before this one quits, so the window does not vanish
+/// while the user waits for UAC. Exiting only after a successful launch means a
+/// declined prompt leaves the app running.
+#[tauri::command]
+pub fn restart_elevated() -> Result<(), String> {
+    if !platform::relaunch_elevated() {
+        return Err("elevation_declined".into());
+    }
+    // The successor holds the single-instance lock from this point, so release
+    // the tray and monitor before exiting rather than fighting it for the lock.
+    crate::monitor::stop();
+    std::process::exit(0);
+}
+
 #[derive(Debug, Serialize)]
 pub struct UpdateStatusDto {
     pub current_version: String,
