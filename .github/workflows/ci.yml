@@ -54,11 +54,32 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+      # `unfy-platform-win` links the `windows` crate and `unfy-desktop` links
+      # Tauri's platform bindings, so neither compiles on a foreign host. The
+      # workspace members are therefore checked where they are buildable; the
+      # platform-neutral crates are checked everywhere.
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        if: runner.os == 'Windows'
+
+      - name: Clippy (platform-neutral crates)
+        if: runner.os != 'Windows'
+        run: >
+          cargo clippy --locked --all-targets
+          -p unfy-domain -p unfy-detect -p unfy-journal -p unfy-layout
+          -p unfy-engine -p unfy-settings -p unfy-platform -p unfy-platform-mac
+          -- -D warnings
 
       - name: Test
         run: cargo test --locked --workspace
+        if: runner.os == 'Windows'
+
+      - name: Test (platform-neutral crates)
+        if: runner.os != 'Windows'
+        run: >
+          cargo test --locked
+          -p unfy-domain -p unfy-detect -p unfy-journal -p unfy-layout
+          -p unfy-engine -p unfy-settings -p unfy-platform -p unfy-platform-mac
 
   frontend:
     name: Frontend typecheck
