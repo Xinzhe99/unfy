@@ -216,11 +216,11 @@ jobs:
           # artifact so the installer can be checked without creating a release.
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseDraft: true
-          prerelease: false
-          uploadUpdaterJson: true
-          updaterJsonPreferNsis: true
-          uploadWorkflowArtifacts: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          releaseDraft: "true"
+          prerelease: "false"
+          uploadUpdaterJson: "true"
+          updaterJsonPreferNsis: "true"
+          uploadWorkflowArtifacts: ${{ github.ref_type != 'tag' }}
           workflowArtifactNamePattern: "unfy-[platform]-[arch]"
 
   publish:
