@@ -175,13 +175,20 @@ jobs:
             exit 1
           fi
 
+      # `secrets` cannot appear in a step-level `if`, so the check moves into the
+      # script: an unset certificate means an unsigned build, which is a supported
+      # state, not an error.
       - name: Import Windows signing certificate
-        if: matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE != ''
+        if: matrix.platform == 'windows-latest'
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
+          if (-not $env:WINDOWS_CERTIFICATE) {
+            Write-Output 'No Authenticode certificate configured; building unsigned.'
+            exit 0
+          }
           $certificatePath = Join-Path $env:RUNNER_TEMP 'unfy-signing.pfx'
           [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
           try {
