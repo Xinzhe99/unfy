@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     # Tags are the release path. `bundle` only runs for a `v*` tag or a manual
     # dispatch, so this pattern is what makes that job reachable at all.
     tags: ["v*"]

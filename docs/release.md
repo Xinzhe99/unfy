@@ -21,7 +21,7 @@
 
 CI 与 tag 的关系：
 
-- `push` 到 `main`/`master` 与所有 `pull_request`：只跑检查（`check`、`frontend`），不打包。
+- `push` 到 `main` 与所有 `pull_request`：只跑检查（`check`、`frontend`），不打包。
 - `push` 一个 `v*` tag：检查 → `bundle`（Windows + macOS universal，用官方 `tauri-action`）→ 两个平台都上传完后 `publish` 取消草稿。
 - 手工 `workflow_dispatch`：勾选 `build_installers` 才打包，产物作为 workflow artifact，不创建 release。
 
