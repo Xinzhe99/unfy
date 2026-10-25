@@ -129,8 +129,13 @@ jobs:
         include:
           - platform: windows-latest
             args: --bundles nsis
-          - platform: macos-14
-            args: --target universal-apple-darwin --bundles app,dmg
+          # macOS is absent on purpose. The backend has only ever been
+          # type-checked, there is no Developer ID certificate, and Tauri fails
+          # the bundle step when APPLE_CERTIFICATE is set but empty. Publishing a
+          # DMG nobody has run, unsigned and un-notarized, would be worse than
+          # publishing nothing. Add the entry back together with the certificates.
+          # - platform: macos-14
+          #   args: --target universal-apple-darwin --bundles app,dmg
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
