@@ -135,6 +135,7 @@ macOS 打的是 universal 包，`darwin-aarch64` 与 `darwin-x86_64` 两个键�
 7. 用 `dump_positions`（`probe --dump`）对比升级前后窗口位置，确认升级本身没有移动任何窗口。
 8. 检查诊断包内容：不得包含窗口标题、文件路径、屏幕画面、原始显示器序列号。
 9. 确认 CI 的 `bundle` job 真的产出了安装包与 `.sig`：artifact 缺失时该 job 会失败，绿勾本身就是「有产物」的证据；但仍需人工打开 artifact 核对文件是否完整可安装。
+10. 在具备交互式桌面的 Windows 机器上手工运行 `bun scripts/ui-audit.mjs`（24 个组合）。托管 runner 没有交互式会话，WebView2 不会创建窗口，因此该检查**不会**在 CI 里跑；`workflow_dispatch` 的 `run_ui_audit` 只在注册了 `unfy-e2e` 自托管 runner 后可用。
 
 ## 5. 已知限制
 

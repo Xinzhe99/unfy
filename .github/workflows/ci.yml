@@ -17,6 +17,10 @@ on:
         description: "Build unsigned installers for manual smoke testing (not a release)"
         type: boolean
         default: false
+      run_ui_audit:
+        description: "Run the visual audit (needs a self-hosted Windows runner with an interactive desktop)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -337,7 +341,11 @@ jobs:
 
   release:
     name: Publish verified release
-    needs: [bundle, ui-audit]
+    # `bundle` only. A skipped job would skip its dependents too, and the visual
+    # audit cannot run on a hosted runner, so gating a release on it would mean no
+    # release is ever published. The audit stays a required manual pre-release
+    # check (docs/release.md §4) until a self-hosted runner exists.
+    needs: [bundle]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -375,9 +383,16 @@ jobs:
     name: UI audit (real window)
     needs: [frontend]
     # Needs a real WebView2 window: contrast, layout and clipping cannot be judged
-    # in a DOM shim, where every computed style is invented. Windows runners have
-    # the same WebView2 the app ships against.
-    runs-on: windows-latest
+    # in a DOM shim, where every computed style is invented.
+    #
+    # `windows-latest` cannot host it. The app builds there, but the hosted runner
+    # has no interactive desktop session, so WebView2 never creates a window and
+    # the debugging port the audit connects to never opens. This is the same
+    # constraint the e2e job documents; it applies to any job that needs a real
+    # window. Enable with the manual `run_ui_audit` dispatch input once a
+    # self-hosted Windows runner with an interactive session is registered.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_ui_audit
+    runs-on: [self-hosted, windows, unfy-e2e]
     steps:
       - uses: actions/checkout@v4
 
