@@ -4606,7 +4606,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4635,7 +4635,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-detect"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tracing",
  "unfy-domain",
@@ -4644,7 +4644,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-domain"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4652,7 +4652,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4667,7 +4667,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-journal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc32fast",
  "serde",
@@ -4679,7 +4679,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-layout"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "unfy-domain",
@@ -4687,7 +4687,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4697,7 +4697,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-platform-mac"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
@@ -4714,7 +4714,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-platform-win"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -4731,7 +4731,7 @@ dependencies = [
 
 [[package]]
 name = "unfy-settings"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
