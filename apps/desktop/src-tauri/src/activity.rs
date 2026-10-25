@@ -206,11 +206,16 @@ mod tests {
     use super::*;
 
     fn temp_path(tag: &str) -> PathBuf {
+        // Thread ids are reused by the test harness once a thread finishes, so a
+        // directory keyed only by thread id can be handed to a later test with the
+        // previous test's file still inside. Clearing it first makes each test
+        // start from an empty activity log regardless of what ran before.
         let dir = std::env::temp_dir().join(format!(
             "unfy-activity-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("activity.jsonl")
     }
